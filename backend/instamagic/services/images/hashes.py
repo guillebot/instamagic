@@ -19,7 +19,7 @@ def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
 
 def dhash(image: Image.Image) -> str:
     gray = image.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
-    pixels = list(gray.getdata())
+    pixels = list(gray.get_flattened_data())
     bits = 0
     for row in range(8):
         offset = row * 9

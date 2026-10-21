@@ -16,8 +16,8 @@ def safe_join(root: Path, relative: str) -> Path:
     return candidate
 
 
-def assert_library_root(path: Path, allowed_roots: list[Path]) -> Path:
-    resolved = path.expanduser().resolve()
+def assert_library_root(path: Path | str, allowed_roots: list[Path]) -> Path:
+    resolved = Path(path).expanduser().resolve()
     if not resolved.is_dir():
         raise ValueError("Library path is not a directory.")
     if not allowed_roots:

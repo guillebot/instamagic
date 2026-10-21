@@ -4,10 +4,9 @@ import hashlib
 import json
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from instamagic.errors import GeminiBlocked
 from instamagic.services.recommendations.gates import gemini_gate
+from pydantic import BaseModel, Field
 
 BANNED_PHRASES = (
     "comment yes",
@@ -51,6 +50,7 @@ def build_context(
     mood: str,
     safe_description: str,
     crop: dict[str, Any] | None,
+    has_approved_covering_blur: bool = False,
 ) -> GeminiContext:
     gate = gemini_gate(
         attested=attested,
@@ -58,6 +58,7 @@ def build_context(
         model_state=model_state,
         needs_crop=needs_crop,
         has_approved_crop=has_approved_crop,
+        has_approved_covering_blur=has_approved_covering_blur,
         operator_confirmed=operator_confirmed,
         policy=policy,
     )
@@ -66,13 +67,21 @@ def build_context(
     description = safe_description
     crop_payload = crop
     if model_state == "SAFE_AFTER_CROP":
-        if crop is None:
-            raise GeminiBlocked("SAFE_AFTER_CROP requires an approved crop.")
-        description = (
-            f"Describe only the approved {crop.get('aspect_ratio', 'crop')} crop. "
-            "Do not infer what was excluded from the frame. "
-            + safe_description
-        )
+        if crop is None and not has_approved_covering_blur:
+            raise GeminiBlocked("SAFE_AFTER_CROP requires an approved crop or covering blur.")
+        if crop is not None:
+            description = (
+                f"Describe only the approved {crop.get('aspect_ratio', 'crop')} crop. "
+                "Do not infer what was excluded from the frame. "
+                + safe_description
+            )
+        else:
+            description = (
+                "Describe the photograph with approved covering blur applied. "
+                "Do not infer what was covered. "
+                + safe_description
+            )
+            crop_payload = None
     return GeminiContext(
         content_tags=content_tags,
         composition=composition,

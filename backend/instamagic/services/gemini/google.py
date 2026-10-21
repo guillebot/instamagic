@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import httpx
-
 from instamagic.errors import NotConfigured
 from instamagic.services.gemini.captions import (
     CaptionBatch,
@@ -26,54 +25,62 @@ class GoogleGeminiProvider:
     ) -> CaptionBatch:
         if not self._api_key:
             raise NotConfigured("GEMINI_API_KEY is not configured.")
-        pixels = image_bytes if policy == "safe_previews" else None
-        parts: list[dict[str, object]] = [{"text": caption_request_text(context)}]
-        if pixels:
-            import base64
-
-            parts.append(
-                {
-                    "inline_data": {
-                        "mime_type": "image/jpeg",
-                        "data": base64.b64encode(pixels).decode("ascii"),
-                    }
-                }
-            )
+        body = build_request_body(context, policy=policy, image_bytes=image_bytes)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:generateContent"
-        body = {
-            "system_instruction": {"parts": [{"text": system_instruction()}]},
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": {
-                "temperature": 0.7,
-                "responseMimeType": "application/json",
-                "responseSchema": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "captions": {
-                            "type": "ARRAY",
-                            "items": {
-                                "type": "OBJECT",
-                                "properties": {
-                                    "style": {"type": "STRING"},
-                                    "language": {"type": "STRING"},
-                                    "text": {"type": "STRING"},
-                                },
-                                "required": ["style", "language", "text"],
-                            },
-                        }
-                    },
-                    "required": ["captions"],
-                },
-            },
-        }
-        response = httpx.post(url, params={"key": self._api_key}, json=body, timeout=self._timeout)
-        if response.status_code == 429 or response.status_code >= 500:
-            response = httpx.post(url, params={"key": self._api_key}, json=body, timeout=self._timeout)
+        headers = {"x-goog-api-key": self._api_key}
+        try:
+            response = httpx.post(url, headers=headers, json=body, timeout=self._timeout)
+            if response.status_code == 429 or response.status_code >= 500:
+                response = httpx.post(url, headers=headers, json=body, timeout=self._timeout)
+        except httpx.HTTPError:
+            raise NotConfigured("Gemini request failed.") from None
         if response.status_code >= 400:
             raise NotConfigured("Gemini request failed.")
         payload = response.json()
         text = _extract_text(payload)
         return CaptionBatch.model_validate_json(text)
+
+
+def build_request_body(context: GeminiContext, *, policy: str, image_bytes: bytes | None) -> dict[str, object]:
+    pixels = image_bytes if policy == "safe_previews" else None
+    parts: list[dict[str, object]] = [{"text": caption_request_text(context)}]
+    if pixels:
+        import base64
+
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": base64.b64encode(pixels).decode("ascii"),
+                }
+            }
+        )
+    return {
+        "system_instruction": {"parts": [{"text": system_instruction()}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "captions": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "style": {"type": "STRING"},
+                                "language": {"type": "STRING"},
+                                "text": {"type": "STRING"},
+                            },
+                            "required": ["style", "language", "text"],
+                        },
+                    }
+                },
+                "required": ["captions"],
+            },
+        },
+    }
 
 
 def _extract_text(payload: dict) -> str:

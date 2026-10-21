@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from PIL import Image
-
 from instamagic.services.geometry import Box
+from PIL import Image
 
 
 def score_image(image: Image.Image, face: Box | None) -> dict[str, float]:

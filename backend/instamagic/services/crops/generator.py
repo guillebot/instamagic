@@ -58,6 +58,43 @@ def viable_safety_crop(crops: list[CropWindow]) -> bool:
     )
 
 
+def window_excludes_unsafe(window: Box, unsafe_boxes: list[Box], margin: int = 8) -> bool:
+    return not _hits_any(window, unsafe_boxes, margin)
+
+
+def aspect_ratio_value(aspect_ratio: str, width: int, height: int) -> float:
+    """Locked ratio for a named crop, or width/height for freeform labels like original."""
+    if aspect_ratio in ASPECTS:
+        aspect_w, aspect_h = ASPECTS[aspect_ratio]
+        return aspect_w / aspect_h
+    if height <= 0:
+        return 1.0
+    return width / height
+
+
+def validate_crop_window(
+    *,
+    image_width: int,
+    image_height: int,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    aspect_ratio: str,
+    reference_width: int,
+    reference_height: int,
+) -> Box:
+    if width < 1 or height < 1:
+        raise ValueError("Crop size must be at least 1×1.")
+    if x < 0 or y < 0 or x + width > image_width or y + height > image_height:
+        raise ValueError("Crop must stay inside the image bounds.")
+    expected = aspect_ratio_value(aspect_ratio, reference_width, reference_height)
+    actual = width / height
+    if abs(actual - expected) > 0.02:
+        raise ValueError("Crop aspect ratio must match the selected suggestion.")
+    return Box(x, y, width, height)
+
+
 def _hits_any(window: Box, unsafe_boxes: list[Box], margin: int = 8) -> bool:
     expanded = [box.expanded(margin) for box in unsafe_boxes]
     return any(window.intersects(box) for box in expanded)

@@ -1,0 +1,21 @@
+# Architecture
+
+Three zones:
+
+1. Originals. A read-only mount. The scanner records a relative path, hashes, and `has_gps`. It does not write into the library and it does not put coordinates or original bytes on an API response.
+2. Local derivatives and scores. Thumbnails (long edge 384) and previews (long edge 1600) are new JPEGs under `DERIVATIVES_ROOT`, orientation applied, EXIF removed. Safety regions, crops, ratings, and the queue live in Postgres.
+3. Gemini. Only after the library is attested, a human has marked the frame safe or excellent, and the model state is not `DO_NOT_POST` or an unconfirmed `REVIEW`. `SAFE_AFTER_CROP` text describes the approved crop. Pixels go out only when `GEMINI_IMAGE_POLICY=safe_previews` and the file is already an approved derivative. The default is `text_only`. The audit row stores a hash of the text context, not the photograph.
+
+## Safety
+
+`SafetyClassifier` returns boxes, not one NSFW score. Exposed labels can force `DO_NOT_POST` or `SAFE_AFTER_CROP`. Covered and ambiguous regions do not auto-clear a frame. OpenCV YuNet supplies the face box the crop must keep. The fake classifier replaces both the detector and the face finder, and it is refused when `ENVIRONMENT=production`.
+
+Crops are rows (`x`, `y`, `width`, `height`, `aspect_ratio`, `reason`) for original, 4:5, 1:1, and 9:16. Approving one renders a derivative. The original file is not opened for write.
+
+## Ranking
+
+Next best posts uses human rating, Laplacian sharpness, thirds and face placement, and dHash uniqueness. Near-duplicates collapse to the stronger frame. With no imported Instagram metrics the reason text says the rank is local only.
+
+## Interfaces left empty
+
+`AestheticScorer`, `CompositionAnalyzer`, and the embedding table can be replaced later (OpenCLIP is the intended swap) without changing the queue gates. `InstagramClient.configured()` is false and every method raises `InstagramNotConfigured`.

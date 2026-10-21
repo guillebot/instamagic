@@ -1,0 +1,45 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { FormEvent, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { ApiError, api } from "../api";
+
+export function LoginPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    try {
+      await api("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) });
+      await queryClient.invalidateQueries({ queryKey: ["session"] });
+      navigate("/");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Login failed.");
+    }
+  }
+
+  return (
+    <main className="login">
+      <form className="panel" onSubmit={onSubmit}>
+        <h1>Instamagic</h1>
+        <p>Local review for your photography archive. Originals stay on this machine.</p>
+        <label>
+          Password
+          <input
+            type="password"
+            value={password}
+            autoComplete="current-password"
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        {error ? <p className="error">{error}</p> : null}
+        <button className="button" type="submit">
+          Unlock
+        </button>
+      </form>
+    </main>
+  );
+}

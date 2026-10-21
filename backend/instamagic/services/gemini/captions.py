@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import BaseModel, Field, field_validator
-
 from instamagic.services.gemini.context import BANNED_PHRASES, GeminiContext
+from pydantic import BaseModel, Field, field_validator
 
 CAPTION_SPECS: tuple[tuple[str, str], ...] = (
     ("minimal", "en"),

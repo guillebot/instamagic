@@ -18,6 +18,7 @@ def publishing_gate(
     model_state: str | None,
     needs_crop: bool,
     has_approved_crop: bool,
+    has_approved_covering_blur: bool = False,
 ) -> GateResult:
     reasons: list[str] = []
     if not attested:
@@ -26,8 +27,8 @@ def publishing_gate(
         reasons.append("A human safe or excellent rating is required.")
     if model_state == SafetyState.DO_NOT_POST.value:
         reasons.append("The local model marked this image DO_NOT_POST.")
-    if needs_crop and not has_approved_crop:
-        reasons.append("SAFE_AFTER_CROP requires an approved crop.")
+    if needs_crop and not (has_approved_crop or has_approved_covering_blur):
+        reasons.append("SAFE_AFTER_CROP requires an approved crop or covering blur.")
     return GateResult(allowed=not reasons, reasons=reasons)
 
 
@@ -40,6 +41,7 @@ def gemini_gate(
     has_approved_crop: bool,
     operator_confirmed: bool,
     policy: str,
+    has_approved_covering_blur: bool = False,
 ) -> GateResult:
     result = publishing_gate(
         attested=attested,
@@ -47,6 +49,7 @@ def gemini_gate(
         model_state=model_state,
         needs_crop=needs_crop,
         has_approved_crop=has_approved_crop,
+        has_approved_covering_blur=has_approved_covering_blur,
     )
     reasons = list(result.reasons)
     if human_rating == HumanRating.REVIEW.value or (

@@ -1,0 +1,148 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: instamagic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: instamagic
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U instamagic -d instamagic"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      ALLOW_CONTAINER_BIND: "true"
+      BIND_HOST: 0.0.0.0
+    command: python -m instamagic.migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SUGGESTED_LIBRARY_ROOT: /data/originals
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:-}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: ${PIPELINE_MODE:-queue}
+      AUTO_PUBLISH: "false"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ${ORIGINALS_ROOT:-./fixtures/library}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker-io:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:-}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: queue
+      AUTO_PUBLISH: "false"
+    command: python -m instamagic.workers io
+    volumes:
+      - ${ORIGINALS_ROOT:-./fixtures/library}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker-ml:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:-}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: queue
+      AUTO_PUBLISH: "false"
+    command: python -m instamagic.workers ml
+    volumes:
+      - ${ORIGINALS_ROOT:-./fixtures/library}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  derivatives:
