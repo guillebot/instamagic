@@ -212,6 +212,22 @@ export type QueueSlide = {
   image: ImageItem;
 };
 
+export type ImagePublishReadiness = {
+  publishing_allowed: boolean;
+  publishing_reasons: string[];
+  caption_generation_allowed: boolean;
+  caption_generation_reasons: string[];
+  library_attested: boolean;
+  queue_item_id: string | null;
+  queue_state: string | null;
+  scheduled_at: string | null;
+  published_at: string | null;
+  instagram_configured: boolean;
+  instagram_target_username: string | null;
+  feed_preview_url: string | null;
+  uses_approved_crop: boolean;
+};
+
 export type QueueItem = {
   id: string;
   state: string;
