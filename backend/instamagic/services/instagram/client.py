@@ -14,10 +14,11 @@ import httpx
 from instamagic.errors import InstagramNotConfigured, NotConfigured
 from instamagic.services.instagram.graph_constants import DEFAULT_INSTAGRAM_GRAPH_VERSION
 
-# Fields Meta documents on IG User for Professional accounts (Graph Content Publishing).
+# IG User fields for graph.facebook.com (Facebook Login / Page token).
+# account_type exists only on graph.instagram.com (Instagram Login) — omit here.
 ACCOUNT_DETAIL_FIELDS = (
     "id,username,name,profile_picture_url,followers_count,follows_count,"
-    "media_count,account_type,biography,website"
+    "media_count,biography,website"
 )
 
 _NOT_CONFIGURED_MSG = (
