@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
 import { api } from "./api";
+import { SystemHealthBar } from "./SystemHealthBar";
 import { VersionChip } from "./VersionChip";
 import { LoginPage } from "./pages/Login";
 import { CandidatesPage } from "./pages/Candidates";
@@ -29,11 +30,12 @@ function Shell() {
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand-row">
-          <div className="brand">Instamagic</div>
-          <VersionChip />
-        </div>
-        <nav className="nav">
+        <div className="topbar-row">
+          <div className="brand-row">
+            <div className="brand">Instamagic</div>
+            <VersionChip />
+          </div>
+          <nav className="nav">
           <NavLink to="/" end>
             Review
           </NavLink>
@@ -50,7 +52,9 @@ function Shell() {
           >
             Log out
           </button>
-        </nav>
+          </nav>
+        </div>
+        <SystemHealthBar />
       </header>
       <Outlet />
     </div>

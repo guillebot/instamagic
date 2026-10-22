@@ -359,3 +359,16 @@ class QueuesOut(BaseModel):
     available: bool
     detail: str | None = None
     queues: list[QueueOut] = Field(default_factory=list)
+
+
+class HealthCheckOut(BaseModel):
+    id: str
+    label: str
+    status: str
+    detail: str
+
+
+class HealthStatusOut(BaseModel):
+    overall: str
+    checks: list[HealthCheckOut]
+    cached_seconds: int = 25

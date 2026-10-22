@@ -14,13 +14,87 @@ a { color: inherit; }
 .shell { min-height: 100vh; display: flex; flex-direction: column; }
 .topbar {
   display: flex;
-  gap: 16px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 18px;
+  flex-direction: column;
   border-bottom: 1px solid #2a2f36;
   background: #181b20;
 }
+.topbar-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px 8px;
+  flex-wrap: wrap;
+}
+.health-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 4px 18px 10px;
+  border-top: 1px solid #22272e;
+  font-size: 11px;
+  color: #b8b2a8;
+}
+.health-item-wrap { position: relative; }
+.health-item,
+.health-item--link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.health-item:hover,
+.health-item--link:hover { background: #232830; }
+.health-item--static { cursor: default; }
+.health-item--static:hover { background: transparent; }
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px #0d0f12;
+}
+.health-dot--ok { background: #3d9a6a; }
+.health-dot--warning { background: #c9a227; }
+.health-dot--down { background: #c45c5c; }
+.health-dot--unknown { background: #6a7078; }
+.health-label { font-weight: 550; color: #ddd6cc; }
+.health-status-text {
+  font-variant-numeric: tabular-nums;
+  color: #8f8a82;
+}
+.health-overall { margin-right: 4px; padding-right: 10px; border-right: 1px solid #2a2f36; }
+.health-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  max-width: min(360px, 90vw);
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #3a414b;
+  background: #101216;
+  color: #ece7df;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.health-popover p { margin: 6px 0 0; color: #b8b2a8; }
+.health-popover-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: #d7a15f;
+  text-decoration: none;
+}
+.health-popover-link:hover { text-decoration: underline; }
 .brand-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .brand { font-weight: 650; letter-spacing: 0.04em; }
 .version-chip {
