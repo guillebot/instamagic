@@ -118,6 +118,15 @@ const RATING_KEYS = [
   { key: "3", rating: "safe", label: "Safe" },
   { key: "4", rating: "excellent", label: "Excellent" },
 ] as const;
+
+/** Safety badge filter: values match /api/images?model_state= (effective state). */
+const SAFETY_FILTERS = [
+  { value: "SAFE", label: "Safe" },
+  { value: "SAFE_AFTER_CROP", label: "Safe after crop" },
+  { value: "SAFE_AFTER_BLUR", label: "Safe after blur" },
+  { value: "REVIEW", label: "Review" },
+  { value: "DO_NOT_POST", label: "Do not post" },
+] as const;
 const GRID_GAP = 8;
 const TARGET_ROW_HEIGHT = 160;
 
@@ -590,9 +599,9 @@ export function ReviewPage() {
             onChange={(event) => setFilters({ ...filters, model_state: event.target.value })}
           >
             <option value="">Any safety</option>
-            {["SAFE", "SAFE_AFTER_CROP", "REVIEW", "DO_NOT_POST"].map((state) => (
-              <option key={state} value={state}>
-                {state}
+            {SAFETY_FILTERS.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
               </option>
             ))}
           </select>

@@ -132,7 +132,7 @@ input, select, textarea {
 .meta { display: flex; justify-content: space-between; gap: 6px; margin-top: 6px; font-size: 12px; color: #b7b1a8; }
 .badge { border-radius: 999px; padding: 2px 7px; font-size: 11px; }
 .badge.SAFE, .badge.safe { background: #245c45; }
-.badge.SAFE_AFTER_CROP { background: #3d5a2a; }
+.badge.SAFE_AFTER_CROP, .badge.SAFE_AFTER_BLUR { background: #3d5a2a; }
 .badge.REVIEW, .badge.UNREVIEWED { background: #6a5420; }
 .badge.DO_NOT_POST, .badge.reject { background: #6d3030; }
 .badge.crop-approved { background: #2a4a5c; }

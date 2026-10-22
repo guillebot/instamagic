@@ -1,4 +1,10 @@
-export type SafetyState = "SAFE" | "SAFE_AFTER_CROP" | "REVIEW" | "DO_NOT_POST" | "UNREVIEWED";
+export type SafetyState =
+  | "SAFE"
+  | "SAFE_AFTER_CROP"
+  | "SAFE_AFTER_BLUR"
+  | "REVIEW"
+  | "DO_NOT_POST"
+  | "UNREVIEWED";
 
 export type ImageItem = {
   id: string;

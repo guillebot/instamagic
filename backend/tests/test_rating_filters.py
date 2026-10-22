@@ -130,3 +130,57 @@ def test_safe_filter_with_include_subfolders(client, app_env) -> None:
         },
     ).json()["items"]
     assert sorted(row["filename"] for row in direct) == ["top_safe.jpg"]
+
+
+def test_safe_after_crop_and_blur_filters(client, app_env) -> None:
+    """SAFE_AFTER_CROP / SAFE_AFTER_BLUR find remediable frames (same classifier state)."""
+    library = app_env["library"]
+    # Fake classifier: "unsafe" in the name → SAFE_AFTER_CROP; clean → REVIEW.
+    write_jpeg(library / "Album" / "unsafe-top.jpg", color=(90, 40, 40))
+    write_jpeg(library / "Album" / "clean-top.jpg", color=(30, 30, 30))
+    write_jpeg(library / "Album" / "picks" / "unsafe-nested.jpg", color=(90, 50, 50))
+    write_jpeg(library / "Album" / "picks" / "clean-nested.jpg", color=(40, 40, 40))
+    write_jpeg(library / "Elsewhere" / "unsafe-out.jpg", color=(80, 30, 30))
+    login(client)
+    library_id = client.post(
+        "/api/libraries",
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+    ).json()["id"]
+    assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
+
+    def names(**params: object) -> list[str]:
+        response = client.get(
+            "/api/images",
+            params={"library_id": library_id, "folder": "Album", **params},
+        )
+        assert response.status_code == 200, response.text
+        return sorted(row["filename"] for row in response.json()["items"])
+
+    # Direct children only.
+    assert names(model_state="SAFE_AFTER_CROP") == ["unsafe-top.jpg"]
+    assert names(model_state="SAFE_AFTER_BLUR") == ["unsafe-top.jpg"]
+    assert names(model_state="REVIEW") == ["clean-top.jpg"]
+
+    # Include subfolders: both remediable filters see nested unsafe frames.
+    assert names(model_state="SAFE_AFTER_CROP", recursive="true") == [
+        "unsafe-nested.jpg",
+        "unsafe-top.jpg",
+    ]
+    assert names(model_state="SAFE_AFTER_BLUR", recursive="true") == [
+        "unsafe-nested.jpg",
+        "unsafe-top.jpg",
+    ]
+    assert "unsafe-out.jpg" not in names(model_state="SAFE_AFTER_CROP", recursive="true")
+
+    # Human rating overrides badge — rated-safe unsafe frame leaves the remediable filters.
+    items = client.get(
+        "/api/images",
+        params={"library_id": library_id, "folder": "Album"},
+    ).json()["items"]
+    unsafe_id = next(row["id"] for row in items if row["filename"] == "unsafe-top.jpg")
+    rated = client.post(f"/api/images/{unsafe_id}/rating", json={"rating": "safe"}).json()
+    assert rated["model_state"] == "SAFE_AFTER_CROP"
+    assert rated["effective_state"] == "SAFE"
+    assert names(model_state="SAFE_AFTER_CROP") == []
+    assert names(model_state="SAFE_AFTER_BLUR") == []
+    assert names(model_state="SAFE") == ["unsafe-top.jpg"]

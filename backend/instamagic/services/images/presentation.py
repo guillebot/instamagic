@@ -37,11 +37,24 @@ def normalize_human_rating_filter(raw: str | None) -> str | None:
     return _HUMAN_RATING_ALIASES.get(key)
 
 
+# Blur covers remediates the same classifier state as crop (SAFE_AFTER_CROP).
+# Review exposes a dedicated "Safe after blur" filter that aliases that state.
+_SAFE_AFTER_REMEDIATE = frozenset(
+    {
+        SafetyState.SAFE_AFTER_CROP.value,
+        "SAFE_AFTER_BLUR",
+    }
+)
+
+
 def effective_state_filter_clause(image_model: Any, state: str) -> Any:
     """SQL clause matching the Review badge (human rating overrides model_state).
 
     Selecting SAFE must include images the operator marked safe/excellent even when
     the classifier left model_state as REVIEW / SAFE_AFTER_CROP.
+
+    SAFE_AFTER_CROP and SAFE_AFTER_BLUR both match unrated frames whose classifier
+    state is SAFE_AFTER_CROP (blur is an alternate remediation, not a separate state).
     """
     human = image_model.human_rating
     model = image_model.model_state
@@ -60,6 +73,6 @@ def effective_state_filter_clause(image_model: Any, state: str) -> Any:
             human == HumanRating.REJECT.value,
             and_(human.is_(None), model == SafetyState.DO_NOT_POST.value),
         )
-    if state == SafetyState.SAFE_AFTER_CROP.value:
+    if state in _SAFE_AFTER_REMEDIATE:
         return and_(human.is_(None), model == SafetyState.SAFE_AFTER_CROP.value)
     return model == state
