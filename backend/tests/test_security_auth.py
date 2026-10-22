@@ -27,6 +27,7 @@ def test_protected_routes_require_session(client) -> None:
         "/api/facets",
         "/api/tags",
         "/api/instagram/status",
+        "/api/health/status",
     ):
         assert client.get(path).status_code == 401, path
     assert client.post("/api/instagram/account").status_code == 401

@@ -66,6 +66,7 @@ from instamagic.schemas.dto import (
     CurationReorderIn,
     FolderListing,
     HashtagIn,
+    HealthStatusOut,
     ImageOut,
     ImagePage,
     InstagramCredentialsIn,
@@ -92,6 +93,7 @@ from instamagic.services.factory import build_instagram
 from instamagic.services.gemini.context import build_context, gemini_allows_pixels
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.geometry import Box
+from instamagic.services.health_status import build_health_status
 from instamagic.services.images.derivatives import (
     PREVIEW_FILENAME,
     THUMB_FILENAME,
@@ -213,6 +215,15 @@ def _load_image(session: Session, image_id: UUID) -> Image:
 @router.get("/health")
 def health(settings: Settings = Depends(settings_dep)) -> dict[str, str]:
     return {"status": "ok", "version": settings.app_version}
+
+
+@router.get("/api/health/status", response_model=HealthStatusOut)
+def health_status(
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Operator health summary (session required). Never returns secrets or tokens."""
+    return build_health_status(settings)
 
 
 @router.get("/ready")

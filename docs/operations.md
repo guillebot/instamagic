@@ -136,9 +136,24 @@ Frontend nginx proxies `/api`, `/health`, and `/ready` to the Compose service na
 
 Logs are JSON. The logger redacts fields whose names contain password, token, secret, authorization, or api_key. Do not log image bodies.
 
+## System health bar
+
+After login, the top header shows a compact health strip (refreshed about every 30 seconds). It calls `GET /api/health/status` (session cookie required — not exposed under `/api/public`).
+
+| Indicator | Meaning |
+|---|---|
+| Library | Registered library path readable; derivatives dir writable; free space on the library volume |
+| Instagram | Sealed credentials present; cached `@username` vs `INSTAGRAM_EXPECTED_USERNAME` when set |
+| Publish URL | `PUBLIC_BASE_URL` is HTTPS and distinct from the LAN UI origin; optional cached `/health` probe |
+| Database | Postgres reachable; Alembic at head |
+| Queue | Redis reachable; `worker-io` / `worker-ml` via RQ or Redis heartbeats (`PIPELINE_MODE=queue`) |
+| Gemini / Data disk | API key configured (never shown); free space under `DERIVATIVES_ROOT` |
+
+Responses are cached server-side for ~25s and omit secrets, tokens, and env values.
+
 ## Workers
 
-`worker-io` and `worker-ml` run `python -m instamagic.workers io|ml` from the same backend image. With `PIPELINE_MODE=inline` the API scans in process and the workers stay idle. With `queue`, scan jobs land on `io`.
+`worker-io` and `worker-ml` run `python -m instamagic.workers io|ml` from the same backend image. Each worker writes a short-lived Redis heartbeat key (`instamagic:worker:heartbeat:<queue>`) so the health bar can detect stalled workers when RQ introspection is empty. With `PIPELINE_MODE=inline` the API scans in process and the workers stay idle. With `queue`, scan jobs land on `io`.
 
 ## Tear down
 
