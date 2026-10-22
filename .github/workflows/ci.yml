@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+      - name: Ruff
+        run: ruff check instamagic tests
+      - name: Pytest (incl. security suite)
+        env:
+          APP_PASSWORD: test-password-123
+          APP_SECRET: test-secret-value-123456
+          SAFETY_CLASSIFIER: fake
+          GEMINI_PROVIDER: fake
+          PIPELINE_MODE: inline
+          GEMINI_IMAGE_POLICY: text_only
+          ENVIRONMENT: local
+          BIND_HOST: 127.0.0.1
+          AUTO_PUBLISH: "false"
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Typecheck / build
+        run: npm run build

@@ -1,0 +1,257 @@
+# Stage stack for 10.1.1.8 (/opt/docker/instamagic).
+# Pulls prebuilt images — no build: on the host. Local Mac stays on
+# docker-compose.yml (dev, with build:).
+#
+# Images (Docker Hub preferred; default prefix matches org DOCKERHUB_USERNAME):
+#   ${IMAGE_PREFIX:-gschimmel}/instamagic-backend:${IMAGE_TAG}
+#   ${IMAGE_PREFIX:-gschimmel}/instamagic-frontend:${IMAGE_TAG}
+#
+# Deploy on host (compose file is copied as docker-compose.yml):
+#   docker compose pull && docker compose up -d
+#
+# Networking (same pattern as monkeytracker / metrik):
+#   - internal: postgres, redis, backend, workers, frontend (service DNS)
+#   - guille-net: frontend only (Traefik). Never attach DB/cache to the
+#     shared Traefik network — bare aliases like `postgres` collide with
+#     other stacks and poison their clients.
+#
+# Traefik terminates TLS for instamagic.schimmel.homes with lan-only@file.
+# Do not publish host ports.
+#
+# Photo library (ORIGINALS_ROOT, default /fotosarte) is often mode 770
+# owner:group (e.g. guille:users). The backend image entrypoint drops root
+# to uid 10001, which cannot read that tree — so API/workers run as
+# APP_UID:APP_GID (host library owner + group). Nested dirs may be 711, so
+# matching the owner UID is required (group-only is not enough to list).
+# migrate stays on the image default (no originals mount). Never chmod/chown
+# the photo archive; only chown app volumes (e.g. derivatives) when switching
+# APP_UID.
+
+name: instamagic
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Host UID/GID that can read ORIGINALS_ROOT (stage: guille=1000, users=100).
+x-app-user: &app-user
+  user: "${APP_UID:-1000}:${APP_GID:-100}"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: instamagic-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: instamagic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: instamagic
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U instamagic -d instamagic"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    container_name: instamagic-redis
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *default-logging
+
+  migrate:
+    image: ${IMAGE_PREFIX:-gschimmel}/instamagic-backend:${IMAGE_TAG:-latest}
+    container_name: instamagic-migrate
+    # Runs as image default (root→app 10001). No originals mount; does not need
+    # APP_UID. Non-root without /data/derivatives fails entrypoint makedirs.
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SUGGESTED_LIBRARY_ROOT: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:?set SAFETY_MODEL_SHA256}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: ${PIPELINE_MODE:-queue}
+      AUTO_PUBLISH: "false"
+      ENVIRONMENT: stage
+      FRONTEND_ORIGIN: https://instamagic.schimmel.homes
+    command: python -m instamagic.migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: "no"
+    logging: *default-logging
+
+  backend:
+    image: ${IMAGE_PREFIX:-gschimmel}/instamagic-backend:${IMAGE_TAG:-latest}
+    container_name: instamagic-backend
+    restart: unless-stopped
+    <<: *app-user
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SUGGESTED_LIBRARY_ROOT: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:?set SAFETY_MODEL_SHA256}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: ${PIPELINE_MODE:-queue}
+      AUTO_PUBLISH: "false"
+      ENVIRONMENT: stage
+      FRONTEND_ORIGIN: https://instamagic.schimmel.homes
+    volumes:
+      - ${ORIGINALS_ROOT:-/fotosarte}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+
+  worker-io:
+    image: ${IMAGE_PREFIX:-gschimmel}/instamagic-backend:${IMAGE_TAG:-latest}
+    container_name: instamagic-worker-io
+    restart: unless-stopped
+    <<: *app-user
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SUGGESTED_LIBRARY_ROOT: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:?set SAFETY_MODEL_SHA256}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: queue
+      AUTO_PUBLISH: "false"
+      ENVIRONMENT: stage
+      FRONTEND_ORIGIN: https://instamagic.schimmel.homes
+    command: python -m instamagic.workers io
+    volumes:
+      - ${ORIGINALS_ROOT:-/fotosarte}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    logging: *default-logging
+
+  worker-ml:
+    image: ${IMAGE_PREFIX:-gschimmel}/instamagic-backend:${IMAGE_TAG:-latest}
+    container_name: instamagic-worker-ml
+    restart: unless-stopped
+    <<: *app-user
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SUGGESTED_LIBRARY_ROOT: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:?set SAFETY_MODEL_SHA256}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: queue
+      AUTO_PUBLISH: "false"
+      ENVIRONMENT: stage
+      FRONTEND_ORIGIN: https://instamagic.schimmel.homes
+    command: python -m instamagic.workers ml
+    volumes:
+      - ${ORIGINALS_ROOT:-/fotosarte}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    logging: *default-logging
+
+  frontend:
+    image: ${IMAGE_PREFIX:-gschimmel}/instamagic-frontend:${IMAGE_TAG:-latest}
+    container_name: instamagic-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - internal
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=guille-net"
+      - "traefik.http.routers.instamagic.rule=Host(`instamagic.schimmel.homes`)"
+      - "traefik.http.routers.instamagic.middlewares=lan-only@file"
+      - "traefik.http.routers.instamagic.entrypoints=websecure"
+      - "traefik.http.routers.instamagic.tls.certresolver=letsencrypt-dns"
+      - "traefik.http.routers.instamagic.service=instamagic"
+      - "traefik.http.services.instamagic.loadbalancer.server.port=80"
+      - "homepage.group=Home"
+      - "homepage.name=Instamagic"
+      - "homepage.icon=mdi-camera-outline"
+      - "homepage.href=https://instamagic.schimmel.homes/"
+      - "homepage.description=Photo review (stage)"
+    logging: *default-logging
+
+volumes:
+  postgres_data:
+  derivatives:
+
+networks:
+  internal:
+    driver: bridge
+  traefik:
+    external: true
+    name: guille-net

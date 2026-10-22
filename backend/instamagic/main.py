@@ -19,8 +19,18 @@ from instamagic.services.pipeline import seed_tags
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
+    if settings.require_external_library_mounts:
+        from instamagic.services.images.paths import assert_configured_external_mounts
+
+        assert_configured_external_mounts(settings.library_roots())
     settings.derivatives_root.mkdir(parents=True, exist_ok=True)
-    app.state.classifier = build_classifier(settings)
+    classifier = build_classifier(settings)
+    if settings.require_live_safety_classifier() and not classifier.available():
+        raise RuntimeError(
+            "Safety classifier failed to load (missing model or SHA-256 mismatch). "
+            "Refusing to start in stage/production."
+        )
+    app.state.classifier = classifier
     app.state.face_detector = build_face_detector(settings)
     app.state.gemini = build_gemini(settings)
     app.state.login_failures = {}
@@ -29,7 +39,13 @@ async def lifespan(app: FastAPI):
         seed_tags(session)
     finally:
         session.close()
-    get_logger("api").info("startup", bind_host=settings.bind_host, policy=settings.gemini_image_policy)
+    get_logger("api").info(
+        "startup",
+        bind_host=settings.bind_host,
+        policy=settings.gemini_image_policy,
+        detector_available=bool(classifier.available()),
+        cookie_secure=settings.session_cookie_secure(),
+    )
     yield
     get_engine().dispose()
 

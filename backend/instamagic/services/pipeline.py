@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -37,6 +37,7 @@ from instamagic.services.images.derivatives import (
     save_derivative,
 )
 from instamagic.services.images.hashes import dhash, file_sha256, hamming
+from instamagic.services.images.paths import is_transient_io_error, retry_transient_io
 from instamagic.services.safety.analyze import analyze_image
 from instamagic.services.safety.decision import DecisionInput, decide
 from instamagic.services.safety.labels import CLEAR_SCORE, EXPOSED_LABELS
@@ -88,9 +89,71 @@ def is_attested(session: Session, library_id: UUID) -> bool:
     return bool(row and row.confirmed)
 
 
-def iter_library_files(root: Path, on_directory=None):  # type: ignore[no-untyped-def]
-    root_resolved = root.resolve()
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+def _relative_to_root(root: Path, path: Path) -> str:
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        relative = path.name
+    return relative[:1024]
+
+
+def _path_under_root(root: Path, path_text: str | None) -> str | None:
+    if not path_text:
+        return None
+    try:
+        return Path(path_text).relative_to(root).as_posix()
+    except ValueError:
+        root_text = str(root).rstrip("/\\")
+        text = path_text
+        for prefix in (root_text + "/", root_text + "\\", root_text):
+            if text.startswith(prefix):
+                text = text[len(prefix) :]
+                break
+        text = text.lstrip("/\\")
+        return text or None
+
+
+def _brief_error(exc: BaseException, root: Path) -> str:
+    """Human-readable scan error; never strip library root into a fake absolute path."""
+    name = type(exc).__name__
+    detail = " ".join(str(exc).replace("\n", " ").split())
+    filename = getattr(exc, "filename", None)
+    relative = _path_under_root(root, filename if isinstance(filename, str) else None)
+    if relative is None:
+        # Scrub absolute root without leaving a fake "/relative" absolute path.
+        for root_text in {str(root), str(root.resolve())}:
+            root_text = root_text.rstrip("/\\")
+            if not root_text:
+                continue
+            detail = detail.replace(f"'{root_text}/", "'").replace(f'"{root_text}/', '"')
+            detail = detail.replace(f"'{root_text}'", "'.'").replace(f'"{root_text}"', '"."')
+            detail = detail.replace(root_text + "/", "").replace(root_text + "\\", "")
+            detail = detail.replace(root_text, ".")
+    else:
+        if filename:
+            detail = detail.replace(str(filename), relative)
+        detail = detail.replace(f"'{relative}'", relative).replace(f'"{relative}"', relative)
+    hint = ""
+    if is_transient_io_error(exc):
+        hint = " (flaky library mount; retried, still unavailable)"
+    if relative:
+        text = f"{name} at {relative}: {detail}{hint}"
+    else:
+        text = f"{name}: {detail}{hint}"
+    text = " ".join(text.split()) or "Scan failed."
+    if len(text) > 400:
+        text = text[:397] + "..."
+    return text
+
+
+def iter_library_files(root: Path, on_directory=None) -> Iterator[Path]:  # type: ignore[no-untyped-def]
+    root_resolved = retry_transient_io(root.resolve)
+    walker = os.walk(root, followlinks=False)
+    while True:
+        try:
+            dirpath, dirnames, filenames = retry_transient_io(lambda: next(walker))
+        except StopIteration:
+            break
         dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
         if on_directory is not None:
             on_directory(Path(dirpath))
@@ -99,12 +162,18 @@ def iter_library_files(root: Path, on_directory=None):  # type: ignore[no-untype
                 continue
             path = Path(dirpath) / name
             try:
-                resolved = path.resolve()
-            except OSError:
-                continue
-            if os.path.commonpath([str(root_resolved), str(resolved)]) != str(root_resolved):
-                continue
-            if not resolved.is_file():
+                resolved = retry_transient_io(path.resolve)
+                if os.path.commonpath([str(root_resolved), str(resolved)]) != str(root_resolved):
+                    continue
+                if not retry_transient_io(resolved.is_file):
+                    continue
+            except OSError as exc:
+                if is_transient_io_error(exc):
+                    log.info(
+                        "scan_skip_transient_io",
+                        relative_path=_relative_to_root(root, path),
+                        error_type=type(exc).__name__,
+                    )
                 continue
             yield path
 
@@ -119,25 +188,6 @@ class _ProgressClock:
             self.at = now
             return True
         return False
-
-
-def _relative_to_root(root: Path, path: Path) -> str:
-    try:
-        relative = path.relative_to(root).as_posix()
-    except ValueError:
-        relative = path.name
-    return relative[:1024]
-
-
-def _brief_error(exc: BaseException, root: Path) -> str:
-    text = f"{type(exc).__name__}: {exc}".replace("\n", " ")
-    root_text = str(root)
-    if root_text:
-        text = text.replace(root_text, "")
-    text = " ".join(text.split()) or "Scan failed."
-    if len(text) > 400:
-        text = text[:397] + "..."
-    return text
 
 
 def _summary(job: ProcessingJob) -> str:
@@ -226,8 +276,14 @@ def run_scan(
         set_stage("listing", path=directory)
 
     try:
-        if not root.is_dir():
+        if not retry_transient_io(root.is_dir):
             raise FileNotFoundError("Library folder is not available.")
+        from instamagic.config import get_settings
+        from instamagic.services.images.paths import assert_library_root_mounted
+
+        settings = get_settings()
+        if settings.require_external_library_mounts:
+            assert_library_root_mounted(root, settings.library_roots())
         attested = is_attested(session, library_id)
         derivatives_root.mkdir(parents=True, exist_ok=True)
         for path in iter_library_files(root, note_directory):
@@ -369,7 +425,7 @@ def _ingest_one(
     if kind == "ignored":
         return "skipped"
     relative = path.relative_to(root).as_posix()
-    stat = path.stat()
+    stat = retry_transient_io(path.stat)
     existing_path = session.scalar(
         select(Image).where(Image.library_id == library_id, Image.relative_path == relative)
     )
@@ -384,7 +440,7 @@ def _ingest_one(
     ):
         return "skipped"
     stage("hashing")
-    sha = file_sha256(path)
+    sha = retry_transient_io(lambda: file_sha256(path))
     existing_sha = session.scalar(select(Image).where(Image.sha256 == sha))
     if existing_sha is not None and (existing_path is None or existing_sha.id != existing_path.id):
         _record_duplicate(session, existing_sha.id, library_id, relative)
@@ -424,8 +480,11 @@ def _ingest_one(
         return "skipped"
     stage("reading")
     try:
-        with path.open("rb"):
-            pil = read_image(path)
+        def _load_pil() -> PilImage.Image:
+            with path.open("rb"):
+                return read_image(path)
+
+        pil = retry_transient_io(_load_pil)
         meta = metadata_from_image(pil)
         rgb = oriented_rgb(pil)
     except Exception:

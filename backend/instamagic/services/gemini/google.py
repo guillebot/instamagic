@@ -7,7 +7,7 @@ from instamagic.services.gemini.captions import (
     caption_request_text,
     system_instruction,
 )
-from instamagic.services.gemini.context import GeminiContext
+from instamagic.services.gemini.context import GeminiContext, assert_safe_gemini_payload
 
 
 class GoogleGeminiProvider:
@@ -55,7 +55,7 @@ def build_request_body(context: GeminiContext, *, policy: str, image_bytes: byte
                 }
             }
         )
-    return {
+    body: dict[str, object] = {
         "system_instruction": {"parts": [{"text": system_instruction()}]},
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
@@ -81,6 +81,8 @@ def build_request_body(context: GeminiContext, *, policy: str, image_bytes: byte
             },
         },
     }
+    assert_safe_gemini_payload(body, policy=policy)
+    return body
 
 
 def _extract_text(payload: dict) -> str:

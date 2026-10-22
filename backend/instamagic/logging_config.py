@@ -12,7 +12,19 @@ def configure_logging(level: str) -> None:
         redacted = dict(event_dict)
         for key in list(redacted):
             lowered = str(key).lower()
-            if any(part in lowered for part in ("password", "token", "secret", "authorization", "api_key")):
+            if any(
+                part in lowered
+                for part in (
+                    "password",
+                    "token",
+                    "secret",
+                    "authorization",
+                    "api_key",
+                    "cookie",
+                    "session",
+                    "gemini_api",
+                )
+            ):
                 redacted[key] = "[REDACTED]"
         return redacted
 

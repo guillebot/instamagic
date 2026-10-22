@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Slim stage deploy to 10.1.1.8:/opt/docker/instamagic.
+# Copies compose + env example only (no source tree, no --build).
+# Host pulls images from Docker Hub / GHCR. Secrets stay on the host.
+set -euo pipefail
+
+HOST="${INSTAMAGIC_STAGE_HOST:-guille@10.1.1.8}"
+REMOTE="${INSTAMAGIC_STAGE_PATH:-/opt/docker/instamagic}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "Deploying stage compose to ${HOST}:${REMOTE} (no source tree, no build)..."
+ssh -o BatchMode=yes "$HOST" "sudo mkdir -p '$REMOTE' && sudo chown guille:guille '$REMOTE'"
+
+# Host pull-all.sh expects docker-compose.yml. Stage file is the only compose on host.
+scp -o BatchMode=yes \
+  "$ROOT/docker-compose.stage.yml" \
+  "$HOST:$REMOTE/docker-compose.yml"
+
+scp -o BatchMode=yes \
+  "$ROOT/deploy/stage.env.example" \
+  "$HOST:$REMOTE/stage.env.example"
+
+ssh -o BatchMode=yes "$HOST" bash -s <<'REMOTE'
+set -euo pipefail
+cd /opt/docker/instamagic
+mkdir -p data/stage-library models
+
+if [[ ! -f .env ]]; then
+  echo "Creating stage .env with fresh secrets (not printed)..."
+  umask 077
+  APP_PASSWORD="$(openssl rand -hex 16)"
+  APP_SECRET="$(openssl rand -hex 32)"
+  POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+  sed \
+    -e "s|^APP_PASSWORD=.*|APP_PASSWORD=${APP_PASSWORD}|" \
+    -e "s|^APP_SECRET=.*|APP_SECRET=${APP_SECRET}|" \
+    -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${POSTGRES_PASSWORD}|" \
+    -e "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic|" \
+    stage.env.example > .env
+  chmod 600 .env
+  unset APP_PASSWORD APP_SECRET POSTGRES_PASSWORD
+  echo "Wrote .env (secrets generated on host)."
+else
+  echo "Keeping existing .env"
+  # Ensure image pin keys exist (idempotent; does not overwrite values).
+  grep -q '^IMAGE_PREFIX=' .env || echo 'IMAGE_PREFIX=gschimmel' >> .env
+  grep -q '^IMAGE_TAG=' .env || echo 'IMAGE_TAG=latest' >> .env
+  grep -q '^SAFETY_MODEL_SHA256=' .env || \
+    echo 'SAFETY_MODEL_SHA256=c15d8273adad2d0a92f014cc69ab2d6c311a06777a55545f2c4eb46f51911f0f' >> .env
+  grep -q '^APP_UID=' .env || echo 'APP_UID=1000' >> .env
+  grep -q '^APP_GID=' .env || echo 'APP_GID=100' >> .env
+  # Prefer real host library when still on the empty stage stub.
+  if grep -q '^ORIGINALS_ROOT=./data/stage-library$' .env; then
+    echo "Updating ORIGINALS_ROOT to /fotosarte (was ./data/stage-library)"
+    sed -i 's|^ORIGINALS_ROOT=./data/stage-library$|ORIGINALS_ROOT=/fotosarte|' .env
+  fi
+  grep -q '^ORIGINALS_ROOT=' .env || echo 'ORIGINALS_ROOT=/fotosarte' >> .env
+fi
+
+if [[ ! -f models/320n.onnx ]]; then
+  echo "WARNING: models/320n.onnx missing. Stage requires ONNX (SAFETY_CLASSIFIER=fake is refused)."
+  echo "  Copy weights to ${PWD}/models/ before expecting scans to classify."
+fi
+
+echo "Validating compose..."
+docker compose config -q
+
+echo "Pulling images (IMAGE_PREFIX/IMAGE_TAG from .env)..."
+if docker compose pull; then
+  docker compose up -d
+  docker compose ps
+else
+  echo "WARNING: docker compose pull failed (images not published yet, or wrong IMAGE_PREFIX)."
+  echo "  Compose is installed at ${PWD}/docker-compose.yml and ready."
+  echo "  After CI pushes images: docker compose pull && docker compose up -d"
+  echo "  Leaving any already-running containers untouched."
+  exit 0
+fi
+REMOTE
+
+echo "Done. Health check from LAN: curl -fsS https://instamagic.schimmel.homes/health"

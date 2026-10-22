@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import time
+from collections.abc import Mapping
+
+from starlette.requests import Request
 
 from instamagic.config import Settings
 
 COOKIE_NAME = "instamagic_session"
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_MAX_FAILURES = 10
 
 
 def check_password(settings: Settings, password: str) -> bool:
-    return hmac.compare_digest(settings.app_password.encode(), password.encode())
+    """Constant-time compare via SHA-256 digests (equal length even when inputs differ)."""
+    expected = hashlib.sha256(settings.app_password.encode("utf-8")).digest()
+    provided = hashlib.sha256(password.encode("utf-8")).digest()
+    return hmac.compare_digest(expected, provided)
 
 
 def sign_session(settings: Settings) -> str:
@@ -31,3 +40,50 @@ def session_is_valid(settings: Settings, token: str | None) -> bool:
     except ValueError:
         return False
     return expires >= int(time.time())
+
+
+def _is_private_or_loopback(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host in {"localhost", "local"}
+    return bool(address.is_private or address.is_loopback or address.is_link_local)
+
+
+def client_ip(request: Request) -> str:
+    """Prefer X-Forwarded-For / X-Real-IP only when the peer is a private proxy (Docker/Traefik)."""
+    peer = request.client.host if request.client else "local"
+    if not _is_private_or_loopback(peer):
+        return peer
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded:
+        try:
+            ipaddress.ip_address(forwarded)
+            return forwarded
+        except ValueError:
+            pass
+    real = request.headers.get("x-real-ip", "").strip()
+    if real:
+        try:
+            ipaddress.ip_address(real)
+            return real
+        except ValueError:
+            pass
+    return peer
+
+
+def login_is_blocked(failures: Mapping[str, list[float]], ip: str, *, now: float | None = None) -> bool:
+    stamp = time.time() if now is None else now
+    recent = [item for item in failures.get(ip, []) if stamp - item < LOGIN_WINDOW_SECONDS]
+    return len(recent) >= LOGIN_MAX_FAILURES
+
+
+def record_login_failure(failures: dict[str, list[float]], ip: str, *, now: float | None = None) -> None:
+    stamp = time.time() if now is None else now
+    recent = [item for item in failures.get(ip, []) if stamp - item < LOGIN_WINDOW_SECONDS]
+    recent.append(stamp)
+    failures[ip] = recent
+
+
+def clear_login_failures(failures: dict[str, list[float]], ip: str) -> None:
+    failures.pop(ip, None)

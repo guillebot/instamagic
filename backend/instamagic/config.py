@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     derivatives_root: Path = Path("./data/derivatives")
     allowed_library_roots: str = ""
     suggested_library_root: str = ""
+    # When true (Compose), every ALLOWED_LIBRARY_ROOTS entry must be a real host bind mount.
+    require_external_library_mounts: bool = False
     gemini_api_key: str = ""
     gemini_image_policy: str = "text_only"
     gemini_model: str = "gemini-2.5-flash"
@@ -48,6 +50,8 @@ class Settings(BaseSettings):
     bind_host: str = "127.0.0.1"
     allow_container_bind: bool = False
     frontend_origin: str = "http://127.0.0.1:5173"
+    # None derives from FRONTEND_ORIGIN (https → Secure cookies). Explicit true/false overrides.
+    cookie_secure: bool | None = None
     session_ttl_seconds: int = 60 * 60 * 12
     log_level: str = "INFO"
 
@@ -62,8 +66,10 @@ class Settings(BaseSettings):
             raise ValueError("APP_SECRET must be at least 16 characters.")
         if self.bind_host not in LOOPBACK_HOSTS and not self.allow_container_bind:
             raise ValueError("BIND_HOST must be loopback unless ALLOW_CONTAINER_BIND=true.")
-        if self.environment == "production" and self.safety_classifier == "fake":
-            raise ValueError("SAFETY_CLASSIFIER=fake is refused when ENVIRONMENT=production.")
+        if self.environment in {"production", "stage"} and self.safety_classifier == "fake":
+            raise ValueError("SAFETY_CLASSIFIER=fake is refused when ENVIRONMENT is production or stage.")
+        if self.safety_classifier == "onnx" and not self.safety_model_sha256.strip():
+            raise ValueError("SAFETY_MODEL_SHA256 is required when SAFETY_CLASSIFIER=onnx.")
         if self.gemini_image_policy not in {"text_only", "safe_previews", "manual_only"}:
             raise ValueError("GEMINI_IMAGE_POLICY is invalid.")
         if self.gemini_provider not in {"google", "fake"}:
@@ -73,6 +79,14 @@ class Settings(BaseSettings):
         if self.pipeline_mode not in {"queue", "inline"}:
             raise ValueError("PIPELINE_MODE must be queue or inline.")
         return self
+
+    def session_cookie_secure(self) -> bool:
+        if self.cookie_secure is not None:
+            return self.cookie_secure
+        return self.frontend_origin.strip().lower().startswith("https://")
+
+    def require_live_safety_classifier(self) -> bool:
+        return self.environment in {"production", "stage"} and self.safety_classifier == "onnx"
 
     def library_roots(self) -> list[Path]:
         return [Path(part) for part in self.allowed_library_roots.split(os.pathsep) if part]

@@ -1,6 +1,9 @@
+name: instamagic
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    container_name: instamagic-postgres
     environment:
       POSTGRES_USER: instamagic
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
@@ -17,6 +20,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: instamagic-redis
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
@@ -29,6 +33,7 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    container_name: instamagic-migrate
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
@@ -44,6 +49,7 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    container_name: instamagic-backend
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
@@ -53,6 +59,7 @@ services:
       DERIVATIVES_ROOT: /data/derivatives
       ALLOWED_LIBRARY_ROOTS: /data/originals
       SUGGESTED_LIBRARY_ROOT: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
       SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
       SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
       SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:-}
@@ -80,6 +87,7 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    container_name: instamagic-worker-io
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
@@ -88,6 +96,7 @@ services:
       ALLOW_CONTAINER_BIND: "true"
       DERIVATIVES_ROOT: /data/derivatives
       ALLOWED_LIBRARY_ROOTS: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
       SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
       SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
       SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:-}
@@ -109,6 +118,7 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    container_name: instamagic-worker-ml
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
@@ -117,6 +127,7 @@ services:
       ALLOW_CONTAINER_BIND: "true"
       DERIVATIVES_ROOT: /data/derivatives
       ALLOWED_LIBRARY_ROOTS: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
       SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
       SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
       SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:-}
@@ -138,10 +149,12 @@ services:
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
+    container_name: instamagic-frontend
     ports:
       - "127.0.0.1:5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:

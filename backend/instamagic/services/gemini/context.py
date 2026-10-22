@@ -64,7 +64,7 @@ def build_context(
     )
     if not gate.allowed:
         raise GeminiBlocked(" ".join(gate.reasons))
-    description = safe_description
+    description = _sanitize_prompt_text(safe_description, max_len=400)
     crop_payload = crop
     if model_state == "SAFE_AFTER_CROP":
         if crop is None and not has_approved_covering_blur:
@@ -73,19 +73,19 @@ def build_context(
             description = (
                 f"Describe only the approved {crop.get('aspect_ratio', 'crop')} crop. "
                 "Do not infer what was excluded from the frame. "
-                + safe_description
+                + description
             )
         else:
             description = (
                 "Describe the photograph with approved covering blur applied. "
                 "Do not infer what was covered. "
-                + safe_description
+                + description
             )
             crop_payload = None
     return GeminiContext(
-        content_tags=content_tags,
-        composition=composition,
-        mood=mood,
+        content_tags=[_sanitize_prompt_text(tag, max_len=64) for tag in content_tags[:24]],
+        composition=_sanitize_prompt_text(composition, max_len=120),
+        mood=_sanitize_prompt_text(mood, max_len=120),
         safe_description=description,
         crop=crop_payload,
         historical_performance={"available": False},
@@ -95,8 +95,23 @@ def build_context(
     )
 
 
-def assert_no_original_reference(payload: dict[str, Any]) -> None:
+def _sanitize_prompt_text(value: str, *, max_len: int) -> str:
+    cleaned = "".join(ch for ch in value if ch.isprintable() and ch not in "\r\n\t")
+    return cleaned.strip()[:max_len]
+
+
+def assert_safe_gemini_payload(payload: dict[str, Any], *, policy: str) -> None:
+    """Fail closed if a Gemini request references library paths or leaks originals under text_only."""
     blob = json.dumps(payload)
     lowered = blob.lower()
-    if "originals" in lowered or "/photos/" in lowered or "inline_data" in lowered:
+    if "originals" in lowered or "/photos/" in lowered or "\\photos\\" in lowered:
         raise GeminiBlocked("Gemini payload included a forbidden reference.")
+    if policy == "text_only" and "inline_data" in lowered:
+        raise GeminiBlocked("text_only Gemini requests must not include image bytes.")
+    if policy != "safe_previews" and "inline_data" in lowered:
+        raise GeminiBlocked("Gemini payload included unexpected image bytes.")
+
+
+# Back-compat alias used by older tests / call sites.
+def assert_no_original_reference(payload: dict[str, Any]) -> None:
+    assert_safe_gemini_payload(payload, policy="text_only")

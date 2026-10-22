@@ -15,6 +15,10 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     log = get_logger("worker")
+    if settings.require_external_library_mounts:
+        from instamagic.services.images.paths import assert_configured_external_mounts
+
+        assert_configured_external_mounts(settings.library_roots())
     log.info("worker_start", queue=queue_name)
     if queue_name == "io":
         from instamagic.workers.resume import requeue_interrupted_scans

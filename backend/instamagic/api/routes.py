@@ -8,7 +8,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from instamagic.api.deps import db_dep, require_session, settings_dep
-from instamagic.auth import COOKIE_NAME, check_password, sign_session
+from instamagic.auth import (
+    COOKIE_NAME,
+    check_password,
+    clear_login_failures,
+    client_ip,
+    login_is_blocked,
+    record_login_failure,
+    sign_session,
+)
 from instamagic.config import ATTESTATION_STATEMENT, Settings
 from instamagic.errors import GeminiBlocked, NotAllowed, NotConfigured, NotFound
 from instamagic.models import (
@@ -61,9 +69,18 @@ from instamagic.services.blurs.generator import (
 from instamagic.services.crops.generator import validate_crop_window, window_excludes_unsafe
 from instamagic.services.gemini.context import build_context
 from instamagic.services.geometry import Box
-from instamagic.services.images.derivatives import crop_image, oriented_rgb, read_image, save_derivative
+from instamagic.services.images.derivatives import (
+    crop_image,
+    oriented_rgb,
+    read_image,
+    save_derivative,
+)
 from instamagic.services.images.folders import escape_like, list_folders, normalize_folder
-from instamagic.services.images.paths import assert_library_root, safe_join
+from instamagic.services.images.paths import (
+    assert_library_root,
+    assert_library_root_mounted,
+    safe_join,
+)
 from instamagic.services.images.presentation import effective_state
 from instamagic.services.pipeline import (
     clear_exposed_boxes,
@@ -144,29 +161,35 @@ def ready(session: Session = db_dep) -> dict[str, str]:
 
 @router.post("/api/auth/login")
 def login(body: LoginIn, request: Request, response: Response, settings: Settings = Depends(settings_dep)) -> dict[str, bool]:
-    ip = request.client.host if request.client else "local"
-    failures: dict[str, int] = request.app.state.login_failures
-    if failures.get(ip, 0) >= 10:
+    ip = client_ip(request)
+    failures: dict[str, list[float]] = request.app.state.login_failures
+    if login_is_blocked(failures, ip):
         raise HTTPException(status_code=429, detail="Too many login attempts.")
     if not check_password(settings, body.password):
-        failures[ip] = failures.get(ip, 0) + 1
+        record_login_failure(failures, ip)
         raise HTTPException(status_code=401, detail="Incorrect password.")
-    failures[ip] = 0
+    clear_login_failures(failures, ip)
     response.set_cookie(
         COOKIE_NAME,
         sign_session(settings),
         max_age=settings.session_ttl_seconds,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=settings.session_cookie_secure(),
         path="/",
     )
     return {"authenticated": True}
 
 
 @router.post("/api/auth/logout")
-def logout(response: Response) -> dict[str, bool]:
-    response.delete_cookie(COOKIE_NAME, path="/")
+def logout(response: Response, settings: Settings = Depends(settings_dep)) -> dict[str, bool]:
+    response.delete_cookie(
+        COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure(),
+    )
     return {"authenticated": False}
 
 
@@ -217,7 +240,10 @@ def create_library(
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
     try:
-        root = assert_library_root(body.root_path, settings.library_roots())  # type: ignore[arg-type]
+        if settings.require_external_library_mounts:
+            root = assert_library_root_mounted(body.root_path, settings.library_roots())
+        else:
+            root = assert_library_root(body.root_path, settings.library_roots())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     library = Library(name=body.name.strip(), root_path=str(root))
@@ -266,6 +292,11 @@ def scan_library(
     library = session.get(Library, library_id)
     if library is None:
         raise NotFound("Library was not found.")
+    if settings.require_external_library_mounts:
+        try:
+            assert_library_root_mounted(library.root_path, settings.library_roots())
+        except ValueError as exc:
+            raise NotConfigured(str(exc)) from None
     active = session.scalar(
         select(ProcessingJob)
         .where(

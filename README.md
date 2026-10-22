@@ -22,7 +22,7 @@ The default safety classifier is ONNX and fails closed. If the weight file is mi
 
 `SAFETY_CLASSIFIER=fake` is a filename stand-in for the fixture library. Do not point it at real photographs.
 
-## Run
+## Run (dev)
 
 ```sh
 cp .env.example .env
@@ -31,7 +31,11 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on any other interface. Inside Compose the library mount is `/data/originals` (read-only). Set `ORIGINALS_ROOT` in `.env` to the host folder you want mounted there.
+Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on any other interface. Inside Compose the library mount is `/data/originals` (read-only). Set `ORIGINALS_ROOT` in `.env` to an existing host folder before `compose up`. Compose enables `REQUIRE_EXTERNAL_LIBRARY_MOUNTS` so API and workers refuse to start or scan if that bind is missing (Docker's empty stub directory). Containers are named `instamagic-*` for easy `docker ps` identification.
+
+## Stage (LAN)
+
+On `10.1.1.8` at `/opt/docker/instamagic`, behind Traefik as **https://instamagic.schimmel.homes** (LAN-only). Stage **pulls** images built by GitHub Actions (no `build:` on the host). From this repo: `scripts/deploy-stage.sh` (copies compose + env example only). Details and required `DOCKERHUB_*` settings in `docs/operations.md`.
 
 Missing `GEMINI_API_KEY` returns a clear caption error. Scan, review, crops, and the queue keep working.
 

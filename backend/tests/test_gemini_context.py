@@ -76,3 +76,15 @@ def test_safe_previews_can_attach_only_supplied_derivative_bytes() -> None:
     blob = json.dumps(body)
     assert "inline_data" in blob
     assert "original" not in blob
+
+
+def test_text_only_rejects_inline_data_in_payload_guard() -> None:
+    from instamagic.errors import GeminiBlocked
+    from instamagic.services.gemini.context import assert_safe_gemini_payload
+
+    with pytest.raises(GeminiBlocked):
+        assert_safe_gemini_payload({"inline_data": {"data": "x"}}, policy="text_only")
+    assert_safe_gemini_payload(
+        {"inline_data": {"data": "x", "mime_type": "image/jpeg"}},
+        policy="safe_previews",
+    )

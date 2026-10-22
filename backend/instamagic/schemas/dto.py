@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class LoginIn(BaseModel):
@@ -34,6 +34,16 @@ class RatingIn(BaseModel):
 
 class TagIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+
+    @field_validator("name")
+    @classmethod
+    def clean_tag(cls, value: str) -> str:
+        text = value.strip().lower()
+        if not text or any(ch in text for ch in "/\\\x00\n\r\t"):
+            raise ValueError("Tag name is not valid.")
+        if ".." in text or text.startswith("."):
+            raise ValueError("Tag name is not valid.")
+        return text[:64]
 
 
 class CaptionIn(BaseModel):
