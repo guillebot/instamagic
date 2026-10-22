@@ -57,6 +57,8 @@ from instamagic.schemas.dto import (
     CandidateOut,
     CaptionIn,
     CaptionUpdate,
+    CarouselQueueIn,
+    CarouselReorderIn,
     CommentDraftIn,
     CommentDraftUpdate,
     CropApproveIn,
@@ -147,6 +149,11 @@ from instamagic.services.pipeline import (
     render_blur_derivative,
     replace_suggested_blurs,
     run_scan,
+)
+from instamagic.services.posting.carousel_queue import (
+    create_carousel_queue_item,
+    reorder_carousel_slides,
+    slides_for_item,
 )
 from instamagic.services.posting.queue_schedule import (
     fill_slots_from_approved,
@@ -1022,6 +1029,27 @@ def add_tag(
         session.add(ImageTag(image_id=image.id, tag_id=tag.id, source=TagSource.HUMAN.value))
         session.commit()
     return {"name": tag.name}
+
+
+@router.post("/api/queue/carousel", status_code=201)
+def enqueue_carousel(
+    body: CarouselQueueIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    item = create_carousel_queue_item(session, body.image_ids)
+    return _queue_out(session, item)
+
+
+@router.put("/api/queue/{item_id}/carousel-order")
+def reorder_carousel(
+    item_id: UUID,
+    body: CarouselReorderIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    item = reorder_carousel_slides(session, item_id, body.image_ids)
+    return _queue_out(session, item)
 
 
 @router.post("/api/queue", status_code=201)
@@ -2247,9 +2275,22 @@ def _refresh_crop_derivative(session: Session, settings: Settings, image: Image,
 
 def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]:
     image = _load_image(session, item.image_id)
+    slide_rows = slides_for_item(session, item) if item.media_type == "CAROUSEL" else []
+    slides_payload = []
+    for slide in slide_rows:
+        slide_image = _load_image(session, slide.image_id)
+        slides_payload.append(
+            {
+                "id": slide.id,
+                "image_id": slide.image_id,
+                "sort_order": slide.sort_order,
+                "image": _image_out(session, slide_image).model_dump(mode="json"),
+            }
+        )
     return {
         "id": item.id,
         "state": item.state,
+        "media_type": item.media_type,
         "crop_id": item.crop_id,
         "caption_id": item.caption_id,
         "created_at": item.created_at,
@@ -2259,6 +2300,7 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "schedule_mode": item.schedule_mode,
         "scheduled_at": item.scheduled_at,
         "publish_retry_after": item.publish_retry_after,
+        "slides": slides_payload,
         "image": _image_out(session, image).model_dump(mode="json"),
     }
 

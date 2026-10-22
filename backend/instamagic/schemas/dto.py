@@ -59,6 +59,14 @@ class QueueIn(BaseModel):
     image_id: UUID
 
 
+class CarouselQueueIn(BaseModel):
+    image_ids: list[UUID] = Field(min_length=2, max_length=10)
+
+
+class CarouselReorderIn(BaseModel):
+    image_ids: list[UUID] = Field(min_length=2, max_length=10)
+
+
 class PublishIn(BaseModel):
     caption_id: UUID
 

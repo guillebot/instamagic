@@ -63,7 +63,11 @@ def publish_queue_item(
             "Instagram Graph API is not configured. Connect on /instagram or use "
             "INSTAGRAM_PROVIDER=fake for local tests."
         )
-    item = session.get(PublishingQueueItem, item_id)
+    item = session.get(
+        PublishingQueueItem,
+        item_id,
+        options=(selectinload(PublishingQueueItem.slides),),
+    )
     if item is None:
         raise NotFound("Queue item was not found.")
     if item.state not in {QueueState.APPROVED.value, QueueState.FAILED.value, QueueState.PUBLISHING.value}:
@@ -118,6 +122,17 @@ def publish_queue_item(
         attempt.error = msg
         session.commit()
         raise NotAllowed(msg)
+
+    if item.media_type == "CAROUSEL" and item.slides:
+        return _publish_carousel_item(
+            session,
+            settings,
+            client,
+            item=item,
+            caption=caption,
+            attempt=attempt,
+            trigger=trigger,
+        )
 
     relative = ensure_publish_derivative(session, settings, image, approved)
     try:
@@ -186,6 +201,8 @@ def _record_success(
     image: Image,
     caption: Caption,
     result: PublishResult,
+    *,
+    media_type: str = "IMAGE",
 ) -> PublishOutcome:
     now = datetime.now(UTC)
     item.state = QueueState.PUBLISHED.value
@@ -197,7 +214,7 @@ def _record_success(
         queue_item_id=item.id,
         ig_media_id=result.media_id,
         ig_container_id=result.container_id,
-        media_type="IMAGE",
+        media_type=media_type,
         caption=caption.text,
         status="published",
         published_at=now,
@@ -219,6 +236,8 @@ def ensure_publish_derivative(
     settings: Settings,
     image: Image,
     approved: CropSuggestion | None,
+    *,
+    carousel_slide: bool = False,
 ) -> str:
     """Return a derivatives-relative JPEG path suitable for Meta to fetch."""
     if approved is not None:
@@ -226,7 +245,9 @@ def ensure_publish_derivative(
             _refresh_crop_derivative(session, settings, image, approved)
             session.commit()
         if approved.derivative_path:
-            return _instagram_publish_copy(settings, image.id, approved.derivative_path, "from-crop")
+            return _instagram_publish_copy(
+                settings, image.id, approved.derivative_path, "from-crop", carousel_slide=carousel_slide
+            )
     approved_blur = next((blur for blur in image.blurs if blur.approved), None)
     if approved_blur is not None:
         if not approved_blur.derivative_path or not any(
@@ -239,14 +260,16 @@ def ensure_publish_derivative(
             None,
         )
         if blur_path:
-            return _instagram_publish_copy(settings, image.id, blur_path, "from-blur")
+            return _instagram_publish_copy(
+                settings, image.id, blur_path, "from-blur", carousel_slide=carousel_slide
+            )
     if image.preview_path:
         source = settings.derivatives_root / image.preview_path
         if source.is_file():
             relative = f"{image.id}/publish/feed.jpg"
             dest = settings.derivatives_root / relative
             if not dest.is_file() or dest.stat().st_mtime < source.stat().st_mtime:
-                prepare_publish_file_from_path(source, dest)
+                prepare_publish_file_from_path(source, dest, carousel_slide=carousel_slide)
             return relative
     raise NotConfigured("No publishable derivative is available for this image.")
 
@@ -256,13 +279,124 @@ def _instagram_publish_copy(
     image_id: UUID,
     source_relative: str,
     label: str,
+    *,
+    carousel_slide: bool = False,
 ) -> str:
     source = settings.derivatives_root / source_relative
     relative = f"{image_id}/publish/{label}.jpg"
     dest = settings.derivatives_root / relative
     if not dest.is_file() or dest.stat().st_mtime < source.stat().st_mtime:
-        prepare_publish_file_from_path(source, dest)
+        prepare_publish_file_from_path(source, dest, carousel_slide=carousel_slide)
     return relative
+
+
+def _publish_carousel_item(
+    session: Session,
+    settings: Settings,
+    client: InstagramClient,
+    *,
+    item: PublishingQueueItem,
+    caption: Caption,
+    attempt: PublishAttempt,
+    trigger: str,
+) -> PublishOutcome:
+    slides = sorted(item.slides, key=lambda row: row.sort_order)
+    if len(slides) < 2 or len(slides) > 10:
+        raise NotAllowed("Carousel posts require between 2 and 10 images.")
+
+    image_urls: list[str] = []
+    primary_image: Image | None = None
+    try:
+        public_base = settings.publish_public_base_url()
+    except ValueError as exc:
+        raise NotConfigured(str(exc)) from exc
+
+    for index, slide in enumerate(slides):
+        image = session.get(
+            Image,
+            slide.image_id,
+            options=(
+                selectinload(Image.crops),
+                selectinload(Image.blurs),
+            ),
+        )
+        if image is None:
+            raise NotFound("Carousel slide image was not found.")
+        approved = next((crop for crop in image.crops if crop.approved), None)
+        covering_blur = _has_approved_covering_blur(image)
+        gate = publishing_gate(
+            attested=is_attested(session, image.library_id),
+            human_rating=image.human_rating,
+            model_state=image.model_state,
+            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
+            has_approved_crop=approved is not None,
+            has_approved_covering_blur=covering_blur,
+        )
+        if not gate.allowed:
+            msg = " ".join(gate.reasons)
+            attempt.finished_at = datetime.now(UTC)
+            attempt.success = False
+            attempt.error = msg
+            session.commit()
+            raise NotAllowed(msg)
+        relative = ensure_publish_derivative(
+            session, settings, image, approved, carousel_slide=True
+        )
+        token = mint_publish_token(relative_path=relative, secret=settings.app_secret)
+        url = public_image_url(public_base_url=public_base, token=token)
+        if settings.instagram_provider == "fake" and public_base.startswith("http://"):
+            url = public_image_url(public_base_url=public_base, token=token)
+        image_urls.append(url)
+        if index == 0:
+            primary_image = image
+
+    if primary_image is None:
+        raise NotConfigured("Carousel has no slides.")
+
+    item.state = QueueState.PUBLISHING.value
+    item.caption_id = caption.id
+    item.last_error = None
+    session.commit()
+
+    def _fail_publish(exc: BaseException, message: str) -> None:
+        attempt.finished_at = datetime.now(UTC)
+        attempt.success = False
+        attempt.error = message
+        if trigger == PublishTrigger.SCHEDULER.value and is_transient_publish_error(exc):
+            item.state = QueueState.APPROVED.value
+            item.last_error = message
+            from datetime import timedelta
+
+            item.publish_retry_after = datetime.now(UTC) + timedelta(minutes=15)
+        else:
+            item.state = QueueState.FAILED.value
+            item.last_error = message
+            if is_permanent_publish_error(exc) or trigger != PublishTrigger.SCHEDULER.value:
+                item.schedule_mode = None
+                item.scheduled_at = None
+
+    try:
+        result = client.publish_carousel(image_urls=image_urls, caption=caption.text.strip())
+    except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
+        err = str(exc.detail if hasattr(exc, "detail") else exc)
+        _fail_publish(exc, err)
+        session.commit()
+        raise
+    except Exception as exc:
+        err = "Instagram carousel publish failed."
+        wrapped = NotConfigured(err)
+        _fail_publish(wrapped if not is_transient_publish_error(exc) else exc, err)
+        session.commit()
+        raise NotConfigured(err) from None
+
+    outcome = _record_success(session, item, primary_image, caption, result, media_type="CAROUSEL")
+    attempt.finished_at = datetime.now(UTC)
+    attempt.success = True
+    item.schedule_mode = None
+    item.scheduled_at = None
+    item.publish_retry_after = None
+    session.commit()
+    return outcome
 
 
 def _has_approved_covering_blur(image: Image) -> bool:

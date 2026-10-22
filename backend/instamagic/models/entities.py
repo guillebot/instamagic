@@ -299,6 +299,7 @@ class PublishingQueueItem(Base):
         ForeignKey("captions.id", ondelete="SET NULL"), nullable=True
     )
     state: Mapped[str] = mapped_column(String(16), default=QueueState.CANDIDATE.value, index=True)
+    media_type: Mapped[str] = mapped_column(String(16), default="IMAGE", index=True)
     schedule_mode: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     publish_retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -309,6 +310,27 @@ class PublishingQueueItem(Base):
 
     image: Mapped[Image] = relationship(back_populates="queue_items")
     publish_attempts: Mapped[list[PublishAttempt]] = relationship(back_populates="queue_item")
+    slides: Mapped[list[PublishingQueueSlide]] = relationship(
+        back_populates="queue_item", order_by="PublishingQueueSlide.sort_order"
+    )
+
+
+class PublishingQueueSlide(Base):
+    __tablename__ = "publishing_queue_slides"
+    __table_args__ = (UniqueConstraint("queue_item_id", "image_id", name="uq_queue_slide_image"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    queue_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("publishing_queue_items.id", ondelete="CASCADE"), index=True
+    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
+    crop_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("crop_suggestions.id", ondelete="SET NULL"), nullable=True
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
+    queue_item: Mapped[PublishingQueueItem] = relationship(back_populates="slides")
+    image: Mapped[Image] = relationship()
 
 
 class PostingScheduleConfig(Base):

@@ -184,9 +184,17 @@ export type CurationBatch = CurationBatchSummary & {
   picks: CurationPick[];
 };
 
+export type QueueSlide = {
+  id: string;
+  image_id: string;
+  sort_order: number;
+  image: ImageItem;
+};
+
 export type QueueItem = {
   id: string;
   state: string;
+  media_type?: string;
   crop_id?: string | null;
   caption_id?: string | null;
   published_at?: string | null;
@@ -194,6 +202,7 @@ export type QueueItem = {
   schedule_mode?: string | null;
   scheduled_at?: string | null;
   publish_retry_after?: string | null;
+  slides?: QueueSlide[];
   image: ImageItem;
 };
 

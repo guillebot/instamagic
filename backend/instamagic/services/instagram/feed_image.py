@@ -44,9 +44,23 @@ def enforce_instagram_feed_geometry(image: Image.Image) -> Image.Image:
     return _center_crop_to_aspect(image, IG_FEED_MAX_ASPECT)
 
 
-def write_instagram_publish_jpeg(image: Image.Image, dest: Path) -> None:
+CAROUSEL_FEED_ASPECT = IG_FEED_MIN_ASPECT  # 4:5 — all carousel children must match
+
+
+def enforce_carousel_feed_geometry(image: Image.Image) -> Image.Image:
+    """Force 4:5 for carousel children (stricter than single-image feed bounds)."""
+    bounded = enforce_instagram_feed_geometry(image)
+    return _center_crop_to_aspect(bounded, CAROUSEL_FEED_ASPECT)
+
+
+def write_instagram_publish_jpeg(
+    image: Image.Image,
+    dest: Path,
+    *,
+    carousel_slide: bool = False,
+) -> None:
     """Center-crop to IG feed aspect bounds, resize, and stay under Meta's 8MB JPEG cap."""
-    working = enforce_instagram_feed_geometry(image)
+    working = enforce_carousel_feed_geometry(image) if carousel_slide else enforce_instagram_feed_geometry(image)
     quality = IG_FEED_JPEG_QUALITY
     while quality >= 60:
         save_derivative(working, dest, IG_FEED_LONG_EDGE, quality=quality, optimize=True)
@@ -59,6 +73,6 @@ def write_instagram_publish_jpeg(image: Image.Image, dest: Path) -> None:
     )
 
 
-def prepare_publish_file_from_path(source: Path, dest: Path) -> None:
+def prepare_publish_file_from_path(source: Path, dest: Path, *, carousel_slide: bool = False) -> None:
     rgb = oriented_rgb(read_image(source))
-    write_instagram_publish_jpeg(rgb, dest)
+    write_instagram_publish_jpeg(rgb, dest, carousel_slide=carousel_slide)
