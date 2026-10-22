@@ -21,10 +21,13 @@ from instamagic.models import (
     SafetyState,
 )
 from instamagic.services.images.derivatives import crop_image, oriented_rgb, read_image
-from instamagic.services.instagram.feed_image import prepare_publish_file_from_path, write_instagram_publish_jpeg
 from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
 from instamagic.services.instagram.client import InstagramClient, PublishResult
+from instamagic.services.instagram.feed_image import (
+    prepare_publish_file_from_path,
+    write_instagram_publish_jpeg,
+)
 from instamagic.services.pipeline import is_attested, render_blur_derivative
 from instamagic.services.recommendations.gates import publishing_gate
 from sqlalchemy.orm import Session, selectinload

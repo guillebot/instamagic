@@ -12,7 +12,10 @@ import httpx
 from instamagic.auth import sign_payload, verify_signed_payload
 from instamagic.config import Settings
 from instamagic.errors import NotAllowed, NotConfigured
-from instamagic.services.instagram.graph_constants import DEFAULT_INSTAGRAM_GRAPH_VERSION, OAUTH_SCOPES
+from instamagic.services.instagram.graph_constants import (
+    DEFAULT_INSTAGRAM_GRAPH_VERSION,
+    OAUTH_SCOPES,
+)
 
 META_APP_DOCS_URL = (
     "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login"

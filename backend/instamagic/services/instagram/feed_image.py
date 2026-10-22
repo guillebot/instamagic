@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from instamagic.errors import NotConfigured
 from instamagic.services.images.derivatives import oriented_rgb, read_image, save_derivative
 from instamagic.services.instagram.graph_constants import (
     IG_FEED_JPEG_QUALITY,
@@ -12,7 +13,6 @@ from instamagic.services.instagram.graph_constants import (
     IG_FEED_MAX_BYTES,
     IG_FEED_MIN_ASPECT,
 )
-from instamagic.errors import NotConfigured
 from PIL import Image
 
 

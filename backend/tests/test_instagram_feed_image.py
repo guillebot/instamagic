@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from instamagic.services.instagram.feed_image import enforce_instagram_feed_geometry, write_instagram_publish_jpeg
-from instamagic.services.instagram.graph_constants import IG_FEED_MAX_BYTES, IG_FEED_MAX_ASPECT, IG_FEED_MIN_ASPECT
+from instamagic.services.instagram.feed_image import (
+    enforce_instagram_feed_geometry,
+    write_instagram_publish_jpeg,
+)
+from instamagic.services.instagram.graph_constants import (
+    IG_FEED_MAX_ASPECT,
+    IG_FEED_MAX_BYTES,
+    IG_FEED_MIN_ASPECT,
+)
 from PIL import Image
 
 
