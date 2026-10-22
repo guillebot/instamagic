@@ -36,6 +36,17 @@ export type ImageItem = {
   preview_url: string | null;
   original_preview_url?: string | null;
   publish_preview_url?: string | null;
+  blur_unlock_status?: string;
+  blur_unlock_message?: string | null;
+  blur_unlock_highlights?: Array<{
+    kind?: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    coverage?: number;
+    label?: string;
+  }>;
   gemini_label_status?: string | null;
   gemini_label_at?: string | null;
   gemini_description?: string | null;

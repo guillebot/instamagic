@@ -86,3 +86,10 @@ class CurationPickStatus(enum.StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     QUEUED = "queued"
+
+
+class BlurUnlockStatus(enum.StrEnum):
+    NONE = "none"
+    PENDING = "pending"
+    VERIFIED = "verified"
+    FAILED = "failed"

@@ -33,6 +33,8 @@ from instamagic.services.gemini.labeling import (
     label_status_is_terminal,
     should_retry_label,
 )
+from instamagic.services.blurs.gate_context import publishing_gate_kwargs
+from instamagic.services.blurs.unlock import blur_unlock_effective
 from instamagic.services.images.presentation import normalize_human_rating_filter
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.curate import collect_eligible
@@ -120,20 +122,14 @@ def resolve_label_targets(
         if human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
             skip("not_safe_or_excellent")
             continue
-        if image.model_state == SafetyState.DO_NOT_POST.value:
+        if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(image):
             skip("do_not_post")
             continue
-        approved = next((crop for crop in image.crops if crop.approved), None)
-        covering = covering_blur_fn(session, image)
         gate = gemini_gate(
             attested=True,
-            human_rating=human_rating,
-            model_state=image.model_state,
-            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-            has_approved_crop=approved is not None,
-            has_approved_covering_blur=covering,
             operator_confirmed=True,
             policy="text_only",
+            **publishing_gate_kwargs(session, image),
         )
         if not gate.allowed:
             skip("gate_blocked")

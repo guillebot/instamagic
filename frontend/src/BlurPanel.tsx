@@ -103,17 +103,17 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   }
 
   async function approve() {
-    if (isDoNotPost) {
-      setError("DO_NOT_POST — blur cannot override. Rate reject or leave blocked.");
-      return;
-    }
     setBusy(true);
     setError("");
     try {
       await api(`/api/images/${image.id}/blurs/approve`, { method: "POST" });
       await blurs.refetch();
       onChanged?.(image.id);
-      onStatus?.("Blur covers approved — rate 3/4 when ready.");
+      onStatus?.(
+        isDoNotPost
+          ? image.blur_unlock_message ?? "Blur verification finished — check result and rate safe when ready."
+          : "Blur covers approved — rate 3/4 when ready.",
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not approve blur covers.");
     } finally {
@@ -122,10 +122,6 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   }
 
   async function suggestFromModel() {
-    if (isDoNotPost) {
-      setError("DO_NOT_POST — blur cannot override. Rate reject or leave blocked.");
-      return;
-    }
     setBusy(true);
     setError("");
     try {
@@ -244,6 +240,21 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
         onPointerDown={beginDraw}
       >
         {displaySrc ? <img ref={imgRef} src={displaySrc} alt="" onLoad={measureLayout} draggable={false} /> : null}
+        {(image.blur_unlock_highlights ?? []).map((region, index) =>
+          image.width && image.height && layout ? (
+            <div
+              key={`highlight-${index}`}
+              className="blur-ellipse highlight-unsafe"
+              style={(() => {
+                const css = cropToCss(
+                  { x: region.x, y: region.y, width: region.width, height: region.height },
+                  layout,
+                );
+                return { left: css.left, top: css.top, width: css.width, height: css.height };
+              })()}
+            />
+          ) : null,
+        )}
         {items.map((blur) =>
           image.width && image.height && layout ? (
             <div
@@ -273,19 +284,25 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       </div>
       <div className="prep-controls">
         {isDoNotPost ? (
-          <p className="error">DO_NOT_POST — blur cannot override. Rate reject or leave blocked.</p>
+          <p className="help">
+            <strong>Blur to unlock.</strong> Draw or suggest covers, approve to run verification (coverage +
+            re-classify on the blurred render). Crop stays disabled until unlocked.
+          </p>
         ) : (
           <p className="help">
             Drag to add a cover, or suggest ellipses from the local safety boxes. Derivatives only.
             Enter/A approves the set.
           </p>
         )}
+        {image.blur_unlock_message ? (
+          <p className={image.blur_unlock_status === "verified" ? "help" : "error"}>{image.blur_unlock_message}</p>
+        ) : null}
         <div className="row">
           <label>
             Strength{" "}
             <select
               value={strength}
-              disabled={busy || isDoNotPost}
+              disabled={busy}
               onChange={(event) => {
                 const next = event.target.value;
                 if (items.length === 0) {
@@ -303,7 +320,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           <button
             type="button"
             className="button"
-            disabled={busy || isDoNotPost}
+            disabled={busy}
             onClick={() => void suggestFromModel()}
           >
             Suggest from model
@@ -311,7 +328,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           <button
             type="button"
             className="button"
-            disabled={busy || items.length === 0 || isDoNotPost}
+            disabled={busy || items.length === 0}
             onClick={() => void approve()}
           >
             {busy ? "Saving…" : approved ? "Approved" : "Approve covers"}

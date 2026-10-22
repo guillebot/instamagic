@@ -122,8 +122,8 @@ def test_suggest_blur_from_stored_regions_is_opt_in(client, app_env) -> None:
 
     blocked_id = items["blocked-frame.jpg"]["id"]
     assert items["blocked-frame.jpg"]["model_state"] == "DO_NOT_POST"
-    refuse = client.post(f"/api/images/{blocked_id}/blurs/suggest", json={"strength": "standard"})
-    assert refuse.status_code == 409
+    suggested_blocked = client.post(f"/api/images/{blocked_id}/blurs/suggest", json={"strength": "standard"})
+    assert suggested_blocked.status_code == 200, suggested_blocked.text
 
     clean_id = items["clean-frame.jpg"]["id"]
     empty = client.post(f"/api/images/{clean_id}/blurs/suggest", json={"strength": "standard"})

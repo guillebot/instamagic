@@ -16,9 +16,9 @@ from instamagic.models import (
     PublishAttempt,
     PublishingQueueItem,
     QueueState,
-    SafetyState,
 )
 from instamagic.models.enums import PublishTrigger
+from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
 from instamagic.services.instagram.client import InstagramClient, PublishResult
 from instamagic.services.instagram.publish_derivative import (
@@ -101,15 +101,7 @@ def publish_queue_item(
         raise NotAllowed("Caption text is empty.")
 
     approved = next((crop for crop in image.crops if crop.approved), None)
-    covering_blur = _has_approved_covering_blur(image)
-    gate = publishing_gate(
-        attested=is_attested(session, image.library_id),
-        human_rating=image.human_rating,
-        model_state=image.model_state,
-        needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-        has_approved_crop=approved is not None,
-        has_approved_covering_blur=covering_blur,
-    )
+    gate = publishing_gate(attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image))
     blur_pending = blur_drawn_not_approved_reason(image)
     if not gate.allowed or blur_pending:
         reasons = list(gate.reasons)
@@ -263,14 +255,9 @@ def _publish_carousel_item(
         if image is None:
             raise NotFound("Carousel slide image was not found.")
         approved = next((crop for crop in image.crops if crop.approved), None)
-        covering_blur = _has_approved_covering_blur(image)
         gate = publishing_gate(
             attested=is_attested(session, image.library_id),
-            human_rating=image.human_rating,
-            model_state=image.model_state,
-            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-            has_approved_crop=approved is not None,
-            has_approved_covering_blur=covering_blur,
+            **publishing_gate_kwargs(session, image),
         )
         blur_pending = blur_drawn_not_approved_reason(image)
         if not gate.allowed or blur_pending:

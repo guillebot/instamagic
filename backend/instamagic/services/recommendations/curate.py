@@ -117,6 +117,7 @@ def collect_eligible(
             or_(
                 Image.model_state.is_(None),
                 Image.model_state != SafetyState.DO_NOT_POST.value,
+                Image.blur_unlock_status == "verified",
             )
         )
         .options(
@@ -150,15 +151,13 @@ def collect_eligible(
         covering_blur = covering_blur_fn(session, image)
         if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved is None and not covering_blur:
             continue
+        from instamagic.services.blurs.gate_context import publishing_gate_kwargs
+
         gate = gemini_gate(
             attested=True,
-            human_rating=human_rating,
-            model_state=image.model_state,
-            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-            has_approved_crop=approved is not None,
-            has_approved_covering_blur=covering_blur,
             operator_confirmed=True,
             policy="text_only",
+            **publishing_gate_kwargs(session, image),
         )
         if not gate.allowed:
             continue
@@ -831,14 +830,11 @@ def queue_picks(
             continue
         image = pick.image
         approved = next((crop for crop in image.crops if crop.approved), None)
-        covering_blur = covering_blur_fn(session, image)
+        from instamagic.services.blurs.gate_context import publishing_gate_kwargs
+
         gate = publishing_gate(
             attested=is_attested(session, image.library_id),
-            human_rating=image.human_rating,
-            model_state=image.model_state,
-            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-            has_approved_crop=approved is not None,
-            has_approved_covering_blur=covering_blur,
+            **publishing_gate_kwargs(session, image),
         )
         if not gate.allowed:
             raise NotAllowed(" ".join(gate.reasons))

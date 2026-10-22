@@ -115,6 +115,50 @@ def with_strength(window: BlurWindow, strength: str) -> BlurWindow:
     )
 
 
+@dataclass(frozen=True)
+class RegionCoverage:
+    box: Box
+    coverage: float
+
+
+def region_coverages(
+    covers: list[BlurWindow],
+    unsafe_boxes: list[Box],
+    image_size: tuple[int, int],
+    *,
+    min_ratio: float = 0.95,
+    padding: int = 4,
+) -> list[RegionCoverage]:
+    """Fraction of each unsafe box covered by the combined blur masks (0–1)."""
+    if not unsafe_boxes:
+        return []
+    width, height = image_size
+    combined = Image.new("L", (width, height), 0)
+    for cover in covers:
+        mask = feathered_ellipse_mask(
+            (width, height),
+            x=cover.x,
+            y=cover.y,
+            width=cover.width,
+            height=cover.height,
+            feather=cover.feather,
+        )
+        combined = _lighter_mask(combined, mask)
+    cover_arr = np.asarray(combined, dtype=np.float32) / 255.0
+    rows: list[RegionCoverage] = []
+    for box in unsafe_boxes:
+        x0 = max(0, box.x - padding)
+        y0 = max(0, box.y - padding)
+        x1 = min(width, box.x + box.width + padding)
+        y1 = min(height, box.y + box.height + padding)
+        if x1 <= x0 or y1 <= y0:
+            rows.append(RegionCoverage(box=box, coverage=0.0))
+            continue
+        patch = cover_arr[y0:y1, x0:x1]
+        rows.append(RegionCoverage(box=box, coverage=float(np.mean(patch)) if patch.size else 0.0))
+    return rows
+
+
 def covers_unsafe_boxes(covers: list[BlurWindow], unsafe_boxes: list[Box]) -> bool:
     """True when every unsafe box lies inside the opaque (feathered) core of some cover."""
     if not unsafe_boxes:
