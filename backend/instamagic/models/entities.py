@@ -452,6 +452,8 @@ class InstagramConnection(Base):
     meta_app_secret_ciphertext: Mapped[str] = mapped_column(Text, default="")
     account_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     account_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_scopes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insights_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )
@@ -492,6 +494,20 @@ class CommentDraft(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
 
+class InstagramAccountInsightSnapshot(Base):
+    """Point-in-time account metrics from Graph insights sync."""
+
+    __tablename__ = "instagram_account_insight_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    follower_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    profile_views: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    accounts_engaged: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class InstagramMetrics(Base):
     __tablename__ = "instagram_metrics"
 
@@ -504,6 +520,8 @@ class InstagramMetrics(Base):
     impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
     shares: Mapped[int | None] = mapped_column(Integer, nullable=True)
     saves: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    views: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_interactions: Mapped[int | None] = mapped_column(Integer, nullable=True)
     profile_visits: Mapped[int | None] = mapped_column(Integer, nullable=True)
     follows: Mapped[int | None] = mapped_column(Integer, nullable=True)
     engagement_rate: Mapped[float | None] = mapped_column(Float, nullable=True)

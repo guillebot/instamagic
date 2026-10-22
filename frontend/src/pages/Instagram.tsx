@@ -258,6 +258,12 @@ export function InstagramPage() {
       {status.data?.publish_public_base_warning ? (
         <p className="error">{status.data.publish_public_base_warning}</p>
       ) : null}
+      {status.data?.insights_reconnect_required ? (
+        <p className="error">
+          Reconnect with Meta to grant <code>instagram_manage_insights</code> for the Insights page and smarter
+          Curate ranking.
+        </p>
+      ) : null}
       {statusError ? <p className="error">{statusError}</p> : null}
 
       {oauthChoose ? (

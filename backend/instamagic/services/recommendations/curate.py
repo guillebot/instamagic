@@ -49,6 +49,10 @@ from instamagic.services.images.folders import escape_like, normalize_folder
 from instamagic.services.images.presentation import normalize_human_rating_filter
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.gates import gemini_gate, publishing_gate
+from instamagic.services.recommendations.performance import (
+    image_performance_boost,
+    load_performance_signals,
+)
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -83,7 +87,9 @@ def collect_eligible(
     folder: str | None,
     image_ids: list[UUID] | None,
     covering_blur_fn,
+    performance_weight: float = 0.0,
 ) -> list[EligibleCandidate]:
+    perf_signals = load_performance_signals(session) if performance_weight > 0 else None
     stmt = (
         select(Image)
         .where(Image.skip_reason.is_(None))
@@ -157,6 +163,9 @@ def collect_eligible(
             description = f"A {composition} photograph."
         mood = image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified")
         score = image.score
+        perf_score = (
+            image_performance_boost(perf_signals, str(image.id), tags) if perf_signals is not None else 0.0
+        )
         ranked_input = CandidateInput(
             image_id=str(image.id),
             aesthetic_score=score.aesthetic_score if score else 0,
@@ -168,8 +177,9 @@ def collect_eligible(
             model_state=image.model_state,
             sharpness=score.sharpness if score else 0,
             composition=score.composition if score else 0,
+            performance_score=perf_score,
         )
-        local = rank_candidates([ranked_input], limit=1)[0]
+        local = rank_candidates([ranked_input], limit=1, performance_weight=performance_weight)[0]
         eligible.append(
             EligibleCandidate(
                 image=image,
@@ -585,6 +595,7 @@ def run_curation(
     preview_bytes_fn=None,
     defer_execution: bool = False,
     thinking_budget: int = 512,
+    performance_weight: float = 0.0,
 ) -> CurationBatch:
     """Build a draft curation batch. Fail-closed; never queues or publishes.
 
@@ -601,11 +612,13 @@ def run_curation(
         folder=folder,
         image_ids=image_ids,
         covering_blur_fn=covering_blur_fn,
+        performance_weight=performance_weight,
     )
     if not eligible:
         raise NotAllowed("No SAFE/EXCELLENT attested candidates available for curation.")
 
     effective_limit = resolve_curation_limit(limit, len(eligible))
+    perf_signals = load_performance_signals(session) if performance_weight > 0 else None
     shortlist_inputs = [
         CandidateInput(
             image_id=str(item.image.id),
@@ -618,10 +631,13 @@ def run_curation(
             model_state=item.image.model_state,
             sharpness=item.image.score.sharpness if item.image.score else 0,
             composition=item.image.score.composition if item.image.score else 0,
+            performance_score=(
+                image_performance_boost(perf_signals, str(item.image.id), item.tags) if perf_signals else 0.0
+            ),
         )
         for item in eligible
     ]
-    ranked = rank_candidates(shortlist_inputs, limit=effective_limit)
+    ranked = rank_candidates(shortlist_inputs, limit=effective_limit, performance_weight=performance_weight)
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
     payloads = [
