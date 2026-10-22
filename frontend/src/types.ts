@@ -238,13 +238,23 @@ export type InstagramAccountDetails = {
   linked_facebook_page_id: string | null;
 };
 
+export type InstagramOAuthPageOption = {
+  page_id: string;
+  page_name: string;
+  ig_business_account_id: string;
+  ig_username: string | null;
+};
+
 export type InstagramConnectionStatus = {
   configured: boolean;
   provider: string;
   credential_source?: string;
   auto_publish: boolean;
   public_base_url?: string;
+  publish_public_base_warning?: string | null;
   graph_version?: string;
+  instagram_expected_username?: string | null;
+  meta_oauth_config_id_configured?: boolean;
   token_configured: boolean;
   token_masked: string | null;
   business_account_id: string | null;

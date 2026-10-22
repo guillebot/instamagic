@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from instamagic.api.deps import db_dep, require_session, settings_dep
 from instamagic.auth import (
     COOKIE_NAME,
+    OAUTH_NONCE_COOKIE,
     check_password,
     clear_login_failures,
     client_ip,
@@ -72,6 +73,7 @@ from instamagic.schemas.dto import (
     LibraryIn,
     LoginIn,
     MetaAppCredentialsIn,
+    InstagramOAuthSelectIn,
     PublishIn,
     QueueIn,
     QueuesOut,
@@ -112,9 +114,12 @@ from instamagic.services.images.presentation import (
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
 from instamagic.services.instagram.oauth import (
     build_authorize_url,
-    exchange_code_for_credentials,
+    complete_oauth_with_page,
+    exchange_code_for_credentials_with_pages,
     oauth_available,
     oauth_redirect_uri,
+    open_oauth_pending,
+    seal_oauth_pending,
     verify_oauth_state,
 )
 from instamagic.services.instagram.publish import publish_queue_item
@@ -1393,8 +1398,8 @@ def instagram_account_refresh(
             **status,
             "ok": False,
             "error": (
-                "Instagram is not configured. Paste a long-lived Page access token and IG business "
-                "account id below, use Meta OAuth if available, or set INSTAGRAM_* in the host .env."
+                "Instagram is not configured. Use Connect with Meta on this page, paste a Page token "
+                "below, or set INSTAGRAM_* in the host .env."
             ),
             "account": status.get("account"),
         }
@@ -1462,6 +1467,7 @@ def instagram_clear_meta_app(
 
 @router.get("/api/instagram/oauth/start")
 def instagram_oauth_start(
+    response: Response,
     _auth: None = Depends(require_session),
     settings: Settings = Depends(settings_dep),
     session: Session = db_dep,
@@ -1474,7 +1480,16 @@ def instagram_oauth_start(
             "or set META_APP_ID / META_APP_SECRET on the host."
         )
     assert meta is not None
-    url, _state = build_authorize_url(settings, meta)
+    url, _state, nonce = build_authorize_url(settings, meta)
+    response.set_cookie(
+        OAUTH_NONCE_COOKIE,
+        nonce,
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure(),
+        path="/",
+    )
     return {"authorize_url": url, "redirect_uri": oauth_redirect_uri(settings)}
 
 
@@ -1504,18 +1519,52 @@ def instagram_oauth_callback(
         return _fail(error_description or error)
     if not code or not state:
         return _fail("Missing OAuth code or state.")
+    nonce_cookie = request.cookies.get(OAUTH_NONCE_COOKIE)
+    redirect_clear_cookie = RedirectResponse(url=dest_ok, status_code=302)
+    redirect_clear_cookie.delete_cookie(
+        OAUTH_NONCE_COOKIE,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure(),
+    )
     try:
-        verify_oauth_state(state, settings)
+        verify_oauth_state(state, settings, nonce_cookie=nonce_cookie)
         meta = resolve_meta_app_credentials(settings, session)
         if not oauth_available(meta):
             return _fail("Meta OAuth is not configured.")
         assert meta is not None
-        tokens = exchange_code_for_credentials(settings, meta, code=code)
+        tokens, selection, _user_token = exchange_code_for_credentials_with_pages(
+            settings, meta, code=code
+        )
+        if selection is not None:
+            pending = seal_oauth_pending(
+                settings,
+                user_access_token=selection.user_access_token,
+                options=selection.options,
+            )
+            from urllib.parse import quote
+
+            choose_url = (
+                f"{frontend}/instagram?oauth=choose&pending={quote(pending, safe='')}"
+            )
+            resp = RedirectResponse(url=choose_url, status_code=302)
+            resp.delete_cookie(
+                OAUTH_NONCE_COOKIE,
+                path="/",
+                httponly=True,
+                samesite="lax",
+                secure=settings.session_cookie_secure(),
+            )
+            return resp
+        if tokens is None:
+            return _fail("OAuth did not return Instagram credentials.")
         save_credentials(
             session,
             settings,
             access_token=tokens.access_token,
             business_account_id=tokens.business_account_id,
+            facebook_page_id=tokens.page_id,
         )
         _reload_instagram_client(request, settings, session)
         client = request.app.state.instagram
@@ -1526,7 +1575,57 @@ def instagram_oauth_callback(
         return _fail(detail)
     except Exception:
         return _fail("OAuth failed unexpectedly. Check Meta app settings and try again.")
-    return RedirectResponse(url=dest_ok, status_code=302)
+    return redirect_clear_cookie
+
+
+@router.get("/api/instagram/oauth/pending")
+def instagram_oauth_pending_options(
+    pending: str = Query(min_length=20, max_length=8192),
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """List Page choices for an in-progress OAuth (no tokens returned)."""
+    payload = open_oauth_pending(settings, pending)
+    options = payload.get("options")
+    if not isinstance(options, list):
+        return {"options": []}
+    return {"options": options}
+
+
+@router.post("/api/instagram/oauth/select-page")
+def instagram_oauth_select_page(
+    body: InstagramOAuthSelectIn,
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Finish OAuth when multiple Pages have Instagram accounts."""
+    pending = open_oauth_pending(settings, body.pending_token)
+    user_token = str(pending.get("user_token") or "").strip()
+    if not user_token:
+        raise NotAllowed("OAuth page selection is invalid.")
+    tokens = complete_oauth_with_page(settings, user_access_token=user_token, page_id=body.page_id)
+    save_credentials(
+        session,
+        settings,
+        access_token=tokens.access_token,
+        business_account_id=tokens.business_account_id,
+        facebook_page_id=tokens.page_id,
+    )
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    details = client.fetch_account_details()
+    save_account_profile(session, details)
+    status = connection_status_fields(settings, session, configured=True)
+    return {
+        **status,
+        "ok": True,
+        "error": None,
+        "account": details.as_dict(),
+        "connected_page_name": tokens.page_name,
+        "connected_ig_username": tokens.ig_username,
+    }
 
 
 @router.get("/api/public/publish-assets/{token}")

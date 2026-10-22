@@ -64,10 +64,14 @@ class Settings(BaseSettings):
     instagram_provider: str = "graph"
     instagram_access_token: str = ""
     instagram_business_account_id: str = ""
-    instagram_graph_version: str = "v21.0"
+    instagram_graph_version: str = "v25.0"
+    # When multiple Pages have IG accounts, prefer this @username (without @).
+    instagram_expected_username: str = ""
     # Optional Meta OAuth (Facebook Login → Page token + IG business account).
     meta_app_id: str = ""
     meta_app_secret: str = ""
+    # Facebook Login for Business configuration id (uses config_id instead of scope when set).
+    meta_oauth_config_id: str = ""
     # Defaults to {FRONTEND_ORIGIN}/api/instagram/oauth/callback (not PUBLIC_BASE_URL).
     meta_oauth_redirect_uri: str = ""
 
@@ -119,7 +123,42 @@ class Settings(BaseSettings):
         return bool(self.instagram_access_token.strip() and self.instagram_business_account_id.strip())
 
     def resolve_public_base_url(self) -> str:
-        base = (self.public_base_url or self.frontend_origin).strip().rstrip("/")
+        """Display / legacy fallback — prefer ``publish_public_base_url()`` for Graph publish."""
+        explicit = self.public_base_url.strip().rstrip("/")
+        if explicit:
+            return explicit
+        return self.frontend_origin.strip().rstrip("/")
+
+    def publish_public_base_warning(self) -> str | None:
+        if self.instagram_provider != "graph":
+            return None
+        explicit = self.public_base_url.strip().rstrip("/")
+        front = self.frontend_origin.strip().rstrip("/")
+        if self.environment in {"stage", "production"} and not explicit:
+            return (
+                "PUBLIC_BASE_URL is not set. Meta cannot fetch publish JPEGs from a LAN-only "
+                "Traefik host. Expose only https://<host>/api/public/publish-assets/ via "
+                "Cloudflare Tunnel (or similar) and set PUBLIC_BASE_URL to that public origin."
+            )
+        if explicit and front and explicit == front and self.environment in {"stage", "production"}:
+            return (
+                "PUBLIC_BASE_URL matches FRONTEND_ORIGIN. If that host is LAN-restricted, "
+                "Instagram publish will fail until PUBLIC_BASE_URL points at a publicly "
+                "reachable tunnel origin serving /api/public/publish-assets/."
+            )
+        return None
+
+    def publish_public_base_url(self) -> str:
+        """HTTPS origin Meta's crawler uses for publish-assets tokens."""
+        warning = self.publish_public_base_warning()
+        explicit = self.public_base_url.strip().rstrip("/")
+        if warning and not explicit:
+            raise ValueError(warning)
+        if explicit:
+            if warning:
+                raise ValueError(warning)
+            return explicit
+        base = self.frontend_origin.strip().rstrip("/")
         return base
 
     def session_cookie_secure(self) -> bool:

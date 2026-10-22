@@ -383,6 +383,7 @@ class InstagramConnection(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
     access_token_ciphertext: Mapped[str] = mapped_column(Text, default="")
     business_account_id: Mapped[str] = mapped_column(String(64), default="")
+    facebook_page_id: Mapped[str] = mapped_column(String(64), default="")
     meta_app_id: Mapped[str] = mapped_column(String(64), default="")
     meta_app_secret_ciphertext: Mapped[str] = mapped_column(Text, default="")
     account_json: Mapped[str | None] = mapped_column(Text, nullable=True)

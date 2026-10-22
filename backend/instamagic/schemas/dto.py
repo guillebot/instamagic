@@ -104,6 +104,19 @@ class InstagramCredentialsIn(BaseModel):
         return text
 
 
+class InstagramOAuthSelectIn(BaseModel):
+    pending_token: str = Field(min_length=20, max_length=8192)
+    page_id: str = Field(min_length=1, max_length=64)
+
+    @field_validator("page_id")
+    @classmethod
+    def clean_page_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text or any(ch in text for ch in "/\\\x00\n\r\t "):
+            raise ValueError("Facebook Page id is not valid.")
+        return text
+
+
 class MetaAppCredentialsIn(BaseModel):
     """Meta Developer App ID + App Secret (secret sealed; never logged)."""
 

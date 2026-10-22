@@ -11,6 +11,7 @@ from starlette.requests import Request
 from instamagic.config import Settings
 
 COOKIE_NAME = "instamagic_session"
+OAUTH_NONCE_COOKIE = "instamagic_ig_oauth_nonce"
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_MAX_FAILURES = 10
 

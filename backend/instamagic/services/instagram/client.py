@@ -5,18 +5,29 @@ No unofficial mobile API. Tokens come from env only and must never be logged.
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 import httpx
 from instamagic.errors import InstagramNotConfigured, NotConfigured
+from instamagic.services.instagram.graph_constants import DEFAULT_INSTAGRAM_GRAPH_VERSION
 
 # Fields Meta documents on IG User for Professional accounts (Graph Content Publishing).
 ACCOUNT_DETAIL_FIELDS = (
     "id,username,name,profile_picture_url,followers_count,follows_count,"
     "media_count,account_type,biography,website"
 )
+
+_NOT_CONFIGURED_MSG = (
+    "Instagram Graph API is not configured. Connect via Meta OAuth on /instagram, "
+    "paste a Page token in the app, or set INSTAGRAM_ACCESS_TOKEN and "
+    "INSTAGRAM_BUSINESS_ACCOUNT_ID in the host environment."
+)
+
+_CONTAINER_POLL_INTERVAL = 1.5
+_CONTAINER_POLL_MAX_WAIT = 90.0
 
 
 @dataclass(frozen=True)
@@ -68,16 +79,10 @@ class NotConfiguredInstagramClient:
 
     def publish_image(self, *, image_url: str, caption: str) -> PublishResult:
         del image_url, caption
-        raise InstagramNotConfigured(
-            "Instagram Graph API is not configured. Set INSTAGRAM_ACCESS_TOKEN and "
-            "INSTAGRAM_BUSINESS_ACCOUNT_ID (Professional account linked to a Facebook Page)."
-        )
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def fetch_account_details(self) -> InstagramAccountDetails:
-        raise InstagramNotConfigured(
-            "Instagram Graph API is not configured. Set INSTAGRAM_ACCESS_TOKEN and "
-            "INSTAGRAM_BUSINESS_ACCOUNT_ID (Professional account linked to a Facebook Page)."
-        )
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
 
 class FakeInstagramClient:
@@ -129,12 +134,14 @@ class GraphInstagramClient:
         *,
         access_token: str,
         business_account_id: str,
-        graph_version: str = "v21.0",
+        graph_version: str = DEFAULT_INSTAGRAM_GRAPH_VERSION,
+        facebook_page_id: str | None = None,
         timeout: float = 60.0,
     ) -> None:
         self._token = access_token.strip()
         self._ig_user_id = business_account_id.strip()
-        self._version = graph_version.strip() or "v21.0"
+        self._version = graph_version.strip() or DEFAULT_INSTAGRAM_GRAPH_VERSION
+        self._facebook_page_id = (facebook_page_id or "").strip() or None
         self._timeout = timeout
         self._base = f"https://graph.facebook.com/{self._version}"
 
@@ -143,25 +150,20 @@ class GraphInstagramClient:
 
     def publish_image(self, *, image_url: str, caption: str) -> PublishResult:
         if not self.configured():
-            raise InstagramNotConfigured(
-                "Instagram Graph API is not configured. Set INSTAGRAM_ACCESS_TOKEN and "
-                "INSTAGRAM_BUSINESS_ACCOUNT_ID."
-            )
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         if not image_url.startswith("https://"):
             raise NotConfigured("Instagram requires a publicly reachable https image_url.")
         if not caption.strip():
             raise NotConfigured("Caption is required.")
         container_id = self._create_container(image_url=image_url, caption=caption.strip())
+        self._wait_for_container(container_id)
         media_id = self._publish_container(container_id)
         permalink = self._permalink(media_id)
         return PublishResult(container_id=container_id, media_id=media_id, permalink=permalink)
 
     def fetch_account_details(self) -> InstagramAccountDetails:
         if not self.configured():
-            raise InstagramNotConfigured(
-                "Instagram Graph API is not configured. Set INSTAGRAM_ACCESS_TOKEN and "
-                "INSTAGRAM_BUSINESS_ACCOUNT_ID."
-            )
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         url = f"{self._base}/{self._ig_user_id}"
         try:
             response = httpx.get(
@@ -172,7 +174,7 @@ class GraphInstagramClient:
         except httpx.HTTPError as exc:
             raise NotConfigured("Instagram Graph API account lookup failed.") from exc
         payload = _json_or_raise(response, action="fetch account details")
-        page_id = self._resolve_linked_page_id()
+        page_id = self._facebook_page_id or self._resolve_linked_page_id()
         return InstagramAccountDetails(
             id=str(payload.get("id") or self._ig_user_id),
             username=_optional_str(payload.get("username")),
@@ -188,36 +190,7 @@ class GraphInstagramClient:
         )
 
     def _resolve_linked_page_id(self) -> str | None:
-        """Best-effort: match IG user against Pages the token can manage."""
-        url = f"{self._base}/me/accounts"
-        try:
-            response = httpx.get(
-                url,
-                params={
-                    "fields": "id,name,instagram_business_account",
-                    "access_token": self._token,
-                },
-                timeout=self._timeout,
-            )
-        except httpx.HTTPError:
-            return None
-        if response.status_code >= 400:
-            return None
-        try:
-            payload = response.json()
-        except ValueError:
-            return None
-        data = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(data, list):
-            return None
-        for page in data:
-            if not isinstance(page, dict):
-                continue
-            ig = page.get("instagram_business_account")
-            ig_id = ig.get("id") if isinstance(ig, dict) else None
-            if ig_id is not None and str(ig_id) == self._ig_user_id:
-                page_id = page.get("id")
-                return str(page_id) if page_id else None
+        """Page access tokens cannot list /me/accounts — only works with a user token."""
         return None
 
     def _create_container(self, *, image_url: str, caption: str) -> str:
@@ -239,6 +212,33 @@ class GraphInstagramClient:
         if not creation_id:
             raise NotConfigured("Instagram did not return a media container id.")
         return str(creation_id)
+
+    def _wait_for_container(self, creation_id: str) -> None:
+        url = f"{self._base}/{creation_id}"
+        deadline = time.monotonic() + _CONTAINER_POLL_MAX_WAIT
+        last_status = "UNKNOWN"
+        while time.monotonic() < deadline:
+            try:
+                response = httpx.get(
+                    url,
+                    params={"fields": "status_code", "access_token": self._token},
+                    timeout=self._timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise NotConfigured("Instagram media container status check failed.") from exc
+            payload = _json_or_raise(response, action="check media container status")
+            last_status = str(payload.get("status_code") or "UNKNOWN").upper()
+            if last_status == "FINISHED":
+                return
+            if last_status in {"ERROR", "EXPIRED"}:
+                raise NotConfigured(
+                    f"Instagram media container failed with status {last_status}. "
+                    "Check image URL reachability, aspect ratio, and size limits."
+                )
+            time.sleep(_CONTAINER_POLL_INTERVAL)
+        raise NotConfigured(
+            f"Instagram media container did not finish in time (last status: {last_status})."
+        )
 
     def _publish_container(self, creation_id: str) -> str:
         url = f"{self._base}/{self._ig_user_id}/media_publish"
@@ -298,7 +298,6 @@ def _json_or_raise(response: httpx.Response, *, action: str) -> dict:
     except ValueError as exc:
         raise NotConfigured(f"Instagram {action} returned non-JSON.") from exc
     if response.status_code >= 400:
-        # Never echo tokens; Meta error messages are usually safe.
         error = payload.get("error") if isinstance(payload, dict) else None
         message = "request failed"
         if isinstance(error, dict):

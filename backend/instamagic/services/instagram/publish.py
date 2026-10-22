@@ -20,12 +20,8 @@ from instamagic.models import (
     QueueState,
     SafetyState,
 )
-from instamagic.services.images.derivatives import (
-    crop_image,
-    oriented_rgb,
-    read_image,
-    save_derivative,
-)
+from instamagic.services.images.derivatives import crop_image, oriented_rgb, read_image
+from instamagic.services.instagram.feed_image import prepare_publish_file_from_path, write_instagram_publish_jpeg
 from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
 from instamagic.services.instagram.client import InstagramClient, PublishResult
@@ -53,8 +49,8 @@ def publish_queue_item(
 ) -> PublishOutcome:
     if not client.configured():
         raise InstagramNotConfigured(
-            "Instagram Graph API is not configured. Set INSTAGRAM_ACCESS_TOKEN and "
-            "INSTAGRAM_BUSINESS_ACCOUNT_ID, or INSTAGRAM_PROVIDER=fake for local tests."
+            "Instagram Graph API is not configured. Connect on /instagram or use "
+            "INSTAGRAM_PROVIDER=fake for local tests."
         )
     item = session.get(PublishingQueueItem, item_id)
     if item is None:
@@ -92,11 +88,13 @@ def publish_queue_item(
         raise NotAllowed(" ".join(gate.reasons))
 
     relative = ensure_publish_derivative(session, settings, image, approved)
-    public_base = settings.resolve_public_base_url()
+    try:
+        public_base = settings.publish_public_base_url()
+    except ValueError as exc:
+        raise NotConfigured(str(exc)) from exc
     if not public_base.startswith("https://") and settings.instagram_provider == "graph":
         raise NotConfigured(
-            "PUBLIC_BASE_URL (or FRONTEND_ORIGIN) must be an https URL Meta can fetch. "
-            "LAN-only stage hosts are not reachable by Instagram's crawlers."
+            "PUBLIC_BASE_URL must be an https URL Meta can fetch from the public internet."
         )
     token = mint_publish_token(relative_path=relative, secret=settings.app_secret)
     image_url = public_image_url(public_base_url=public_base, token=token)
@@ -171,7 +169,7 @@ def ensure_publish_derivative(
             _refresh_crop_derivative(session, settings, image, approved)
             session.commit()
         if approved.derivative_path:
-            return approved.derivative_path
+            return _instagram_publish_copy(settings, image.id, approved.derivative_path, "from-crop")
     approved_blur = next((blur for blur in image.blurs if blur.approved), None)
     if approved_blur is not None:
         if not approved_blur.derivative_path or not any(
@@ -184,12 +182,30 @@ def ensure_publish_derivative(
             None,
         )
         if blur_path:
-            return blur_path
+            return _instagram_publish_copy(settings, image.id, blur_path, "from-blur")
     if image.preview_path:
-        path = settings.derivatives_root / image.preview_path
-        if path.is_file():
-            return image.preview_path
+        source = settings.derivatives_root / image.preview_path
+        if source.is_file():
+            relative = f"{image.id}/publish/feed.jpg"
+            dest = settings.derivatives_root / relative
+            if not dest.is_file() or dest.stat().st_mtime < source.stat().st_mtime:
+                prepare_publish_file_from_path(source, dest)
+            return relative
     raise NotConfigured("No publishable derivative is available for this image.")
+
+
+def _instagram_publish_copy(
+    settings: Settings,
+    image_id: UUID,
+    source_relative: str,
+    label: str,
+) -> str:
+    source = settings.derivatives_root / source_relative
+    relative = f"{image_id}/publish/{label}.jpg"
+    dest = settings.derivatives_root / relative
+    if not dest.is_file() or dest.stat().st_mtime < source.stat().st_mtime:
+        prepare_publish_file_from_path(source, dest)
+    return relative
 
 
 def _has_approved_covering_blur(image: Image) -> bool:
@@ -237,5 +253,5 @@ def _refresh_crop_derivative(session: Session, settings: Settings, image: Image,
         height = min(height, rgb.size[1] - y)
     relative = f"{image.id}/crops/{crop.aspect_ratio.replace(':', 'x')}.jpg"
     rendered = crop_image(rgb, x, y, width, height)
-    save_derivative(rendered, settings.derivatives_root / relative, 1600, quality=84)
+    write_instagram_publish_jpeg(rendered, settings.derivatives_root / relative)
     crop.derivative_path = relative
