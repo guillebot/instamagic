@@ -5,7 +5,7 @@ DEFAULT_INSTAGRAM_GRAPH_VERSION = "v25.0"
 # Facebook Login for Business → Page-linked IG professional account.
 OAUTH_SCOPES = (
     "instagram_basic,instagram_content_publish,instagram_manage_insights,"
-    "pages_show_list,pages_read_engagement,business_management"
+    "instagram_manage_comments,pages_show_list,pages_read_engagement,business_management"
 )
 
 # Permissions the Login for Business configuration must grant (documented in README).
@@ -13,6 +13,7 @@ REQUIRED_GRAPH_PERMISSIONS: tuple[str, ...] = (
     "instagram_basic",
     "instagram_content_publish",
     "instagram_manage_insights",
+    "instagram_manage_comments",
     "pages_show_list",
     "pages_read_engagement",
     "business_management",
