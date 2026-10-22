@@ -203,6 +203,8 @@ export type QueueItem = {
   schedule_mode?: string | null;
   scheduled_at?: string | null;
   publish_retry_after?: string | null;
+  permalink?: string | null;
+  published_caption?: string | null;
   slides?: QueueSlide[];
   image: ImageItem;
 };
