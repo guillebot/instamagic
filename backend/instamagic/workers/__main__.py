@@ -22,7 +22,10 @@ def main() -> None:
     log.info("worker_start", queue=queue_name)
     use_scheduler = False
     if queue_name == "io":
-        from instamagic.workers.periodic import ensure_insights_sync_scheduled
+        from instamagic.workers.periodic import (
+            ensure_comments_sync_scheduled,
+            ensure_insights_sync_scheduled,
+        )
         from instamagic.workers.resume import requeue_interrupted_scans
 
         try:
@@ -34,6 +37,7 @@ def main() -> None:
             raise
         try:
             ensure_insights_sync_scheduled(settings.redis_url)
+            ensure_comments_sync_scheduled(settings.redis_url)
         except Exception:
             log.info("insights_sync_schedule_failed")
         use_scheduler = True

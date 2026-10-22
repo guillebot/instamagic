@@ -266,6 +266,8 @@ export type InstagramConnectionStatus = {
   granted_permissions?: string[] | null;
   insights_permission_granted?: boolean | null;
   insights_reconnect_required?: boolean;
+  comments_permission_granted?: boolean | null;
+  comments_reconnect_required?: boolean;
   meta_docs_url?: string;
   meta_apps_dashboard_url?: string;
   meta_create_app_docs_url?: string;

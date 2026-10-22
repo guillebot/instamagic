@@ -7,6 +7,7 @@ from instamagic.config import get_settings
 from instamagic.db import session_factory
 from instamagic.logging_config import get_logger
 from instamagic.services.factory import build_classifier, build_face_detector, build_instagram
+from instamagic.services.instagram.comment_inbox import sync_inbox_comments
 from instamagic.services.instagram.insights_sync import sync_instagram_insights
 from instamagic.services.pipeline import run_scan
 from redis import Redis
@@ -35,6 +36,26 @@ def run_scan_job(library_id: str, job_id: str) -> None:
         raise
     finally:
         session.close()
+
+
+def sync_instagram_comments_job() -> None:
+    settings = get_settings()
+    session = session_factory()()
+    try:
+        client = build_instagram(settings, session)
+        result = sync_inbox_comments(session, settings, client, force=True)
+        log.info("comments_sync_finished", **{k: result.get(k) for k in ("ok", "synced", "error")})
+    except Exception:
+        log.info("comments_sync_failed")
+        raise
+    finally:
+        session.close()
+    try:
+        connection = Redis.from_url(settings.redis_url)
+        queue = Queue("io", connection=connection)
+        queue.enqueue_in(timedelta(hours=2), sync_instagram_comments_job)
+    except Exception:
+        log.info("comments_sync_reschedule_failed")
 
 
 def sync_instagram_insights_job() -> None:

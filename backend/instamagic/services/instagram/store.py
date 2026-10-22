@@ -29,7 +29,11 @@ from instamagic.services.instagram.oauth import (
     oauth_available,
     oauth_redirect_uri,
 )
-from instamagic.services.instagram.permissions import insights_permission_ok, parse_scopes_json
+from instamagic.services.instagram.permissions import (
+    comments_permission_ok,
+    insights_permission_ok,
+    parse_scopes_json,
+)
 from instamagic.services.secret_box import open_sealed, seal
 from sqlalchemy.orm import Session
 
@@ -273,6 +277,7 @@ def connection_status_fields(
     row_scopes = get_connection(session)
     scopes = parse_scopes_json(row_scopes.token_scopes_json if row_scopes else None)
     insights_granted = insights_permission_ok(scopes) if scopes else None
+    comments_granted = comments_permission_ok(scopes) if scopes else None
     return {
         "configured": configured,
         "provider": settings.instagram_provider,
@@ -294,6 +299,8 @@ def connection_status_fields(
         "granted_permissions": sorted(scopes) if scopes else None,
         "insights_permission_granted": insights_granted,
         "insights_reconnect_required": configured and insights_granted is False,
+        "comments_permission_granted": comments_granted,
+        "comments_reconnect_required": configured and comments_granted is False,
         "meta_docs_url": META_APP_DOCS_URL,
         "meta_apps_dashboard_url": META_APPS_DASHBOARD_URL,
         "meta_create_app_docs_url": META_CREATE_APP_DOCS_URL,
