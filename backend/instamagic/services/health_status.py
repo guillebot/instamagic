@@ -39,6 +39,25 @@ _cache_lock = threading.Lock()
 _cache_payload: tuple[float, dict[str, Any]] | None = None
 _publish_probe_cache: tuple[float, HealthLevel, str] | None = None
 _PUBLISH_PROBE_TTL = 600
+# Syntactically valid publish-asset token (40–1000 chars); signature is bogus.
+_PUBLISH_PROBE_BOGUS_TOKEN = "A" * 60
+
+
+def publish_assets_probe_path() -> str:
+    return f"/api/public/publish-assets/{_PUBLISH_PROBE_BOGUS_TOKEN}"
+
+
+def classify_publish_probe_status(status_code: int) -> tuple[HealthLevel, str]:
+    """Map HEAD publish-assets probe HTTP status to health level."""
+    if status_code == 409:
+        return "ok", "publish-assets route reachable (token rejected)"
+    if status_code == 404:
+        return "warning", "public route not reaching the app"
+    if status_code >= 500:
+        return "down", f"publish-assets probe returned {status_code}"
+    if 400 <= status_code < 500:
+        return "warning", f"publish-assets probe returned {status_code}"
+    return "ok", f"publish-assets probe returned {status_code}"
 
 
 @dataclass(frozen=True)
@@ -214,21 +233,15 @@ def _probe_public_url(settings: Settings) -> tuple[HealthLevel, str]:
         _publish_probe_cache = (now, result[0], result[1])
         return result
 
-    url = f"{explicit}/health"
-    note = "reachable"
-    level: HealthLevel = "ok"
+    url = f"{explicit.rstrip('/')}{publish_assets_probe_path()}"
     try:
         with httpx.Client(timeout=1.5, follow_redirects=True) as client:
-            response = client.get(url)
-            if response.status_code >= 500:
-                level = "warning"
-                note = f"/health returned {response.status_code}"
-            elif response.status_code >= 400:
-                level = "warning"
-                note = f"/health returned {response.status_code}"
-    except Exception as exc:
-        level = "warning"
-        note = f"probe failed ({type(exc).__name__})"
+            response = client.head(url)
+        level, note = classify_publish_probe_status(response.status_code)
+    except (httpx.ConnectError, httpx.NetworkError, httpx.TimeoutException) as exc:
+        level, note = "down", f"connection failed ({type(exc).__name__})"
+    except httpx.HTTPError as exc:
+        level, note = "down", f"request failed ({type(exc).__name__})"
 
     _publish_probe_cache = (now, level, note)
     return level, note
@@ -280,7 +293,7 @@ def _check_publish_url(settings: Settings) -> HealthCheck:
     probe_level, probe_note = _probe_public_url(settings)
     if probe_level != "ok" and status == "ok":
         status = probe_level
-    detail = f"{detail}; public /health {probe_note}"
+    detail = f"{detail}; publish-assets probe: {probe_note}"
     return HealthCheck(id="publish_url", label="Publish URL", status=status, detail=detail)
 
 
@@ -333,12 +346,12 @@ def _check_database(settings: Settings) -> HealthCheck:
 
 
 def _queue_worker_alive(connection: Redis, name: str) -> tuple[bool, str]:
-    queue = Queue(name, connection=connection)
-    workers = Worker.all(queue=queue, connection=connection)
-    if workers:
-        return True, f"{len(workers)} RQ worker(s)"
     if heartbeat_fresh(connection, name):
-        return True, "heartbeat"
+        return True, "worker heartbeat fresh"
+    queue = Queue(name, connection=connection)
+    stale = Worker.all(queue=queue, connection=connection)
+    if stale:
+        return False, f"{len(stale)} stale RQ registration(s), no fresh heartbeat"
     return False, "no worker"
 
 
