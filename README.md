@@ -10,10 +10,11 @@ This is a single-operator app. It is not a follower, like, or comment spam tool.
 2. Scan JPG, JPEG, PNG, and WEBP. RAW files (CR2, CR3, NEF, ARW, DNG) are recorded and skipped.
 3. Review a dark contact sheet (cover tiles). Keys: `1` reject, `2` review, `3` safe, `4` excellent, arrows, space classify (rate-and-advance), `C` crops, `B` blur, `P` queue, `G` captions. ⌘/Ctrl-click multi-select; Shift-click range.
 4. Approve a non-destructive crop when the local model says `SAFE_AFTER_CROP`.
-5. Queue a frame, generate caption options (Gemini), edit, approve, then **Publish** to Instagram (human-gated).
-6. Keep a **Related accounts** research list and draft insightful comments for you to post manually.
+5. Optionally open **Curate**: Gemini ranks SAFE/EXCELLENT frames, suggests tags + captions as drafts. You reorder, accept/reject, edit, then **Send to publish queue** only for what you approve.
+6. Queue a frame (or receive it from Curate), generate/edit captions if needed, approve, then **Publish** to Instagram (human-gated).
+7. Keep a **Related accounts** research list and draft insightful comments for you to post manually.
 
-Queueing, captions, and publish all require an adult attestation on the library and a human rating of safe or excellent. A model state of `DO_NOT_POST` cannot be overridden into the queue or publish path.
+Queueing, captions, curation, and publish all require an adult attestation on the library and a human rating of safe or excellent. A model state of `DO_NOT_POST` cannot be overridden into the queue or publish path. Curation never auto-queues or auto-publishes.
 
 ## Before a real library
 
@@ -41,7 +42,7 @@ Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on
 1. Set `GEMINI_API_KEY` in `.env` (Google AI Studio / Gemini API).
 2. Keep `GEMINI_IMAGE_POLICY=text_only` unless you intentionally allow approved preview pixels (`safe_previews`).
 3. Optional: `ACCOUNT_VOICE` to steer caption and comment-draft tone.
-4. From Review (`G`) or Queue → Generate captions. Missing key returns a clear error; scan/review/queue keep working.
+4. From Review (`G`) or Queue → Generate captions. Or use **Curate** for a batch of ranked picks with tag + caption drafts. Missing key returns a clear error; scan/review/queue keep working.
 
 ### Instagram Graph publish (human-gated)
 
@@ -53,11 +54,12 @@ Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on
    - `INSTAGRAM_ACCESS_TOKEN=…`
    - `INSTAGRAM_BUSINESS_ACCOUNT_ID=…` (IG user id, not the Page id)
 5. **Public image URL:** Meta’s servers must `GET` the JPEG. Set `PUBLIC_BASE_URL` to an **https** origin reachable from the public internet that fronts this API (or a tunnel). LAN-only stage (`instamagic.schimmel.homes` behind `lan-only`) is **not** enough for Meta. Publish mints a short-lived HMAC URL at `/api/public/publish-assets/{token}`.
-6. Flow: Queue → Approve → Generate/edit caption → **Publish to Instagram**. Gates re-run at publish time.
+6. Restart the API so env reloads. Open **Instagram** in the app nav (`/instagram`) → **Test connection / Refresh account details** to verify the token and confirm username, counts, account type, and linked Page id (token is masked; never pasted into the UI).
+7. Flow: Queue → Approve → Generate/edit caption → **Publish to Instagram**. Gates re-run at publish time. The Instagram helper only inspects — it does not publish.
 
 `AUTO_PUBLISH` defaults to `false`. Enabling it requires the exact ack `AUTO_PUBLISH_ACK=I_UNDERSTAND_AUTO_PUBLISH_RISKS`. Phase 2 still expects a human Publish click; auto-fire is reserved and not the default path. Compose hardcodes `AUTO_PUBLISH=false` on services.
 
-For CI / local gate tests: `INSTAGRAM_PROVIDER=fake` and `GEMINI_PROVIDER=fake` (never against real photos in stage/production).
+Credentials stay in host `.env` (or the secret store that injects env). There is no in-app token paste that writes `.env` inside the container. For CI / local gate tests: `INSTAGRAM_PROVIDER=fake` and `GEMINI_PROVIDER=fake` (never against real photos in stage/production).
 
 ## Stage (LAN)
 

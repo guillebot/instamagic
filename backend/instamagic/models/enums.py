@@ -29,6 +29,7 @@ class JobKind(enum.StrEnum):
     SCAN = "scan"
     DERIVATIVE = "derivative"
     ASSESS = "assess"
+    CURATE = "curate"
 
 
 class JobStatus(enum.StrEnum):
@@ -49,9 +50,22 @@ class CaptionStatus(enum.StrEnum):
 class TagSource(enum.StrEnum):
     HUMAN = "human"
     HEURISTIC = "heuristic"
+    GEMINI = "gemini"
 
 
 class CommentDraftStatus(enum.StrEnum):
     DRAFT = "draft"
     COPIED = "copied"
     DISCARDED = "discarded"
+
+
+class CurationBatchStatus(enum.StrEnum):
+    READY = "ready"
+    FAILED = "failed"
+
+
+class CurationPickStatus(enum.StrEnum):
+    SUGGESTED = "suggested"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    QUEUED = "queued"

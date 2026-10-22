@@ -21,6 +21,7 @@ def test_protected_routes_require_session(client) -> None:
         "/api/images",
         "/api/queue",
         "/api/candidates",
+        "/api/curation",
         "/api/config",
         "/api/jobs",
         "/api/facets",
@@ -28,6 +29,7 @@ def test_protected_routes_require_session(client) -> None:
         "/api/instagram/status",
     ):
         assert client.get(path).status_code == 401, path
+    assert client.post("/api/instagram/account").status_code == 401
 
 
 def test_login_sets_httponly_session_cookie(client) -> None:

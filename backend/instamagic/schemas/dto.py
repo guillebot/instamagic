@@ -97,6 +97,29 @@ class HashtagIn(BaseModel):
     confirmed: bool = False
 
 
+class CurationIn(BaseModel):
+    library_id: UUID | None = None
+    folder: str | None = Field(default=None, max_length=1024)
+    image_ids: list[UUID] | None = None
+    limit: int = Field(default=12, ge=1, le=24)
+    confirmed: bool = False
+
+
+class CurationReorderIn(BaseModel):
+    pick_ids: list[UUID] = Field(min_length=1, max_length=50)
+
+
+class CurationPickUpdate(BaseModel):
+    status: str | None = None
+    preferred_caption_id: UUID | None = None
+    suggested_tags: list[str] | None = None
+    caption_text: str | None = Field(default=None, max_length=2000)
+
+
+class CurationQueueIn(BaseModel):
+    pick_ids: list[UUID] = Field(min_length=1, max_length=50)
+
+
 class CropOut(BaseModel):
     id: UUID
     x: int

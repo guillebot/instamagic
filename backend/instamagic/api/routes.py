@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -28,6 +29,9 @@ from instamagic.models import (
     CommentDraftStatus,
     ContentTag,
     CropSuggestion,
+    CurationBatch,
+    CurationPick,
+    CurationPickStatus,
     GeminiRequest,
     HumanRating,
     Image,
@@ -54,6 +58,10 @@ from instamagic.schemas.dto import (
     CommentDraftUpdate,
     CropApproveIn,
     CropOut,
+    CurationIn,
+    CurationPickUpdate,
+    CurationQueueIn,
+    CurationReorderIn,
     FolderListing,
     HashtagIn,
     ImageOut,
@@ -98,6 +106,7 @@ from instamagic.services.images.presentation import (
     normalize_human_rating_filter,
 )
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
+from instamagic.services.instagram.client import mask_access_token
 from instamagic.services.instagram.publish import publish_queue_item
 from instamagic.services.pipeline import (
     clear_exposed_boxes,
@@ -109,6 +118,7 @@ from instamagic.services.pipeline import (
     run_scan,
 )
 from instamagic.services.queues import snapshot_queues
+from instamagic.services.recommendations.curate import queue_picks, run_curation
 from instamagic.services.recommendations.gates import publishing_gate
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
 from sqlalchemy import and_, func, or_, select
@@ -1084,18 +1094,185 @@ def candidates(
     ]
 
 
+@router.post("/api/curation", status_code=201)
+def create_curation(
+    body: CurationIn,
+    request: Request,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Run Gemini + local curation. Draft picks only — never auto-queues or publishes."""
+    folder = None
+    if body.folder:
+        folder = _folder_or_400(body.folder)
+    batch = run_curation(
+        session,
+        request.app.state.gemini,
+        library_id=body.library_id,
+        folder=folder or None,
+        image_ids=body.image_ids,
+        limit=body.limit,
+        account_voice=settings.account_voice,
+        policy=settings.gemini_image_policy,
+        covering_blur_fn=_has_approved_covering_blur,
+    )
+    return _curation_batch_out(session, batch)
+
+
+@router.get("/api/curation")
+def list_curation(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> list[dict[str, object]]:
+    rows = session.scalars(select(CurationBatch).order_by(CurationBatch.created_at.desc()).limit(30)).all()
+    return [_curation_batch_summary(row) for row in rows]
+
+
+@router.get("/api/curation/{batch_id}")
+def get_curation(
+    batch_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    batch = session.get(CurationBatch, batch_id)
+    if batch is None:
+        raise NotFound("Curation batch was not found.")
+    return _curation_batch_out(session, batch)
+
+
+@router.patch("/api/curation/{batch_id}/reorder")
+def reorder_curation(
+    batch_id: UUID,
+    body: CurationReorderIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    batch = session.get(CurationBatch, batch_id)
+    if batch is None:
+        raise NotFound("Curation batch was not found.")
+    picks = {
+        pick.id: pick
+        for pick in session.scalars(select(CurationPick).where(CurationPick.batch_id == batch_id)).all()
+    }
+    if set(body.pick_ids) != set(picks):
+        raise NotAllowed("Reorder must include every pick in the batch exactly once.")
+    for index, pick_id in enumerate(body.pick_ids, start=1):
+        picks[pick_id].sort_order = index
+    session.commit()
+    return _curation_batch_out(session, batch)
+
+
+@router.patch("/api/curation/picks/{pick_id}")
+def update_curation_pick(
+    pick_id: UUID,
+    body: CurationPickUpdate,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    pick = session.get(CurationPick, pick_id)
+    if pick is None:
+        raise NotFound("Curation pick was not found.")
+    if body.status is not None:
+        allowed = {
+            CurationPickStatus.SUGGESTED.value,
+            CurationPickStatus.ACCEPTED.value,
+            CurationPickStatus.REJECTED.value,
+        }
+        if body.status not in allowed:
+            raise HTTPException(status_code=400, detail="Status must be suggested, accepted, or rejected.")
+        if pick.status == CurationPickStatus.QUEUED.value:
+            raise NotAllowed("Queued picks cannot change status here.")
+        pick.status = body.status
+    if body.preferred_caption_id is not None:
+        caption = session.get(Caption, body.preferred_caption_id)
+        if caption is None or caption.image_id != pick.image_id:
+            raise NotFound("Caption was not found for this image.")
+        pick.preferred_caption_id = caption.id
+    if body.suggested_tags is not None:
+        cleaned: list[str] = []
+        for raw in body.suggested_tags:
+            name = raw.strip().lstrip("#").lower().replace(" ", "")[:48]
+            if name and name not in cleaned and not any(ch in name for ch in "/\\\x00\n\r\t"):
+                cleaned.append(name)
+        pick.suggested_tags_json = json.dumps(cleaned[:12], ensure_ascii=False)
+    if body.caption_text is not None and body.caption_text.strip():
+        if pick.preferred_caption_id is None:
+            raise NotAllowed("Select a caption before editing its text.")
+        caption = session.get(Caption, pick.preferred_caption_id)
+        if caption is None:
+            raise NotFound("Caption was not found.")
+        caption.text = body.caption_text.strip()
+        caption.status = CaptionStatus.MODIFIED.value
+    session.commit()
+    return _curation_pick_out(session, pick)
+
+
+@router.post("/api/curation/queue")
+def send_curation_to_queue(
+    body: CurationQueueIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> list[dict[str, object]]:
+    """Human last word: only selected picks enter the publish queue (still not published)."""
+    items = queue_picks(session, pick_ids=body.pick_ids, covering_blur_fn=_has_approved_covering_blur)
+    return [_queue_out(session, item) for item in items]
+
+
+def _instagram_connection_status(settings: Settings, *, configured: bool) -> dict[str, object]:
+    token = settings.instagram_access_token
+    account_id = settings.instagram_business_account_id.strip()
+    return {
+        "configured": configured,
+        "provider": settings.instagram_provider,
+        "auto_publish": settings.auto_publish,
+        "public_base_url": settings.resolve_public_base_url(),
+        "graph_version": settings.instagram_graph_version,
+        "token_configured": bool(token.strip()) or settings.instagram_provider == "fake",
+        "token_masked": (
+            "fake-provider"
+            if settings.instagram_provider == "fake"
+            else mask_access_token(token)
+        ),
+        "business_account_id": account_id or None,
+        "business_account_id_configured": bool(account_id) or settings.instagram_provider == "fake",
+    }
+
+
 @router.get("/api/instagram/status")
 def instagram_status(
     request: Request,
     _auth: None = Depends(require_session),
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
+    """Credential presence only — no Graph call. Never returns the raw access token."""
     client = request.app.state.instagram
+    return _instagram_connection_status(settings, configured=bool(client.configured()))
+
+
+@router.post("/api/instagram/account")
+def instagram_account_refresh(
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Test connection and fetch IG user fields via Graph (or fake provider). Does not publish."""
+    client = request.app.state.instagram
+    status = _instagram_connection_status(settings, configured=bool(client.configured()))
+    try:
+        details = client.fetch_account_details()
+    except NotConfigured as exc:
+        return {
+            **status,
+            "ok": False,
+            "error": exc.detail,
+            "account": None,
+        }
     return {
-        "configured": bool(client.configured()),
-        "provider": settings.instagram_provider,
-        "auto_publish": settings.auto_publish,
-        "public_base_url": settings.resolve_public_base_url(),
+        **status,
+        "ok": True,
+        "error": None,
+        "account": details.as_dict(),
     }
 
 
@@ -1510,6 +1687,59 @@ def _comment_draft_out(row: CommentDraft) -> dict[str, object]:
         "status": row.status,
         "created_at": row.created_at,
     }
+
+
+def _curation_batch_summary(batch: CurationBatch) -> dict[str, object]:
+    return {
+        "id": batch.id,
+        "library_id": batch.library_id,
+        "folder": batch.folder,
+        "status": batch.status,
+        "limit": batch.limit,
+        "detail": batch.detail,
+        "error": batch.error,
+        "created_at": batch.created_at,
+        "finished_at": batch.finished_at,
+        "pick_count": len(batch.picks) if batch.picks is not None else 0,
+    }
+
+
+def _curation_pick_out(session: Session, pick: CurationPick) -> dict[str, object]:
+    try:
+        reasons = json.loads(pick.reasons_json or "[]")
+    except json.JSONDecodeError:
+        reasons = []
+    try:
+        tags = json.loads(pick.suggested_tags_json or "[]")
+    except json.JSONDecodeError:
+        tags = []
+    image = _load_image(session, pick.image_id)
+    captions = session.scalars(
+        select(Caption).where(Caption.image_id == pick.image_id).order_by(Caption.created_at.desc())
+    ).all()
+    return {
+        "id": pick.id,
+        "batch_id": pick.batch_id,
+        "sort_order": pick.sort_order,
+        "gemini_rank": pick.gemini_rank,
+        "local_score": pick.local_score,
+        "reasons": reasons,
+        "suggested_tags": tags,
+        "status": pick.status,
+        "preferred_caption_id": pick.preferred_caption_id,
+        "image": _image_out(session, image).model_dump(mode="json"),
+        "captions": [_caption_out(row) for row in captions],
+    }
+
+
+def _curation_batch_out(session: Session, batch: CurationBatch) -> dict[str, object]:
+    picks = session.scalars(
+        select(CurationPick).where(CurationPick.batch_id == batch.id).order_by(CurationPick.sort_order.asc())
+    ).all()
+    summary = _curation_batch_summary(batch)
+    summary["pick_count"] = len(picks)
+    summary["picks"] = [_curation_pick_out(session, pick) for pick in picks]
+    return summary
 
 
 def _preview_bytes(settings: Settings, image: Image, approved: CropSuggestion | None) -> bytes | None:

@@ -3,7 +3,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   FormEvent,
   MouseEvent as ReactMouseEvent,
-  PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -12,28 +11,20 @@ import {
 } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
-import {
-  clampCrop,
-  containedLayout,
-  cropToCss,
-  moveCrop,
-  parseAspectRatio,
-  resizeCropAspect,
-  type ContainedLayout,
-  type CropRect,
-} from "../cropGeometry";
+import { BlurPanel } from "../BlurPanel";
+import { CropPanel } from "../CropPanel";
 import { acquireThumbSlot } from "../thumbQueue";
 import type {
   AppConfig,
-  BlurItem,
   CaptionItem,
-  CropItem,
   FolderListing,
   ImageItem,
   JobItem,
   LibraryItem,
   QueuesStatus,
 } from "../types";
+
+type PrepMode = "rate" | "crop" | "blur";
 
 /** Contact-sheet thumb: gated concurrency + lazy decode; aspect comes from DB, not naturalWidth. */
 function GridThumb({ src }: { src: string }) {
@@ -201,9 +192,8 @@ export function ReviewPage() {
   const [selected, setSelected] = useState(0);
   const [multiIds, setMultiIds] = useState<Set<string>>(() => new Set());
   const [preview, setPreview] = useState(false);
+  const [prepMode, setPrepMode] = useState<PrepMode>("rate");
   const [ratingBusy, setRatingBusy] = useState(false);
-  const [cropsOpen, setCropsOpen] = useState(false);
-  const [blurOpen, setBlurOpen] = useState(false);
   const [captionsOpen, setCaptionsOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [folderRefresh, setFolderRefresh] = useState(0);
@@ -405,7 +395,7 @@ export function ReviewPage() {
     if (next !== undefined) setSelected(next);
   }
 
-  function openClassify(atIndex?: number) {
+  function openClassify(atIndex?: number, mode: PrepMode = "rate") {
     const index = atIndex ?? selected;
     if (atIndex !== undefined) setSelected(atIndex);
     if (multiIds.size > 0) {
@@ -416,7 +406,17 @@ export function ReviewPage() {
       }
     }
     setMessage("");
+    setPrepMode(mode);
     setPreview(true);
+  }
+
+  function closeClassify() {
+    setPreview(false);
+    setPrepMode("rate");
+  }
+
+  function patchImage(updated: Partial<ImageItem> & { id: string }) {
+    setItems((rows) => rows.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)));
   }
 
   function selectTile(index: number, event: ReactMouseEvent) {
@@ -506,18 +506,39 @@ export function ReviewPage() {
       const target = event.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.key === "Escape") {
-        setPreview(false);
-        setCropsOpen(false);
-        setBlurOpen(false);
-        setCaptionsOpen(false);
+        if (captionsOpen) {
+          setCaptionsOpen(false);
+          return;
+        }
+        if (preview && prepMode !== "rate") {
+          setPrepMode("rate");
+          return;
+        }
+        if (preview) {
+          closeClassify();
+          return;
+        }
         return;
       }
       if (preview) {
+        if (event.key.toLowerCase() === "c") {
+          event.preventDefault();
+          setPrepMode((mode) => (mode === "crop" ? "rate" : "crop"));
+          return;
+        }
+        if (event.key.toLowerCase() === "b") {
+          event.preventDefault();
+          setPrepMode((mode) => (mode === "blur" ? "rate" : "blur"));
+          return;
+        }
+        // 1–4 always rate-and-advance so crop/blur + rate stays one stop.
         if (RATINGS[event.key]) {
           event.preventDefault();
+          setPrepMode("rate");
           void rateAndAdvance(RATINGS[event.key]);
           return;
         }
+        if (prepMode !== "rate") return;
         if (event.key === "ArrowRight") {
           event.preventDefault();
           moveInClassifySet(1);
@@ -528,7 +549,7 @@ export function ReviewPage() {
         }
         return;
       }
-      if (cropsOpen || blurOpen || captionsOpen) return;
+      if (captionsOpen) return;
       if (RATINGS[event.key]) {
         event.preventDefault();
         void rate(RATINGS[event.key]);
@@ -548,8 +569,8 @@ export function ReviewPage() {
         event.preventDefault();
         openClassify();
       }
-      if (event.key.toLowerCase() === "c") setCropsOpen(true);
-      if (event.key.toLowerCase() === "b") setBlurOpen(true);
+      if (event.key.toLowerCase() === "c") openClassify(undefined, "crop");
+      if (event.key.toLowerCase() === "b") openClassify(undefined, "blur");
       if (event.key.toLowerCase() === "p") void queueCurrent();
       if (event.key.toLowerCase() === "g") setCaptionsOpen(true);
     }
@@ -749,16 +770,13 @@ export function ReviewPage() {
         </button>
       ) : null}
       <p className="help">
-        Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move, space classify, C crops, B blur, P queue, G
-        captions. ⌘/Ctrl-click multi-select, Shift-click range. In classify: 1–4 rate and advance, Esc close.
+        Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move, space classify, C crop, B blur, P queue, G
+        captions. ⌘/Ctrl-click multi-select, Shift-click range. In classify: 1–4 rate and advance, C/B prep tools,
+        Esc back/close.
         {multiActive ? ` · ${multiIds.size} selected for classify` : ""}
       </p>
       {preview && current ? (
-        <div
-          className="overlay"
-          role="presentation"
-          onClick={() => setPreview(false)}
-        >
+        <div className="overlay" role="presentation" onClick={closeClassify}>
           <div
             ref={classifyDialogRef}
             className="dialog dialog-classify"
@@ -776,19 +794,63 @@ export function ReviewPage() {
                   : ` · ${selected + 1}/${items.length}`}
                 {ratingBusy ? " · saving…" : ""}
               </p>
-              <button type="button" className="ghost" onClick={() => setPreview(false)}>
+              <div className="classify-modes">
+                {(
+                  [
+                    ["rate", "Rate"],
+                    ["crop", "Crop"],
+                    ["blur", "Blur"],
+                  ] as const
+                ).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={prepMode === mode ? "ghost active" : "ghost"}
+                    onClick={() => setPrepMode(mode)}
+                  >
+                    {mode === "crop" ? "C " : mode === "blur" ? "B " : ""}
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="ghost" onClick={closeClassify}>
                 Close
               </button>
             </div>
-            <div className="classify-stage">
-              {current.preview_url ? (
-                <img key={current.id} src={current.preview_url} alt="" />
-              ) : current.thumbnail_url ? (
-                <img key={current.id} src={current.thumbnail_url} alt="" />
-              ) : (
-                <span className="tile-empty">No preview</span>
-              )}
-            </div>
+            {prepMode === "rate" ? (
+              <div className="classify-stage">
+                {current.preview_url ? (
+                  <img key={current.id} src={current.preview_url} alt="" />
+                ) : current.thumbnail_url ? (
+                  <img key={current.id} src={current.thumbnail_url} alt="" />
+                ) : (
+                  <span className="tile-empty">No preview</span>
+                )}
+              </div>
+            ) : prepMode === "crop" ? (
+              <CropPanel
+                key={`crop-${current.id}`}
+                image={current}
+                onApproved={(updated) => {
+                  patchImage(updated);
+                  setPrepMode("rate");
+                }}
+                onStatus={setMessage}
+              />
+            ) : (
+              <BlurPanel
+                key={`blur-${current.id}`}
+                image={current}
+                onChanged={(imageId) => {
+                  void api<ImageItem>(`/api/images/${imageId}`)
+                    .then((refreshed) => patchImage(refreshed))
+                    .catch(() => {
+                      /* keep local row if refresh fails */
+                    });
+                }}
+                onStatus={setMessage}
+              />
+            )}
             <div className="classify-toolbar">
               <div className="classify-ratings">
                 {RATING_KEYS.map(({ key, rating, label }) => (
@@ -797,7 +859,10 @@ export function ReviewPage() {
                     type="button"
                     className={current.human_rating === rating ? "button active-rating" : "ghost"}
                     disabled={ratingBusy}
-                    onClick={() => void rateAndAdvance(rating)}
+                    onClick={() => {
+                      setPrepMode("rate");
+                      void rateAndAdvance(rating);
+                    }}
                   >
                     {key} {label}
                   </button>
@@ -805,24 +870,13 @@ export function ReviewPage() {
               </div>
               <p className="classify-meta">
                 model {current.model_state ?? "unreviewed"} · rating {current.human_rating ?? "none"}
+                {current.has_approved_crop ? " · crop ✓" : ""}
                 {current.has_gps ? " · GPS on original only" : ""}
+                {prepMode !== "rate" ? " · Esc → rate" : ""}
               </p>
             </div>
           </div>
         </div>
-      ) : null}
-      {cropsOpen && current ? (
-        <CropDialog
-          image={current}
-          onClose={() => setCropsOpen(false)}
-          onApproved={(updated) => {
-            setItems((rows) => rows.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)));
-            setCropsOpen(false);
-          }}
-        />
-      ) : null}
-      {blurOpen && current ? (
-        <BlurDialog image={current} onClose={() => setBlurOpen(false)} />
       ) : null}
       {captionsOpen && current ? (
         <CaptionDialog
@@ -1278,394 +1332,6 @@ function LibrarySetup({
         Save library
       </button>
     </form>
-  );
-}
-
-function CropDialog({
-  image,
-  onClose,
-  onApproved,
-}: {
-  image: ImageItem;
-  onClose: () => void;
-  onApproved: (updated: Pick<ImageItem, "id" | "has_approved_crop" | "model_state" | "effective_state">) => void;
-}) {
-  const crops = useQuery({
-    queryKey: ["crops", image.id],
-    queryFn: () => api<CropItem[]>(`/api/images/${image.id}/crops`),
-  });
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<CropRect | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const frameRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
-  const [layout, setLayout] = useState<ContainedLayout | null>(null);
-  const dragRef = useRef<{
-    mode: "move" | "nw" | "ne" | "sw" | "se";
-    startX: number;
-    startY: number;
-    origin: CropRect;
-    pointerId: number;
-  } | null>(null);
-
-  const shown =
-    (activeId ? crops.data?.find((crop) => crop.id === activeId) : null) ??
-    crops.data?.find((crop) => crop.aspect_ratio === "4:5") ??
-    crops.data?.[0];
-  const modelState = image.model_state ?? "";
-  const isDoNotPost = modelState === "DO_NOT_POST";
-  const isSafeAfterCrop = modelState === "SAFE_AFTER_CROP";
-
-  function selectCrop(crop: CropItem) {
-    setActiveId(crop.id);
-    setDraft({ x: crop.x, y: crop.y, width: crop.width, height: crop.height });
-    setError("");
-  }
-
-  useEffect(() => {
-    if (!shown) {
-      setDraft(null);
-      return;
-    }
-    setDraft({ x: shown.x, y: shown.y, width: shown.width, height: shown.height });
-    setError("");
-    // Reset only when the selected suggestion identity changes (not on every nudge).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown?.id]);
-
-  function measureLayout() {
-    const img = imgRef.current;
-    if (!img || !image.width || !image.height) {
-      setLayout(null);
-      return;
-    }
-    setLayout(containedLayout(img.clientWidth, img.clientHeight, image.width, image.height));
-  }
-
-  useEffect(() => {
-    measureLayout();
-    const frame = frameRef.current;
-    if (!frame) return;
-    const observer = new ResizeObserver(() => measureLayout());
-    observer.observe(frame);
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image.id, image.width, image.height, image.preview_url]);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (!image.width || !image.height) return;
-      const step = event.shiftKey ? 10 : 1;
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        setDraft((current) => (current ? moveCrop(current, -step, 0, image.width!, image.height!) : current));
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        setDraft((current) => (current ? moveCrop(current, step, 0, image.width!, image.height!) : current));
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setDraft((current) => (current ? moveCrop(current, 0, -step, image.width!, image.height!) : current));
-      } else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setDraft((current) => (current ? moveCrop(current, 0, step, image.width!, image.height!) : current));
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [image.width, image.height]);
-
-  async function approve(crop: CropItem) {
-    if (!draft || !image.width || !image.height || isDoNotPost) return;
-    setBusy(true);
-    setError("");
-    try {
-      const rect = clampCrop(draft, image.width, image.height);
-      await api<CropItem>(`/api/images/${image.id}/crops/${crop.id}/approve`, {
-        method: "POST",
-        body: JSON.stringify({
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        }),
-      });
-      const refreshed = await api<ImageItem>(`/api/images/${image.id}`);
-      onApproved({
-        id: refreshed.id,
-        has_approved_crop: refreshed.has_approved_crop ?? true,
-        model_state: refreshed.model_state,
-        effective_state: refreshed.effective_state,
-      });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not approve this crop.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function beginDrag(mode: "move" | "nw" | "ne" | "sw" | "se", event: ReactPointerEvent<HTMLElement>) {
-    if (!draft || !layout || !image.width || !image.height || !shown) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const origin = draft;
-    const pointerId = event.pointerId;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const scale = layout.scale;
-    const imageW = image.width;
-    const imageH = image.height;
-    const aspect = parseAspectRatio(shown.aspect_ratio, origin.width, origin.height);
-    dragRef.current = { mode, startX, startY, origin, pointerId };
-
-    function onMove(ev: PointerEvent) {
-      if (ev.pointerId !== pointerId) return;
-      const dx = (ev.clientX - startX) / scale;
-      const dy = (ev.clientY - startY) / scale;
-      if (mode === "move") {
-        setDraft(moveCrop(origin, dx, dy, imageW, imageH));
-      } else {
-        setDraft(resizeCropAspect(origin, mode, dx, dy, aspect, imageW, imageH));
-      }
-    }
-    function onUp(ev: PointerEvent) {
-      if (ev.pointerId !== pointerId) return;
-      dragRef.current = null;
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    }
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-  }
-
-  const boxCss = draft && layout ? cropToCss(draft, layout) : null;
-  const canApprove = Boolean(shown && draft && image.width && image.height && !isDoNotPost);
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="dialog" onClick={(event) => event.stopPropagation()}>
-        <h2>Crops</h2>
-        <p className="help">Drag the frame to reposition. Corner handles resize with the aspect locked. Arrows nudge.</p>
-        {isDoNotPost ? (
-          <p className="error">
-            This frame is DO_NOT_POST. Crop approval cannot override that — rate it reject or leave it blocked.
-          </p>
-        ) : isSafeAfterCrop ? (
-          <p className="help">
-            Approving a crop marks the publishing window for this SAFE_AFTER_CROP frame. Model state stays
-            SAFE_AFTER_CROP until you rate it safe/excellent (keys 3/4).
-          </p>
-        ) : (
-          <p className="help">
-            You can save a crop on this {modelState || "REVIEW"} frame; model_state stays {modelState || "REVIEW"}.
-            Human rating (keys 3/4) is what marks it safe — crop approval alone does not change the safety badge.
-          </p>
-        )}
-        <div className="preview-frame crop-stage" ref={frameRef}>
-          {image.preview_url ? (
-            <img ref={imgRef} src={image.preview_url} alt="" onLoad={measureLayout} draggable={false} />
-          ) : null}
-          {boxCss ? (
-            <div
-              className="crop-box interactive"
-              role="slider"
-              aria-label="Crop frame"
-              aria-valuetext={
-                draft
-                  ? `${draft.width}×${draft.height} at ${draft.x},${draft.y}`
-                  : undefined
-              }
-              tabIndex={0}
-              style={{
-                left: boxCss.left,
-                top: boxCss.top,
-                width: boxCss.width,
-                height: boxCss.height,
-              }}
-              onPointerDown={(event) => beginDrag("move", event)}
-            >
-              {(["nw", "ne", "sw", "se"] as const).map((corner) => (
-                <span
-                  key={corner}
-                  className={`crop-handle ${corner}`}
-                  aria-hidden="true"
-                  onPointerDown={(event) => beginDrag(corner, event)}
-                />
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <div className="row">
-          {crops.data?.map((crop) => (
-            <button
-              key={crop.id}
-              className={shown?.id === crop.id ? "ghost active" : "ghost"}
-              onClick={() => selectCrop(crop)}
-            >
-              {crop.aspect_ratio}
-              {crop.approved ? " approved" : ""}
-            </button>
-          ))}
-        </div>
-        {shown ? (
-          <>
-            <p>{shown.reason}</p>
-            {draft ? (
-              <p className="help">
-                {draft.width}×{draft.height} at {draft.x},{draft.y}
-                {shown.aspect_ratio !== "original" ? ` · ${shown.aspect_ratio}` : ""}
-              </p>
-            ) : null}
-            {error ? <p className="error">{error}</p> : null}
-            <button className="button" disabled={!canApprove || busy} onClick={() => void approve(shown)}>
-              {busy ? "Saving…" : isSafeAfterCrop ? "Approve this crop" : "Save this crop"}
-            </button>
-          </>
-        ) : (
-          <p>No crops yet.</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function BlurDialog({ image, onClose }: { image: ImageItem; onClose: () => void }) {
-  const blurs = useQuery({
-    queryKey: ["blurs", image.id],
-    queryFn: () => api<BlurItem[]>(`/api/images/${image.id}/blurs`),
-  });
-  const [strength, setStrength] = useState("standard");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const items = blurs.data ?? [];
-  const previewUrl = items.find((item) => item.preview_url)?.preview_url ?? null;
-  const approved = items.some((item) => item.approved);
-
-  useEffect(() => {
-    const current = blurs.data?.[0]?.strength;
-    if (current) setStrength(current);
-  }, [blurs.data]);
-
-  async function applyStrength(next: string) {
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/api/images/${image.id}/blurs/strength`, {
-        method: "POST",
-        body: JSON.stringify({ strength: next }),
-      });
-      setStrength(next);
-      await blurs.refetch();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not update blur strength.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function approve() {
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/api/images/${image.id}/blurs/approve`, { method: "POST" });
-      await blurs.refetch();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not approve blur covers.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function addManual() {
-    if (!image.width || !image.height) return;
-    setBusy(true);
-    setError("");
-    try {
-      const w = Math.round(image.width * 0.28);
-      const h = Math.round(image.height * 0.22);
-      await api(`/api/images/${image.id}/blurs`, {
-        method: "POST",
-        body: JSON.stringify({
-          x: Math.round((image.width - w) / 2),
-          y: Math.round((image.height - h) / 2),
-          width: w,
-          height: h,
-          strength,
-          reason: "Manual ellipse cover.",
-        }),
-      });
-      await blurs.refetch();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not add a manual cover.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="dialog" onClick={(event) => event.stopPropagation()}>
-        <h2>Blur covers</h2>
-        <p className="help">
-          Covers are written only as derivatives. The original stays read-only. An approved set must fully cover every
-          clear exposed region before it can stand in for a crop.
-        </p>
-        <div className="preview-frame">
-          {previewUrl || image.preview_url ? <img src={previewUrl ?? image.preview_url ?? ""} alt="" /> : null}
-          {items.map((blur) =>
-            image.width && image.height ? (
-              <div
-                key={blur.id}
-                className={blur.approved ? "blur-ellipse approved" : "blur-ellipse"}
-                style={{
-                  left: `${(blur.x / image.width) * 100}%`,
-                  top: `${(blur.y / image.height) * 100}%`,
-                  width: `${(blur.width / image.width) * 100}%`,
-                  height: `${(blur.height / image.height) * 100}%`,
-                }}
-              />
-            ) : null,
-          )}
-        </div>
-        <div className="row">
-          <label>
-            Strength{" "}
-            <select
-              value={strength}
-              disabled={busy || items.length === 0}
-              onChange={(event) => void applyStrength(event.target.value)}
-            >
-              <option value="subtle">Subtle</option>
-              <option value="standard">Standard</option>
-              <option value="strong">Strong</option>
-            </select>
-          </label>
-          <button className="ghost" disabled={busy} onClick={() => void addManual()}>
-            Add manual ellipse
-          </button>
-          <button className="button" disabled={busy || items.length === 0} onClick={() => void approve()}>
-            {approved ? "Approved" : "Approve covers"}
-          </button>
-        </div>
-        {error ? <p className="error">{error}</p> : null}
-        {items.length ? (
-          <ul className="blur-list">
-            {items.map((blur) => (
-              <li key={blur.id}>
-                {blur.shape} · σ {blur.radius.toFixed(1)} · feather {blur.feather}px
-                {blur.covers_unsafe ? " · covers unsafe" : " · manual"}
-                {blur.approved ? " · approved" : ""}
-                <div className="help">{blur.reason}</div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>No blur suggestions yet. Add a manual ellipse, or scan an image with a detected unsafe region.</p>
-        )}
-      </div>
-    </div>
   );
 }
 

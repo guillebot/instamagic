@@ -93,6 +93,33 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
     assert after_review_crop["model_state"] == "REVIEW"
     assert after_review_crop["has_approved_crop"] is True
 
+    # Approving a crop clears blur approval; manual blur create + approve still works.
+    for blur in client.get(f"/api/images/{clean_id}/blurs").json():
+        assert blur["approved"] is False
+    manual = client.post(
+        f"/api/images/{clean_id}/blurs",
+        json={"x": 10, "y": 10, "width": 80, "height": 60, "strength": "standard", "reason": "Manual cover."},
+    )
+    assert manual.status_code == 201, manual.text
+    assert manual.json()["covers_unsafe"] is False
+    # Crop and blur are mutually exclusive approvals — approving blur clears crop.
+    blur_approved = client.post(f"/api/images/{clean_id}/blurs/approve")
+    assert blur_approved.status_code == 200, blur_approved.text
+    assert all(row["approved"] for row in blur_approved.json())
+    after_blur = client.get(f"/api/images/{clean_id}").json()
+    assert after_blur["has_approved_crop"] is False
+    # Re-approve crop for the queue path below.
+    re_approve = client.post(
+        f"/api/images/{clean_id}/crops/{review_crop['id']}/approve",
+        json={
+            "x": review_crop["x"],
+            "y": review_crop["y"],
+            "width": review_crop["width"],
+            "height": review_crop["height"],
+        },
+    )
+    assert re_approve.status_code == 200
+
     rated = client.post(f"/api/images/{clean_id}/rating", json={"rating": "excellent"})
     assert rated.status_code == 200
     queued = client.post("/api/queue", json={"image_id": clean_id})

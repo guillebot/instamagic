@@ -4,6 +4,8 @@ import { api } from "./api";
 import { VersionChip } from "./VersionChip";
 import { LoginPage } from "./pages/Login";
 import { CandidatesPage } from "./pages/Candidates";
+import { CuratePage } from "./pages/Curate";
+import { InstagramPage } from "./pages/Instagram";
 import { QueuePage } from "./pages/Queue";
 import { RelatedAccountsPage } from "./pages/RelatedAccounts";
 import { ReviewPage } from "./pages/Review";
@@ -36,8 +38,10 @@ function Shell() {
             Review
           </NavLink>
           <NavLink to="/queue">Queue</NavLink>
+          <NavLink to="/curate">Curate</NavLink>
           <NavLink to="/candidates">Next</NavLink>
           <NavLink to="/related">Related</NavLink>
+          <NavLink to="/instagram">Instagram</NavLink>
           <button
             className="ghost"
             onClick={() => {
@@ -60,8 +64,10 @@ export function App() {
       <Route element={<Shell />}>
         <Route path="/" element={<ReviewPage />} />
         <Route path="/queue" element={<QueuePage />} />
+        <Route path="/curate" element={<CuratePage />} />
         <Route path="/candidates" element={<CandidatesPage />} />
         <Route path="/related" element={<RelatedAccountsPage />} />
+        <Route path="/instagram" element={<InstagramPage />} />
       </Route>
     </Routes>
   );

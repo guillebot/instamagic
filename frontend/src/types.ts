@@ -146,6 +146,37 @@ export type CandidateItem = {
   model_state: string | null;
 };
 
+export type CurationPick = {
+  id: string;
+  batch_id: string;
+  sort_order: number;
+  gemini_rank: number;
+  local_score: number;
+  reasons: string[];
+  suggested_tags: string[];
+  status: string;
+  preferred_caption_id: string | null;
+  image: ImageItem;
+  captions: CaptionItem[];
+};
+
+export type CurationBatchSummary = {
+  id: string;
+  library_id: string | null;
+  folder: string | null;
+  status: string;
+  limit: number;
+  detail: string | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+  pick_count: number;
+};
+
+export type CurationBatch = CurationBatchSummary & {
+  picks: CurationPick[];
+};
+
 export type QueueItem = {
   id: string;
   state: string;
@@ -186,4 +217,36 @@ export type AppConfig = {
   suggested_library_root: string;
   attestation_statement: string;
   safety_classifier: string;
+};
+
+export type InstagramConnectionStatus = {
+  configured: boolean;
+  provider: string;
+  auto_publish: boolean;
+  public_base_url?: string;
+  graph_version?: string;
+  token_configured: boolean;
+  token_masked: string | null;
+  business_account_id: string | null;
+  business_account_id_configured: boolean;
+};
+
+export type InstagramAccountDetails = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  profile_picture_url: string | null;
+  followers_count: number | null;
+  follows_count: number | null;
+  media_count: number | null;
+  account_type: string | null;
+  biography: string | null;
+  website: string | null;
+  linked_facebook_page_id: string | null;
+};
+
+export type InstagramRefreshResult = InstagramConnectionStatus & {
+  ok: boolean;
+  error: string | null;
+  account: InstagramAccountDetails | null;
 };

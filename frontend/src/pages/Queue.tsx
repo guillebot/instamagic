@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
 import type { AppConfig, CaptionItem, QueueItem } from "../types";
 
@@ -24,7 +25,8 @@ export function QueuePage() {
       <p>
         Human-gated publish: approve → generate/edit caption → Publish. Auto publish stays{" "}
         {config.data?.auto_publish ? "enabled (ack required at boot)" : "off"}. Instagram:{" "}
-        {ig.data?.configured ? `ready (${ig.data.provider})` : "not configured"}.
+        {ig.data?.configured ? `ready (${ig.data.provider})` : "not configured"}.{" "}
+        <Link to="/instagram">Connection helper</Link>.
       </p>
       <div className="card-list">
         {queue.data?.map((item) => (

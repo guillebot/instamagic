@@ -25,7 +25,9 @@ Uvicorn loads `instamagic.main:create_app` with `--factory`. Importing the packa
 - RQ with queues `io` and `ml`, not Celery. `PIPELINE_MODE=inline` runs the scan in the API process for tests and the fixture demo. `queue` enqueues it.
 - One password, HMAC session cookie, bind `127.0.0.1` unless `ALLOW_CONTAINER_BIND=true` inside Compose. Published ports stay on `127.0.0.1`.
 - Instagram publish uses the official Graph Content Publishing API only (`services/instagram/client.py`). Human-gated by default (`AUTO_PUBLISH=false`). Fake provider for CI.
+- Instagram connection helper (`/instagram`, `GET /api/instagram/status`, `POST /api/instagram/account`) verifies env credentials and fetches IG user fields; it never logs or returns the raw token and never publishes.
 - Related accounts and comment drafts are research / assisted copy-paste. No follow, like, or comment automation.
+- Gemini curation (`/api/curation`, Curate page) ranks SAFE/EXCELLENT attested frames, stores draft picks with tags + captions, and only enters the publish queue when the operator sends selected picks. Never auto-publishes (`AUTO_PUBLISH` remains false).
 - Calendar drag-and-drop, Reels, Stories, comment inbox sync, experiments, and dashboards are still later.
 
 This is one local operator, not a multi-replica platform service. There is no SSO, no second replica, and no shared secret store beyond `.env` on this machine.
@@ -51,6 +53,14 @@ cd frontend && npx tsc --noEmit
 ```
 
 Tests use SQLite and the fake classifier. They do not download weights and they do not call Gemini. The Gemini firewall test fails if a context payload contains a filesystem path.
+
+## Gemini curation flow
+
+1. Human rates frames SAFE/EXCELLENT (and approves crop/blur when `SAFE_AFTER_CROP`).
+2. `POST /api/curation` shortlists via local ranker, then Fake/Google Gemini returns ranked picks + tags + caption options as draft `CurationBatch` / `CurationPick` rows (not queued).
+3. Curate UI: reorder, accept/reject, edit tags/captions.
+4. `POST /api/curation/queue` re-checks publishing gates and creates `PublishingQueueItem` rows in `CANDIDATE` state only.
+5. Instagram publish remains the existing Queue → Approve → Publish click.
 
 ## Still later
 

@@ -22,6 +22,8 @@ from sqlalchemy.types import TypeDecorator
 from instamagic.models.enums import (
     CaptionStatus,
     CommentDraftStatus,
+    CurationBatchStatus,
+    CurationPickStatus,
     HumanRating,
     JobKind,
     JobStatus,
@@ -423,6 +425,50 @@ class InstagramMetrics(Base):
     profile_visit_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     follow_conversion: Mapped[float | None] = mapped_column(Float, nullable=True)
     reach_to_followers_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class CurationBatch(Base):
+    """Gemini + local ranking suggestions. Never auto-queues or publishes."""
+
+    __tablename__ = "curation_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    library_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("libraries.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    folder: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default=CurationBatchStatus.READY.value, index=True)
+    limit: Mapped[int] = mapped_column(Integer, default=12)
+    detail: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    picks: Mapped[list[CurationPick]] = relationship(back_populates="batch", order_by="CurationPick.sort_order")
+
+
+class CurationPick(Base):
+    """One Gemini/local suggestion. Human reorders, accepts, then may send to the publish queue."""
+
+    __tablename__ = "curation_picks"
+    __table_args__ = (UniqueConstraint("batch_id", "image_id", name="uq_curation_pick_batch_image"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    batch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("curation_batches.id", ondelete="CASCADE"), index=True)
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    gemini_rank: Mapped[int] = mapped_column(Integer, default=0)
+    local_score: Mapped[int] = mapped_column(Integer, default=0)
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+    suggested_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(16), default=CurationPickStatus.SUGGESTED.value, index=True)
+    preferred_caption_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("captions.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    batch: Mapped[CurationBatch] = relationship(back_populates="picks")
+    image: Mapped[Image] = relationship()
 
 
 # Imported by decision code via the string values stored on Image.

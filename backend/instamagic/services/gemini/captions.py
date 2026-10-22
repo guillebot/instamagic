@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from instamagic.services.gemini.context import BANNED_PHRASES, GeminiContext
 from pydantic import BaseModel, Field, field_validator
+
+if TYPE_CHECKING:
+    from instamagic.services.gemini.curation import CurationCandidatePayload, CurationResult
 
 CAPTION_SPECS: tuple[tuple[str, str], ...] = (
     ("minimal", "en"),
@@ -44,6 +47,14 @@ class GeminiProvider(Protocol):
         policy: str,
         image_bytes: bytes | None,
     ) -> CaptionBatch: ...
+
+    def curate_batch(
+        self,
+        candidates: list[CurationCandidatePayload],
+        *,
+        account_voice: str,
+        policy: str,
+    ) -> CurationResult: ...
 
 
 def system_instruction() -> str:
@@ -90,3 +101,51 @@ class FakeGeminiProvider:
                 text = f"{style}: {mood} light, held simply."
             drafts.append(CaptionDraft(style=style, language=language, text=text))
         return CaptionBatch(captions=drafts)
+
+    def curate_batch(
+        self,
+        candidates: list[CurationCandidatePayload],
+        *,
+        account_voice: str,
+        policy: str,
+    ) -> CurationResult:
+        from instamagic.services.gemini.curation import (
+            CURATION_CAPTION_STYLES,
+            CurationPickDraft,
+        )
+        from instamagic.services.gemini.curation import (
+            CurationResult as Result,
+        )
+
+        del account_voice, policy
+        ordered = sorted(candidates, key=lambda item: item.local_score, reverse=True)
+        picks: list[CurationPickDraft] = []
+        for index, item in enumerate(ordered, start=1):
+            mood = item.mood if item.mood != "unspecified" else "quiet"
+            tags = list(dict.fromkeys([*item.content_tags, mood.replace(" ", "")[:32], "curated"]))[:8]
+            captions = [
+                CaptionDraft(
+                    style=style,
+                    language=language,
+                    text=(
+                        f"Luz {mood}, en una frase."
+                        if language == "es"
+                        else f"{style}: {mood} light, held for the feed."
+                    ),
+                )
+                for style, language in CURATION_CAPTION_STYLES
+            ]
+            picks.append(
+                CurationPickDraft(
+                    image_id=item.image_id,
+                    rank=index,
+                    reasons=[
+                        f"Local rank score {item.local_score}.",
+                        *item.local_reasons[:2],
+                        "Fake Gemini kept local order with diversity tags.",
+                    ],
+                    tags=tags,
+                    captions=captions,
+                )
+            )
+        return Result(picks=picks)

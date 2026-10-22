@@ -8,6 +8,11 @@ from instamagic.services.gemini.captions import (
     system_instruction,
 )
 from instamagic.services.gemini.context import GeminiContext, assert_safe_gemini_payload
+from instamagic.services.gemini.curation import (
+    CurationCandidatePayload,
+    CurationResult,
+    build_curation_request_body,
+)
 from instamagic.services.gemini.growth import (
     CommentDraftBatch,
     HashtagSuggestion,
@@ -105,6 +110,20 @@ class GoogleGeminiProvider:
         }
         assert_safe_gemini_payload(body, policy="text_only")
         return HashtagSuggestion.model_validate_json(self._post(body))
+
+    def curate_batch(
+        self,
+        candidates: list[CurationCandidatePayload],
+        *,
+        account_voice: str,
+        policy: str,
+    ) -> CurationResult:
+        """Batch curation always uses text contexts (no library pixels)."""
+        del policy
+        if not self._api_key:
+            raise NotConfigured("GEMINI_API_KEY is not configured.")
+        body = build_curation_request_body(candidates, account_voice=account_voice)
+        return CurationResult.model_validate_json(self._post(body))
 
     def _post(self, body: dict[str, object]) -> str:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:generateContent"
