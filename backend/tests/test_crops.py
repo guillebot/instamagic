@@ -1,5 +1,4 @@
 import pytest
-
 from instamagic.services.crops.generator import (
     generate_crops,
     validate_crop_window,

@@ -5,7 +5,6 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
 
 from instamagic.errors import NotFound
 
@@ -26,8 +25,6 @@ _TRANSIENT_ERRNOS = {
 if hasattr(errno, "ESTALE"):
     _TRANSIENT_ERRNOS.add(errno.ESTALE)
 
-T = TypeVar("T")
-
 
 def is_transient_io_error(exc: BaseException) -> bool:
     if isinstance(exc, (BlockingIOError, TimeoutError, InterruptedError)):
@@ -37,7 +34,7 @@ def is_transient_io_error(exc: BaseException) -> bool:
     return False
 
 
-def retry_transient_io(
+def retry_transient_io[T](
     fn: Callable[[], T],
     *,
     attempts: int = 6,
