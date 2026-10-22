@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0010_gemini_label_status"
-down_revision = "0009_instagram_facebook_page_id"
+revision = "0011_gemini_label_status"
+down_revision = "0010_scheduled_posting"
 branch_labels = None
 depends_on = None
 
