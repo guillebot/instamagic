@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from instamagic.errors import GeminiBlocked, NotAllowed, NotConfigured, NotFound
+from instamagic.logging_config import get_logger
 from instamagic.models import (
     Caption,
     CaptionStatus,
@@ -48,6 +49,14 @@ from instamagic.services.recommendations.gates import gemini_gate, publishing_ga
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+
+log = get_logger("curate")
+
+
+@dataclass
+class ResilientCurationOutcome:
+    chunk_results: list[CurationResult]
+    blocked_ids: list[str]
 
 
 @dataclass
@@ -119,13 +128,22 @@ def collect_eligible(
         if not gate.allowed:
             continue
         tags = [link.tag.name for link in image.tags if link.tag is not None]
+        gemini_tags = [
+            link.tag.name for link in image.tags if link.tag is not None and link.source == TagSource.GEMINI.value
+        ]
+        if gemini_tags:
+            tags = list(dict.fromkeys([*gemini_tags, *tags]))
         mood_names = [tag for tag in tags if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}]
         composition = image.orientation or "unknown orientation"
-        description = f"A {composition} photograph."
-        if approved is not None and image.model_state == SafetyState.SAFE_AFTER_CROP.value:
+        if image.gemini_description:
+            description = image.gemini_description
+        elif approved is not None and image.model_state == SafetyState.SAFE_AFTER_CROP.value:
             description = f"Approved {approved.aspect_ratio} crop of a {composition} photograph."
         elif covering_blur and image.model_state == SafetyState.SAFE_AFTER_CROP.value:
             description = f"A {composition} photograph with approved covering blur."
+        else:
+            description = f"A {composition} photograph."
+        mood = image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified")
         score = image.score
         ranked_input = CandidateInput(
             image_id=str(image.id),
@@ -147,7 +165,7 @@ def collect_eligible(
                 local_reasons=local.reasons,
                 tags=tags,
                 composition=composition,
-                mood=", ".join(mood_names) if mood_names else "unspecified",
+                mood=mood,
                 description=description,
                 covering_blur=covering_blur,
                 approved_crop_id=approved.id if approved else None,
@@ -208,6 +226,22 @@ def merge_chunked_drafts(
             )
             for index, item in enumerate(payloads, start=1)
         ]
+    present = {draft.image_id for draft in collected}
+    for item in payloads:
+        if item.image_id in present:
+            continue
+        collected.append(
+            CurationPickDraft(
+                image_id=item.image_id,
+                rank=10_000 + len(collected),
+                reasons=item.local_reasons[:4] or [f"Local score {item.local_score}."],
+                tags=item.content_tags[:8],
+                captions=[
+                    CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
+                    for style, language in CURATION_CAPTION_STYLES
+                ],
+            )
+        )
     collected.sort(
         key=lambda draft: (
             -(by_id[draft.image_id].local_score if draft.image_id in by_id else 0),
@@ -226,6 +260,298 @@ def merge_chunked_drafts(
     ]
 
 
+def curate_chunk_resilient(
+    provider: CurationProvider,
+    chunk: list[CurationCandidatePayload],
+    *,
+    account_voice: str,
+    policy: str,
+    image_bytes_by_id: dict[str, bytes] | None,
+    thinking_budget: int,
+) -> ResilientCurationOutcome:
+    chunk_pixels = None
+    if image_bytes_by_id:
+        chunk_pixels = {
+            item.image_id: image_bytes_by_id[item.image_id]
+            for item in chunk
+            if item.image_id in image_bytes_by_id
+        } or None
+    try:
+        result = provider.curate_batch(
+            chunk,
+            account_voice=account_voice,
+            policy=policy,
+            image_bytes_by_id=chunk_pixels,
+            thinking_budget=thinking_budget,
+        )
+        return ResilientCurationOutcome([result], [])
+    except GeminiBlocked as exc:
+        if len(chunk) <= 1:
+            image_id = chunk[0].image_id if chunk else "unknown"
+            log.info("curation_image_blocked", image_id=image_id, reason=exc.reason)
+            return ResilientCurationOutcome([], [image_id])
+        mid = len(chunk) // 2
+        left = curate_chunk_resilient(
+            provider,
+            chunk[:mid],
+            account_voice=account_voice,
+            policy=policy,
+            image_bytes_by_id=image_bytes_by_id,
+            thinking_budget=thinking_budget,
+        )
+        right = curate_chunk_resilient(
+            provider,
+            chunk[mid:],
+            account_voice=account_voice,
+            policy=policy,
+            image_bytes_by_id=image_bytes_by_id,
+            thinking_budget=thinking_budget,
+        )
+        return ResilientCurationOutcome(
+            left.chunk_results + right.chunk_results,
+            left.blocked_ids + right.blocked_ids,
+        )
+
+
+def execute_curation_batch(
+    session: Session,
+    batch_id: UUID,
+    provider: CurationProvider,
+    *,
+    account_voice: str,
+    policy: str,
+    covering_blur_fn,
+    include_images: bool | None = None,
+    preview_bytes_fn=None,
+    thinking_budget: int = 512,
+    image_ids: list[UUID] | None = None,
+) -> CurationBatch:
+    """Resume Gemini ranking for a RUNNING batch (worker entrypoint)."""
+    batch = session.get(CurationBatch, batch_id)
+    if batch is None:
+        raise NotFound("Curation batch was not found.")
+    if batch.status != CurationBatchStatus.RUNNING.value:
+        return batch
+    send_policy = resolve_curation_send_policy(env_policy=policy, include_images=include_images)
+    eligible = collect_eligible(
+        session,
+        library_id=batch.library_id,
+        folder=batch.folder,
+        image_ids=image_ids,
+        covering_blur_fn=covering_blur_fn,
+    )
+    if not eligible:
+        batch.status = CurationBatchStatus.FAILED.value
+        batch.error = "No eligible candidates."
+        batch.finished_at = datetime.now(UTC)
+        session.commit()
+        raise NotAllowed("No SAFE/EXCELLENT attested candidates available for curation.")
+    effective_limit = resolve_curation_limit(batch.limit or None, len(eligible))
+    shortlist_inputs = [
+        CandidateInput(
+            image_id=str(item.image.id),
+            aesthetic_score=item.image.score.aesthetic_score if item.image.score else 0,
+            human_rating=item.image.human_rating,
+            uniqueness=item.image.score.uniqueness if item.image.score else 0,
+            phash=item.image.phash,
+            has_approved_crop=item.approved_crop_id is not None or item.covering_blur,
+            crop_aspect=item.crop_aspect,
+            model_state=item.image.model_state,
+            sharpness=item.image.score.sharpness if item.image.score else 0,
+            composition=item.image.score.composition if item.image.score else 0,
+        )
+        for item in eligible
+    ]
+    ranked = rank_candidates(shortlist_inputs, limit=effective_limit)
+    by_id = {str(item.image.id): item for item in eligible}
+    shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
+    payloads = [
+        CurationCandidatePayload(
+            image_id=str(item.image.id),
+            local_score=item.local_score,
+            human_rating=item.image.human_rating,
+            model_state=item.image.model_state,
+            aesthetic_score=item.image.score.aesthetic_score if item.image.score else 0,
+            sharpness=item.image.score.sharpness if item.image.score else 0,
+            composition=item.image.score.composition if item.image.score else 0,
+            uniqueness=item.image.score.uniqueness if item.image.score else 0,
+            content_tags=item.tags,
+            composition_label=item.composition,
+            mood=item.mood,
+            safe_description=item.description,
+            local_reasons=item.local_reasons,
+        )
+        for item in shortlist
+    ]
+    chunk_size = curation_chunk_size(send_policy)
+    chunks = chunk_payloads(payloads, chunk_size=chunk_size)
+    pixels_by_id: dict[str, bytes] = {}
+    if gemini_allows_pixels(send_policy) and preview_bytes_fn is not None:
+        for item in shortlist:
+            if item.image.gemini_label_status != "ok":
+                continue
+            raw = preview_bytes_fn(item.image)
+            if raw:
+                pixels_by_id[str(item.image.id)] = raw
+    sample = shortlist[0]
+    sample_crop = None
+    if sample.approved_crop_id is not None and sample.crop_aspect:
+        sample_crop = {"aspect_ratio": sample.crop_aspect, "reason": "approved"}
+    context = append_voice_to_context(
+        build_context(
+            attested=True,
+            human_rating=sample.image.human_rating,
+            model_state=sample.image.model_state,
+            needs_crop=sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value,
+            has_approved_crop=sample.approved_crop_id is not None,
+            has_approved_covering_blur=sample.covering_blur,
+            policy=send_policy,
+            operator_confirmed=True,
+            content_tags=sample.tags,
+            composition=sample.composition,
+            mood=sample.mood,
+            safe_description=sample.description,
+            crop=sample_crop if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value else None,
+        ),
+        account_voice=account_voice,
+    )
+    audit = GeminiRequest(
+        image_id=sample.image.id,
+        policy=send_policy,
+        context_sha256=context.sha256(),
+        context_json=json.dumps(
+            {
+                "kind": "curation_batch",
+                "batch_id": str(batch.id),
+                "candidate_ids": [p.image_id for p in payloads],
+                "chunks": len(chunks),
+                "chunk_size": chunk_size,
+                "include_images": bool(pixels_by_id),
+                "pixels_attached": len(pixels_by_id),
+                "context": context.model_dump(),
+            },
+            sort_keys=True,
+        ),
+        status="pending",
+    )
+    session.add(audit)
+    session.flush()
+    return _execute_curation_gemini(
+        session,
+        batch=batch,
+        audit=audit,
+        provider=provider,
+        by_id=by_id,
+        payloads=payloads,
+        chunks=chunks,
+        shortlist=shortlist,
+        send_policy=send_policy,
+        account_voice=account_voice,
+        pixels_by_id=pixels_by_id,
+        thinking_budget=thinking_budget,
+    )
+
+
+def _execute_curation_gemini(
+    session: Session,
+    *,
+    batch: CurationBatch,
+    audit: GeminiRequest,
+    provider: CurationProvider,
+    by_id: dict[str, EligibleCandidate],
+    payloads: list[CurationCandidatePayload],
+    chunks: list[list[CurationCandidatePayload]],
+    shortlist: list[EligibleCandidate],
+    send_policy: str,
+    account_voice: str,
+    pixels_by_id: dict[str, bytes],
+    thinking_budget: int,
+) -> CurationBatch:
+    chunk_results: list[CurationResult] = []
+    blocked_ids: list[str] = []
+    try:
+        for index, chunk in enumerate(chunks, start=1):
+            batch.detail = f"shortlist={len(shortlist)} chunks={index - 1}/{len(chunks)}"
+            session.commit()
+            outcome = curate_chunk_resilient(
+                provider,
+                chunk,
+                account_voice=account_voice,
+                policy=send_policy,
+                image_bytes_by_id=pixels_by_id or None,
+                thinking_budget=thinking_budget,
+            )
+            chunk_results.extend(outcome.chunk_results)
+            blocked_ids.extend(outcome.blocked_ids)
+            batch.detail = f"shortlist={len(shortlist)} chunks={index}/{len(chunks)} blocked={len(blocked_ids)}"
+            session.commit()
+    except NotConfigured:
+        audit.status = "failed"
+        batch.status = CurationBatchStatus.FAILED.value
+        batch.error = "Gemini curation failed."
+        batch.finished_at = datetime.now(UTC)
+        session.commit()
+        raise
+    except Exception:
+        audit.status = "failed"
+        batch.status = CurationBatchStatus.FAILED.value
+        batch.error = "Gemini curation failed."
+        batch.finished_at = datetime.now(UTC)
+        session.commit()
+        raise NotConfigured("Gemini curation failed.") from None
+
+    audit.status = "succeeded"
+    ordered_drafts = merge_chunked_drafts(chunk_results, payloads=payloads)
+
+    for index, draft in enumerate(ordered_drafts, start=1):
+        item = by_id[draft.image_id]
+        captions = draft.captions or [
+            CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
+            for style, language in CURATION_CAPTION_STYLES
+        ]
+        preferred: Caption | None = None
+        for caption_draft in captions[:6]:
+            row = Caption(
+                image_id=item.image.id,
+                style=caption_draft.style,
+                language=caption_draft.language,
+                text=caption_draft.text,
+                original_text=caption_draft.text,
+                status=CaptionStatus.GENERATED.value,
+            )
+            session.add(row)
+            session.flush()
+            if preferred is None:
+                preferred = row
+        pick = CurationPick(
+            batch_id=batch.id,
+            image_id=item.image.id,
+            sort_order=index,
+            gemini_rank=draft.rank,
+            local_score=item.local_score,
+            reasons_json=json.dumps(draft.reasons[:8], ensure_ascii=False),
+            suggested_tags_json=json.dumps(draft.tags[:12], ensure_ascii=False),
+            status=CurationPickStatus.SUGGESTED.value,
+            preferred_caption_id=preferred.id if preferred else None,
+        )
+        session.add(pick)
+
+    batch.status = CurationBatchStatus.READY.value
+    batch.finished_at = datetime.now(UTC)
+    mode = "preview" if pixels_by_id else "text_only"
+    chunk_size = curation_chunk_size(send_policy)
+    blocked_note = f" blocked={len(blocked_ids)}"
+    if blocked_ids:
+        blocked_note += f" ids={','.join(blocked_ids[:12])}"
+    batch.detail = (
+        f"picks={len(ordered_drafts)} shortlist={len(shortlist)} "
+        f"chunks={len(chunks)} chunk_size={chunk_size} mode={mode} pixels={len(pixels_by_id)}{blocked_note}"
+    )
+    session.commit()
+    session.refresh(batch)
+    return batch
+
+
 def run_curation(
     session: Session,
     provider: CurationProvider,
@@ -239,6 +565,8 @@ def run_curation(
     covering_blur_fn,
     include_images: bool | None = None,
     preview_bytes_fn=None,
+    defer_execution: bool = False,
+    thinking_budget: int = 512,
 ) -> CurationBatch:
     """Build a draft curation batch. Fail-closed; never queues or publishes.
 
@@ -302,6 +630,8 @@ def run_curation(
     pixels_by_id: dict[str, bytes] = {}
     if gemini_allows_pixels(send_policy) and preview_bytes_fn is not None:
         for item in shortlist:
+            if item.image.gemini_label_status != "ok":
+                continue
             raw = preview_bytes_fn(item.image)
             if raw:
                 pixels_by_id[str(item.image.id)] = raw
@@ -361,88 +691,23 @@ def run_curation(
     session.add(batch)
     session.flush()
     session.commit()
-
-    chunk_results: list[CurationResult] = []
-    try:
-        for index, chunk in enumerate(chunks, start=1):
-            batch.detail = f"shortlist={len(shortlist)} chunks={index - 1}/{len(chunks)}"
-            session.commit()
-            chunk_pixels = {
-                item.image_id: pixels_by_id[item.image_id]
-                for item in chunk
-                if item.image_id in pixels_by_id
-            } or None
-            chunk_results.append(
-                provider.curate_batch(
-                    chunk,
-                    account_voice=account_voice,
-                    policy=send_policy,
-                    image_bytes_by_id=chunk_pixels,
-                )
-            )
-            batch.detail = f"shortlist={len(shortlist)} chunks={index}/{len(chunks)}"
-            session.commit()
-    except (GeminiBlocked, NotConfigured):
-        audit.status = "failed"
-        batch.status = CurationBatchStatus.FAILED.value
-        batch.error = "Gemini curation failed."
-        batch.finished_at = datetime.now(UTC)
-        session.commit()
-        raise
-    except Exception:
-        audit.status = "failed"
-        batch.status = CurationBatchStatus.FAILED.value
-        batch.error = "Gemini curation failed."
-        batch.finished_at = datetime.now(UTC)
-        session.commit()
-        raise NotConfigured("Gemini curation failed.") from None
-
-    audit.status = "succeeded"
-    ordered_drafts = merge_chunked_drafts(chunk_results, payloads=payloads)
-
-    for index, draft in enumerate(ordered_drafts, start=1):
-        item = by_id[draft.image_id]
-        captions = draft.captions or [
-            CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
-            for style, language in CURATION_CAPTION_STYLES
-        ]
-        preferred: Caption | None = None
-        for caption_draft in captions[:6]:
-            row = Caption(
-                image_id=item.image.id,
-                style=caption_draft.style,
-                language=caption_draft.language,
-                text=caption_draft.text,
-                original_text=caption_draft.text,
-                status=CaptionStatus.GENERATED.value,
-            )
-            session.add(row)
-            session.flush()
-            if preferred is None:
-                preferred = row
-        pick = CurationPick(
-            batch_id=batch.id,
-            image_id=item.image.id,
-            sort_order=index,
-            gemini_rank=draft.rank,
-            local_score=item.local_score,
-            reasons_json=json.dumps(draft.reasons[:8], ensure_ascii=False),
-            suggested_tags_json=json.dumps(draft.tags[:12], ensure_ascii=False),
-            status=CurationPickStatus.SUGGESTED.value,
-            preferred_caption_id=preferred.id if preferred else None,
-        )
-        session.add(pick)
-
-    batch.status = CurationBatchStatus.READY.value
-    batch.finished_at = datetime.now(UTC)
-    mode = "preview" if pixels_by_id else "text_only"
-    batch.detail = (
-        f"picks={len(ordered_drafts)} shortlist={len(shortlist)} "
-        f"chunks={len(chunks)} chunk_size={chunk_size} mode={mode} pixels={len(pixels_by_id)}"
+    if defer_execution:
+        session.refresh(batch)
+        return batch
+    return _execute_curation_gemini(
+        session,
+        batch=batch,
+        audit=audit,
+        provider=provider,
+        by_id=by_id,
+        payloads=payloads,
+        chunks=chunks,
+        shortlist=shortlist,
+        send_policy=send_policy,
+        account_voice=account_voice,
+        pixels_by_id=pixels_by_id,
+        thinking_budget=thinking_budget,
     )
-    session.commit()
-    session.refresh(batch)
-    return batch
 
 
 def apply_suggested_tags(session: Session, pick: CurationPick) -> list[str]:

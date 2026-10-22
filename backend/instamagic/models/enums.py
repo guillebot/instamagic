@@ -40,6 +40,7 @@ class JobKind(enum.StrEnum):
     DERIVATIVE = "derivative"
     ASSESS = "assess"
     CURATE = "curate"
+    GEMINI_LABEL = "gemini_label"
 
 
 class JobStatus(enum.StrEnum):

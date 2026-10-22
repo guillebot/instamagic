@@ -18,8 +18,22 @@ class NotConfigured(AppError):
     status_code = 503
 
 
-class GeminiBlocked(NotAllowed):
+class GeminiResponseError(NotConfigured):
+    """Gemini returned HTTP 200 but no usable model output."""
+
+
+class GeminiEmpty(GeminiResponseError):
     pass
+
+
+class GeminiTruncated(GeminiResponseError):
+    pass
+
+
+class GeminiBlocked(NotAllowed):
+    def __init__(self, detail: str, *, reason: str | None = None) -> None:
+        super().__init__(detail)
+        self.reason = reason or detail
 
 
 class InstagramNotConfigured(NotConfigured):

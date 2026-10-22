@@ -75,6 +75,7 @@ class CurationProvider(Protocol):
         account_voice: str,
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
+        thinking_budget: int = 512,
     ) -> CurationResult: ...
 
 
@@ -82,13 +83,17 @@ def curation_chunk_size(policy: str) -> int:
     return GEMINI_CURATION_PIXEL_CHUNK_SIZE if gemini_allows_pixels(policy) else GEMINI_CURATION_CHUNK_SIZE
 
 
+def curation_max_output_tokens(candidate_count: int) -> int:
+    return min(8192, max(1024, candidate_count * 256))
+
+
 def curation_system_instruction() -> str:
     return (
         "You curate a photography Instagram feed from the operator's own archive. "
-        "Rank the safest, most distinctive frames for posting. Prefer diversity of mood and composition. "
-        "When images are attached, ground tags and captions in what you see "
-        "(light, color, subject placement) without inventing identity or body details. "
-        "Suggest short content tags and a few caption options per pick. "
+        "Rank every candidate (1 = best post next). Prefer diversity of mood and composition. "
+        "Use the provided tags and descriptions; when JPEG parts follow, ground reasons in what you see "
+        "without inventing identity or body details. "
+        "Return one ranked row per candidate image_id — do not omit ids. "
         "Do not use engagement bait. Do not claim anything about bodies. "
         "Return only JSON matching the schema. Never invent filesystem paths."
     )
@@ -97,12 +102,13 @@ def curation_system_instruction() -> str:
 def curation_request_text(*, candidates: list[CurationCandidatePayload], account_voice: str) -> str:
     styles = ", ".join(f"{style}/{language}" for style, language in CURATION_CAPTION_STYLES)
     payload = [item.model_dump() for item in candidates]
+    ids = [item.image_id for item in candidates]
     return (
         f"Account voice: {account_voice[:400]}\n"
         f"Candidates (JSON): {json.dumps(payload, sort_keys=True)}\n"
-        f"Pick and rank the best subset (up to {len(candidates)}). "
+        f"Rank every candidate. Required image_ids: {json.dumps(ids)}. "
         f"When JPEG parts follow, each is labeled with its image_id — match them to the JSON. "
-        f"For each pick provide reasons, up to 8 tags, and captions for: {styles}."
+        f"For each ranked row provide reasons, up to 8 tags, and captions for: {styles}."
     )
 
 
@@ -112,6 +118,8 @@ def build_curation_request_body(
     account_voice: str,
     policy: str = "text_only",
     image_bytes_by_id: dict[str, bytes] | None = None,
+    thinking_budget: int = 512,
+    max_output_tokens: int | None = None,
 ) -> dict[str, object]:
     parts: list[dict[str, object]] = [
         {"text": curation_request_text(candidates=candidates, account_voice=account_voice)}
@@ -135,6 +143,8 @@ def build_curation_request_body(
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
             "temperature": 0.5,
+            "maxOutputTokens": max_output_tokens or curation_max_output_tokens(len(candidates)),
+            "thinkingConfig": {"thinkingBudget": thinking_budget},
             "responseMimeType": "application/json",
             "responseSchema": {
                 "type": "OBJECT",
