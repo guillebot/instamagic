@@ -228,6 +228,7 @@ export function ReviewPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const folder = searchParams.get("folder") ?? "";
   const recursive = searchParams.get("recursive") === "1";
+  const focusImageId = searchParams.get("image");
   const parentRef = useRef<HTMLDivElement>(null);
   const classifyDialogRef = useRef<HTMLDivElement>(null);
   const currentIdRef = useRef<string | null>(null);
@@ -447,6 +448,32 @@ export function ReviewPage() {
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryString, libraryId]);
+
+  useEffect(() => {
+    if (!focusImageId) return;
+    if (items.some((row) => row.id === focusImageId)) {
+      setCurrentId(focusImageId);
+      setPreview(true);
+      return;
+    }
+    let cancelled = false;
+    void api<ImageItem>(`/api/images/${focusImageId}`)
+      .then((image) => {
+        if (cancelled) return;
+        sessionImagesRef.current.set(image.id, image);
+        setItems((rows) => (rows.some((row) => row.id === image.id) ? rows : [image, ...rows]));
+        setCurrentId(image.id);
+        setPreview(true);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setMessage(err instanceof Error ? err.message : "Could not open image from link.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [focusImageId, items]);
 
   useEffect(() => {
     const element = parentRef.current;

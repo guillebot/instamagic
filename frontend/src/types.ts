@@ -152,6 +152,26 @@ export type CandidateItem = {
   held_back: number;
   crop_aspect: string | null;
   model_state: string | null;
+  has_tags: boolean;
+  has_caption: boolean;
+  published: boolean;
+  gemini_label_status: string | null;
+};
+
+export type CandidatePage = {
+  items: CandidateItem[];
+  next_offset: number | null;
+};
+
+export type CandidateBulkItemResult = {
+  image_id: string;
+  ok: boolean;
+  error?: string | null;
+};
+
+export type CandidateBulkQueueResult = {
+  results: CandidateBulkItemResult[];
+  queued_count: number;
 };
 
 export type CurationPick = {
