@@ -4,8 +4,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0011_hashtag_discovery"
-down_revision = "0010_instagram_insights"
+revision = "0014_hashtag_discovery"
+down_revision = "0013_instagram_insights"
 branch_labels = None
 depends_on = None
 
