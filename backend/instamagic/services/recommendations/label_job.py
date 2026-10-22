@@ -25,6 +25,8 @@ from instamagic.models import (
     TagSource,
 )
 from instamagic.models.enums import JobKind
+from instamagic.services.blurs.gate_context import publishing_gate_kwargs
+from instamagic.services.blurs.unlock import blur_unlock_effective
 from instamagic.services.gemini.context import build_context, gemini_allows_pixels
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.gemini.labeling import (
@@ -33,8 +35,6 @@ from instamagic.services.gemini.labeling import (
     label_status_is_terminal,
     should_retry_label,
 )
-from instamagic.services.blurs.gate_context import publishing_gate_kwargs
-from instamagic.services.blurs.unlock import blur_unlock_effective
 from instamagic.services.images.presentation import normalize_human_rating_filter
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.curate import collect_eligible
