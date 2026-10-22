@@ -7,7 +7,9 @@ import type {
   CandidateBulkQueueResult,
   CandidateItem,
   CandidatePage,
-  GeminiLabelJob,
+  CaptionItem,
+  JobItem,
+  QueueItem,
 } from "../types";
 
 const PAGE_SIZE = 20;
@@ -173,20 +175,15 @@ export function CandidatesPage() {
     }
   }
 
-  async function pollLabelJob(jobId: string, total: number) {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
+  async function pollLabelJob(jobId: string, imageCount: number) {
+    for (let attempt = 0; attempt < 240; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      try {
-        const job = await api<GeminiLabelJob>(`/api/gemini/label/${jobId}`);
-        const processed = job.processed ?? job.results?.length ?? 0;
-        setLabelProgress(`Gemini labeling… ${processed}/${job.total ?? total}`);
-        if (job.status === "succeeded" || job.status === "failed") {
-          return job;
-        }
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 404) {
-          throw err;
-        }
+      const job = await api<JobItem>(`/api/jobs/${jobId}`);
+      const total = job.files_total ?? imageCount;
+      const processed = job.files_processed ?? 0;
+      setLabelProgress(`Gemini labeling… ${processed}/${total}`);
+      if (job.status === "succeeded" || job.status === "failed" || job.status === "interrupted") {
+        return job;
       }
     }
     return null;
@@ -199,18 +196,21 @@ export function CandidatesPage() {
     setMessage("");
     setLabelProgress(null);
     try {
-      const started = await api<{ job_id: string }>("/api/gemini/label", {
+      const started = await api<{ job_id: string; status?: string }>("/api/gemini/label", {
         method: "POST",
         body: JSON.stringify({ image_ids: ids }),
       });
       setLabelProgress(`Gemini labeling… 0/${ids.length}`);
       const job = await pollLabelJob(started.job_id, ids.length);
-      if (job?.results?.length) {
-        const failed = job.results.filter((row) => row.status !== "ok");
+      if (job?.status === "failed" && job.error) {
+        setMessage(`Labeling failed: ${job.error}`);
+      } else if (job?.status === "succeeded") {
+        const skipped = job.files_skipped ?? 0;
+        const failed = job.files_failed ?? 0;
         setMessage(
-          failed.length
-            ? `Labeling finished with ${failed.length} issue(s). Refreshing list.`
-            : `Generated labels and captions for ${job.results.length} image(s).`,
+          skipped || failed
+            ? `Labeling done (${job.files_processed ?? 0} ok, ${skipped} skipped, ${failed} failed).`
+            : `Generated labels and captions for ${job.files_processed ?? ids.length} image(s).`,
         );
       } else {
         setMessage("Labeling job finished.");
@@ -225,6 +225,74 @@ export function CandidatesPage() {
     } finally {
       setBusy(null);
       setLabelProgress(null);
+    }
+  }
+
+  async function scheduleAutoSlot() {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBusy("schedule");
+    setMessage("");
+    setActionErrors({});
+    try {
+      const queueResult = await api<CandidateBulkQueueResult>("/api/candidates/queue", {
+        method: "POST",
+        body: JSON.stringify({ image_ids: ids }),
+      });
+      const errors: Record<string, string> = {};
+      for (const row of queueResult.results) {
+        if (!row.ok && row.error) errors[row.image_id] = row.error;
+      }
+      let queueItems = await api<QueueItem[]>("/api/queue");
+      let scheduled = 0;
+      for (const imageId of ids) {
+        const gate = queueResult.results.find((row) => row.image_id === imageId);
+        if (gate && !gate.ok) continue;
+        let item = queueItems.find((row) => row.image.id === imageId);
+        if (!item) {
+          errors[imageId] = "Could not find queue item after enqueue.";
+          continue;
+        }
+        try {
+          if (item.state === "CANDIDATE") {
+            item = await api<QueueItem>(`/api/queue/${item.id}/approve`, { method: "POST" });
+          }
+          if (item.state !== "APPROVED" && item.state !== "FAILED") {
+            errors[imageId] = `Queue item is ${item.state}; approve before scheduling.`;
+            continue;
+          }
+          let captionId = item.caption_id;
+          if (!captionId) {
+            const captions = await api<CaptionItem[]>(`/api/images/${imageId}/captions`);
+            captionId =
+              captions.find((row) => row.status !== "rejected")?.id ?? captions[0]?.id ?? null;
+          }
+          if (!captionId) {
+            errors[imageId] = "No caption yet — run Generate labels + captions or add one in Queue.";
+            continue;
+          }
+          await api(`/api/queue/${item.id}/schedule`, {
+            method: "POST",
+            body: JSON.stringify({ mode: "auto_slot", caption_id: captionId }),
+          });
+          scheduled += 1;
+        } catch (err) {
+          errors[imageId] = err instanceof ApiError ? err.message : "Schedule failed.";
+        }
+      }
+      setActionErrors(errors);
+      setMessage(
+        scheduled === ids.length
+          ? `Scheduled ${scheduled} in the next auto-slot.`
+          : `Scheduled ${scheduled} of ${ids.length}. See per-item errors below.`,
+      );
+      await refreshCandidates();
+      await queryClient.invalidateQueries({ queryKey: ["queue"] });
+      await queryClient.invalidateQueries({ queryKey: ["posting-schedule"] });
+    } catch (err) {
+      setMessage(err instanceof ApiError ? err.message : "Could not schedule selected images.");
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -341,6 +409,9 @@ export function CandidatesPage() {
           </button>
           <button className="button" type="button" disabled={busy !== null} onClick={() => void addToQueue()}>
             {busy === "queue" ? "Queueing…" : "Add to publish queue"}
+          </button>
+          <button className="button" type="button" disabled={busy !== null} onClick={() => void scheduleAutoSlot()}>
+            {busy === "schedule" ? "Scheduling…" : "Schedule (auto-slot)"}
           </button>
           <button className="button" type="button" disabled={busy !== null} onClick={() => void generateLabels()}>
             {busy === "label" ? "Labeling…" : "Generate labels + captions"}

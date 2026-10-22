@@ -451,28 +451,19 @@ export function ReviewPage() {
 
   useEffect(() => {
     if (!focusImageId) return;
+    if (items.some((row) => row.id === focusImageId)) {
+      setCurrentId(focusImageId);
+      setPreview(true);
+      return;
+    }
     let cancelled = false;
     void api<ImageItem>(`/api/images/${focusImageId}`)
       .then((image) => {
         if (cancelled) return;
-        setItems((rows) => {
-          const index = rows.findIndex((row) => row.id === image.id);
-          if (index >= 0) {
-            setSelected(index);
-            return rows;
-          }
-          setSelected(0);
-          return [image, ...rows];
-        });
+        sessionImagesRef.current.set(image.id, image);
+        setItems((rows) => (rows.some((row) => row.id === image.id) ? rows : [image, ...rows]));
+        setCurrentId(image.id);
         setPreview(true);
-        setSearchParams(
-          (current) => {
-            const params = new URLSearchParams(current);
-            params.delete("image");
-            return params;
-          },
-          { replace: true },
-        );
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -482,7 +473,7 @@ export function ReviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [focusImageId, setSearchParams]);
+  }, [focusImageId, items]);
 
   useEffect(() => {
     const element = parentRef.current;
