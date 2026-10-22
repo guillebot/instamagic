@@ -112,6 +112,10 @@ from instamagic.services.images.presentation import (
     normalize_human_rating_filter,
 )
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
+from instamagic.services.instagram.insights_sync import (
+    refresh_token_scopes,
+    sync_instagram_insights,
+)
 from instamagic.services.instagram.oauth import (
     build_authorize_url,
     complete_oauth_with_page,
@@ -145,6 +149,12 @@ from instamagic.services.pipeline import (
 from instamagic.services.queues import snapshot_queues
 from instamagic.services.recommendations.curate import queue_picks, run_curation
 from instamagic.services.recommendations.gates import publishing_gate
+from instamagic.services.recommendations.performance import (
+    best_posting_times,
+    image_performance_boost,
+    insights_dashboard,
+    load_performance_signals,
+)
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -1115,6 +1125,7 @@ def candidates(
     limit: int = Query(default=20, ge=1, le=50),
     _auth: None = Depends(require_session),
     session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
 ) -> list[CandidateOut]:
     rows = session.scalars(
         select(Image)
@@ -1127,8 +1138,11 @@ def candidates(
             selectinload(Image.crops),
             selectinload(Image.blurs),
             selectinload(Image.queue_items),
+            selectinload(Image.tags).selectinload(ImageTag.tag),
         )
     ).all()
+    perf_weight = settings.curate_performance_weight
+    perf_signals = load_performance_signals(session) if perf_weight > 0 else None
     attested: dict[UUID, bool] = {}
     inputs: list[CandidateInput] = []
     images: dict[str, Image] = {}
@@ -1144,6 +1158,7 @@ def candidates(
             continue
         score = image.score
         covered = approved is not None or covering_blur
+        tags = [link.tag.name for link in image.tags if link.tag is not None] if image.tags else []
         inputs.append(
             CandidateInput(
                 image_id=str(image.id),
@@ -1156,11 +1171,14 @@ def candidates(
                 model_state=image.model_state,
                 sharpness=score.sharpness if score else 0,
                 composition=score.composition if score else 0,
+                performance_score=(
+                    image_performance_boost(perf_signals, str(image.id), tags) if perf_signals else 0.0
+                ),
             )
         )
         images[str(image.id)] = image
         aspects[str(image.id)] = approved.aspect_ratio if approved else None
-    ranked = rank_candidates(inputs, limit=limit)
+    ranked = rank_candidates(inputs, limit=limit, performance_weight=perf_weight)
     return [
         CandidateOut(
             image=_image_out(session, images[item.image_id]),
@@ -1198,6 +1216,7 @@ def create_curation(
         covering_blur_fn=_has_approved_covering_blur,
         include_images=body.include_images,
         preview_bytes_fn=lambda image: _curation_derivative_bytes(settings, image),
+        performance_weight=settings.curate_performance_weight,
     )
     return _curation_batch_out(session, batch)
 
@@ -1413,6 +1432,7 @@ def instagram_account_refresh(
             "account": status.get("account"),
         }
     save_account_profile(session, details)
+    refresh_token_scopes(session, client)
     status = connection_status_fields(settings, session, configured=True)
     return {
         **status,
@@ -1420,6 +1440,37 @@ def instagram_account_refresh(
         "error": None,
         "account": details.as_dict(),
     }
+
+
+@router.get("/api/instagram/insights/dashboard")
+def instagram_insights_dashboard(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    return insights_dashboard(session)
+
+
+@router.get("/api/instagram/best-posting-times")
+def instagram_best_posting_times(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    return best_posting_times(session)
+
+
+@router.post("/api/instagram/insights/sync")
+def instagram_insights_sync(
+    request: Request,
+    force: bool = Query(default=False),
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    result = sync_instagram_insights(session, settings, client, force=force)
+    status = connection_status_fields(settings, session, configured=bool(client.configured()))
+    return {**status, **result}
 
 
 @router.post("/api/instagram/meta-app")

@@ -1,0 +1,19 @@
+"""Enqueue recurring maintenance jobs (insights sync)."""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from redis import Redis
+from rq import Queue
+
+INSIGHTS_BOOTSTRAP_KEY = "instamagic:periodic:insights_bootstrap"
+
+
+def ensure_insights_sync_scheduled(redis_url: str) -> None:
+    connection = Redis.from_url(redis_url)
+    if connection.get(INSIGHTS_BOOTSTRAP_KEY):
+        return
+    queue = Queue("io", connection=connection)
+    queue.enqueue("instamagic.workers.tasks.sync_instagram_insights_job")
+    connection.set(INSIGHTS_BOOTSTRAP_KEY, "1", ex=int(timedelta(hours=5).total_seconds()))

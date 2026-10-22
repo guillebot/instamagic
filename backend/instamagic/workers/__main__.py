@@ -20,7 +20,9 @@ def main() -> None:
 
         assert_configured_external_mounts(settings.library_roots())
     log.info("worker_start", queue=queue_name)
+    use_scheduler = False
     if queue_name == "io":
+        from instamagic.workers.periodic import ensure_insights_sync_scheduled
         from instamagic.workers.resume import requeue_interrupted_scans
 
         try:
@@ -30,9 +32,14 @@ def main() -> None:
         except Exception:
             log.info("interrupted_scan_requeue_failed")
             raise
+        try:
+            ensure_insights_sync_scheduled(settings.redis_url)
+        except Exception:
+            log.info("insights_sync_schedule_failed")
+        use_scheduler = True
     connection = Redis.from_url(settings.redis_url)
     worker = Worker([Queue(queue_name, connection=connection)], connection=connection)
-    worker.work(with_scheduler=False)
+    worker.work(with_scheduler=use_scheduler)
 
 
 if __name__ == "__main__":
