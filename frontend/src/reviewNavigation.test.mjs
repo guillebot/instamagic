@@ -1,5 +1,5 @@
 /**
- * Review cursor / URL sync helpers (no browser).
+ * Review cursor / grid merge helpers (no browser).
  * Run: node frontend/src/reviewNavigation.test.mjs
  */
 
@@ -7,34 +7,95 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
-function item(id) {
-  return { id, relative_path: id, human_rating: null };
+function item(id, ingested = "") {
+  const day = String(10 + id.charCodeAt(0) % 18).padStart(2, "0");
+  return {
+    id,
+    relative_path: id,
+    human_rating: null,
+    ingested_at: ingested || `2024-03-${day}T00:00:00Z`,
+  };
 }
 
-function mergeImageListRefresh(previous, fresh, currentId, pinned) {
-  let nextPinned = pinned;
-  if (currentId) {
-    const inFresh = fresh.find((row) => row.id === currentId);
-    if (inFresh) {
-      nextPinned = null;
-    } else {
-      const fromPrev = previous.find((row) => row.id === currentId);
-      const fromPinned = pinned?.id === currentId ? pinned : null;
-      nextPinned = fromPrev ?? fromPinned ?? nextPinned;
-    }
+function imageSortKey(row) {
+  const ingested = row.ingested_at ? Date.parse(row.ingested_at) : 0;
+  return [ingested, row.id];
+}
+
+function compareImagesNewestFirst(a, b) {
+  const [ta, ida] = imageSortKey(a);
+  const [tb, idb] = imageSortKey(b);
+  if (tb !== ta) return tb - ta;
+  return idb.localeCompare(ida);
+}
+
+function mergeGridUpdatesInPlace(previous, freshHead) {
+  const freshById = new Map(freshHead.map((row) => [row.id, row]));
+  const prevIds = new Set(previous.map((row) => row.id));
+  const pendingNewItems = freshHead.filter((row) => !prevIds.has(row.id));
+  const items = previous.map((row) => {
+    const updated = freshById.get(row.id);
+    if (updated) return { ...updated, gridStale: false };
+    return { ...row, gridStale: true };
+  });
+  return { items, pendingNewItems };
+}
+
+function appendGridPage(previous, pageItems) {
+  const seen = new Set(previous.map((row) => row.id));
+  const appended = [];
+  for (const row of pageItems) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    appended.push({ ...row, gridStale: false });
   }
-  return { items: fresh, pinned: nextPinned };
+  return appended.length ? [...previous, ...appended] : previous;
 }
 
-function resolveCurrentImage(items, currentId, pinned) {
-  if (!currentId) return undefined;
-  return items.find((row) => row.id === currentId) ?? (pinned?.id === currentId ? pinned : undefined);
+function applyPendingNewPhotos(previous, pending) {
+  const prevIds = new Set(previous.map((row) => row.id));
+  const newcomers = pending.filter((row) => !prevIds.has(row.id));
+  if (newcomers.length === 0) return previous;
+  if (previous.length === 0) return [...newcomers].sort(compareImagesNewestFirst).map((row) => ({ ...row, gridStale: false }));
+  const headKey = imageSortKey(previous[0]);
+  const atFront = [];
+  const atEnd = [];
+  for (const row of newcomers) {
+    const key = imageSortKey(row);
+    const newer = key[0] > headKey[0] || (key[0] === headKey[0] && key[1].localeCompare(headKey[1]) > 0);
+    if (newer) atFront.push(row);
+    else atEnd.push(row);
+  }
+  atFront.sort(compareImagesNewestFirst);
+  atEnd.sort(compareImagesNewestFirst);
+  return [
+    ...atFront.map((row) => ({ ...row, gridStale: false })),
+    ...previous,
+    ...atEnd.map((row) => ({ ...row, gridStale: false })),
+  ];
 }
 
-function nextImageIdAfterCurrent(orderedIds, currentId) {
-  const pos = orderedIds.indexOf(currentId);
-  if (pos < 0 || pos >= orderedIds.length - 1) return null;
-  return orderedIds[pos + 1];
+function buildRowTopIndex(rows, gap) {
+  const map = new Map();
+  let y = 0;
+  for (const row of rows) {
+    for (const entry of row.items) map.set(entry.id, y);
+    y += row.height + gap;
+  }
+  return map;
+}
+
+function captureScrollAnchor(scrollTop, imageId, rowTops) {
+  if (!imageId) return null;
+  const rowTop = rowTops.get(imageId);
+  if (rowTop === undefined) return null;
+  return { imageId, offsetBelowTop: scrollTop - rowTop };
+}
+
+function scrollTopForAnchor(anchor, rowTops) {
+  const rowTop = rowTops.get(anchor.imageId);
+  if (rowTop === undefined) return null;
+  return Math.max(0, rowTop + anchor.offsetBelowTop);
 }
 
 function shouldApplyInitialImageFromUrl(initialized, items, urlImageId) {
@@ -42,50 +103,42 @@ function shouldApplyInitialImageFromUrl(initialized, items, urlImageId) {
   return items.some((row) => row.id === urlImageId) ? urlImageId : null;
 }
 
-function navVisit(stacks, currentId, nextId) {
-  if (!currentId || currentId === nextId) return stacks;
-  return { back: [...stacks.back, currentId], forward: [] };
-}
+// In-place refresh keeps order and marks filtered-out rows stale.
+const grid = [item("a"), item("b"), item("c")].map((row) => ({ ...row, gridStale: false }));
+const head = [item("a"), item("c"), item("new")];
+const merged = mergeGridUpdatesInPlace(grid, head);
+assert(merged.items.map((row) => row.id).join(",") === "a,b,c", "grid order preserved");
+assert(merged.items[1].gridStale === true, "missing from filter marked stale");
+assert(merged.pendingNewItems.length === 1 && merged.pendingNewItems[0].id === "new", "new ids queued");
 
-function navBack(stacks, currentId) {
-  if (stacks.back.length === 0) return { stacks, targetId: null };
-  const back = [...stacks.back];
-  const targetId = back.pop() ?? null;
-  if (!targetId) return { stacks, targetId: null };
-  return { stacks: { back, forward: [...stacks.forward, currentId] }, targetId };
-}
+// Append page does not reorder or duplicate.
+const page2 = [item("c"), item("d")];
+const appended = appendGridPage(merged.items, page2);
+assert(appended.map((row) => row.id).join(",") === "a,b,c,d", "append only new tail");
 
-// Background refetch drops rated rows but cursor stays on the same id.
-const before = [item("a"), item("b"), item("c")];
-const afterRefresh = [item("a"), item("c")];
-const { items: merged, pinned } = mergeImageListRefresh(before, afterRefresh, "b", null);
-assert(merged.length === 2 && merged[1].id === "c", "list replaced from API");
-assert(pinned?.id === "b", "rated image pinned when filtered out");
-const shown = resolveCurrentImage(merged, "b", pinned);
-assert(shown?.id === "b", "displayed image id unchanged after refetch");
+// Pending newcomers newer than head insert at front; others at end.
+const withPending = applyPendingNewPhotos(appended, [
+  item("z", "2099-01-01T00:00:00Z"),
+  item("e", "2020-01-01T00:00:00Z"),
+]);
+assert(withPending[0].id === "z", "brand-new scan at front");
+assert(withPending[withPending.length - 1].id === "e", "older newcomer at end");
 
-// Advance uses snapshot at action time.
-const ids = ["a", "b", "c"];
-assert(nextImageIdAfterCurrent(ids, "b") === "c", "next after rate");
-assert(nextImageIdAfterCurrent(["a", "c"], "b") === null, "missing id has no next");
+// Scroll anchor survives row height change.
+const rowsBefore = [{ items: [{ id: "a" }, { id: "b" }], height: 100 }];
+const topsBefore = buildRowTopIndex(rowsBefore, 8);
+const anchor = captureScrollAnchor(150, "b", topsBefore);
+const rowsAfter = [
+  { items: [{ id: "a" }, { id: "b" }], height: 100 },
+  { items: [{ id: "c" }], height: 120 },
+];
+const topsAfter = buildRowTopIndex(rowsAfter, 8);
+assert(scrollTopForAnchor(anchor, topsAfter) === 150, "anchor restores same scrollTop");
 
-// URL param must not override after session navigation (simulated re-render).
+// Stale URL must not reset cursor after advance.
 let initialized = false;
-let currentId = "c";
-const urlStillSaysFirstOpened = "a";
-const fromUrl = shouldApplyInitialImageFromUrl(initialized, afterRefresh, urlStillSaysFirstOpened);
-assert(fromUrl === "a", "first mount picks URL image");
+assert(shouldApplyInitialImageFromUrl(initialized, head, "a") === "a", "first mount uses URL");
 initialized = true;
-currentId = "c";
-const staleUrlReapply = shouldApplyInitialImageFromUrl(initialized, afterRefresh, urlStillSaysFirstOpened);
-assert(staleUrlReapply === null, "stale ?image= must not reset cursor after advance");
-assert(currentId === "c", "session cursor stays on advanced image");
-
-// Back stack.
-let stacks = { back: [], forward: [] };
-stacks = navVisit(stacks, "a", "b");
-stacks = navVisit(stacks, "b", "c");
-const back = navBack(stacks, "c");
-assert(back.targetId === "b", "back returns previous id");
+assert(shouldApplyInitialImageFromUrl(initialized, head, "a") === null, "stale URL ignored");
 
 console.log("reviewNavigation.test.mjs: ok");

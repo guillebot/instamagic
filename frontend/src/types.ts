@@ -16,6 +16,7 @@ export type ImageItem = {
   height: number | null;
   orientation: string | null;
   captured_at: string | null;
+  ingested_at?: string | null;
   camera: string | null;
   session_name: string | null;
   model_state: string | null;

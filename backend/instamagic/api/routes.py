@@ -167,6 +167,7 @@ def _image_out(session: Session, image: Image) -> ImageOut:
         height=image.height,
         orientation=image.orientation,
         captured_at=image.captured_at,
+        ingested_at=image.ingested_at,
         camera=image.camera,
         lens=image.lens,
         focal_length_mm=image.focal_length_mm,
