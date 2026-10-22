@@ -41,7 +41,9 @@ class Settings(BaseSettings):
     # When true (Compose), every ALLOWED_LIBRARY_ROOTS entry must be a real host bind mount.
     require_external_library_mounts: bool = False
     gemini_api_key: str = ""
-    gemini_image_policy: str = "text_only"
+    # Product default: derivative previews may go to Gemini for gated Safe/Publishable frames.
+    # Opt out with text_only. Curate UI can still toggle include_images per run under this ceiling.
+    gemini_image_policy: str = "preview"
     gemini_model: str = "gemini-2.5-flash"
     gemini_provider: str = "google"
     # Fail-closed: false by default. True only with AUTO_PUBLISH_ACK exact phrase.
@@ -95,8 +97,12 @@ class Settings(BaseSettings):
             raise ValueError("SAFETY_CLASSIFIER=fake is refused when ENVIRONMENT is production or stage.")
         if self.safety_classifier == "onnx" and not self.safety_model_sha256.strip():
             raise ValueError("SAFETY_MODEL_SHA256 is required when SAFETY_CLASSIFIER=onnx.")
-        if self.gemini_image_policy not in {"text_only", "safe_previews", "manual_only"}:
-            raise ValueError("GEMINI_IMAGE_POLICY is invalid.")
+        from instamagic.services.gemini.context import GEMINI_IMAGE_POLICIES
+
+        if self.gemini_image_policy not in GEMINI_IMAGE_POLICIES:
+            raise ValueError(
+                "GEMINI_IMAGE_POLICY must be text_only, safe_previews, preview, selected, or manual_only."
+            )
         if self.gemini_provider not in {"google", "fake"}:
             raise ValueError("GEMINI_PROVIDER must be google or fake.")
         if self.instagram_provider not in {"graph", "fake"}:

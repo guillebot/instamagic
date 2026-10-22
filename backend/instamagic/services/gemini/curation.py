@@ -1,13 +1,23 @@
-"""Gemini request/response shapes for batch curation (text-only; no library pixels)."""
+"""Gemini request/response shapes for batch curation.
+
+Default text_only sends metadata only. With safe_previews / preview / selected,
+derivative JPEG bytes (preview or thumb) may be attached — never originals or paths.
+"""
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Protocol
 
 from instamagic.services.gemini.captions import CaptionDraft
-from instamagic.services.gemini.context import assert_safe_gemini_payload
+from instamagic.services.gemini.context import assert_safe_gemini_payload, gemini_allows_pixels
 from pydantic import BaseModel, Field, field_validator
+
+# One Gemini call stays small enough for cost/latency; run_curation chunks larger shortlists.
+GEMINI_CURATION_CHUNK_SIZE = 32
+# Fewer frames per call when derivative pixels ride along (payload + token cost).
+GEMINI_CURATION_PIXEL_CHUNK_SIZE = 16
 
 CURATION_CAPTION_STYLES: tuple[tuple[str, str], ...] = (
     ("minimal", "en"),
@@ -64,13 +74,20 @@ class CurationProvider(Protocol):
         *,
         account_voice: str,
         policy: str,
+        image_bytes_by_id: dict[str, bytes] | None = None,
     ) -> CurationResult: ...
+
+
+def curation_chunk_size(policy: str) -> int:
+    return GEMINI_CURATION_PIXEL_CHUNK_SIZE if gemini_allows_pixels(policy) else GEMINI_CURATION_CHUNK_SIZE
 
 
 def curation_system_instruction() -> str:
     return (
         "You curate a photography Instagram feed from the operator's own archive. "
         "Rank the safest, most distinctive frames for posting. Prefer diversity of mood and composition. "
+        "When images are attached, ground tags and captions in what you see "
+        "(light, color, subject placement) without inventing identity or body details. "
         "Suggest short content tags and a few caption options per pick. "
         "Do not use engagement bait. Do not claim anything about bodies. "
         "Return only JSON matching the schema. Never invent filesystem paths."
@@ -84,6 +101,7 @@ def curation_request_text(*, candidates: list[CurationCandidatePayload], account
         f"Account voice: {account_voice[:400]}\n"
         f"Candidates (JSON): {json.dumps(payload, sort_keys=True)}\n"
         f"Pick and rank the best subset (up to {len(candidates)}). "
+        f"When JPEG parts follow, each is labeled with its image_id — match them to the JSON. "
         f"For each pick provide reasons, up to 8 tags, and captions for: {styles}."
     )
 
@@ -92,15 +110,29 @@ def build_curation_request_body(
     candidates: list[CurationCandidatePayload],
     *,
     account_voice: str,
+    policy: str = "text_only",
+    image_bytes_by_id: dict[str, bytes] | None = None,
 ) -> dict[str, object]:
+    parts: list[dict[str, object]] = [
+        {"text": curation_request_text(candidates=candidates, account_voice=account_voice)}
+    ]
+    if gemini_allows_pixels(policy) and image_bytes_by_id:
+        for item in candidates:
+            raw = image_bytes_by_id.get(item.image_id)
+            if not raw:
+                continue
+            parts.append({"text": f"image_id={item.image_id}"})
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                    }
+                }
+            )
     body: dict[str, object] = {
         "system_instruction": {"parts": [{"text": curation_system_instruction()}]},
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": curation_request_text(candidates=candidates, account_voice=account_voice)}],
-            }
-        ],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
             "temperature": 0.5,
             "responseMimeType": "application/json",
@@ -137,5 +169,5 @@ def build_curation_request_body(
             },
         },
     }
-    assert_safe_gemini_payload(body, policy="text_only")
+    assert_safe_gemini_payload(body, policy=policy)
     return body

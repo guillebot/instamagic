@@ -122,12 +122,17 @@ class HashtagIn(BaseModel):
 
 
 class CurationIn(BaseModel):
-    """limit null/0 = all eligible Safe/Publishable frames (chunked Gemini calls)."""
+    """limit null/0 = all eligible Safe/Publishable frames (chunked Gemini calls).
+
+    include_images: per-run toggle. Env GEMINI_IMAGE_POLICY is a ceiling —
+    only preview/safe_previews/selected may attach derivative JPEG bytes.
+    """
 
     library_id: UUID | None = None
     folder: str | None = Field(default=None, max_length=1024)
     image_ids: list[UUID] | None = None
     limit: int | None = Field(default=12, ge=0, le=2000)
+    include_images: bool | None = None
     confirmed: bool = False
 
 

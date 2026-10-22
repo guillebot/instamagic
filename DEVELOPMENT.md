@@ -21,7 +21,7 @@ Uvicorn loads `instamagic.main:create_app` with `--factory`. Importing the packa
 - `model_state` and `human_rating` are separate. Aesthetic score never changes the safety state. The UI badge is `effective_state` (see `docs/lifecycle.md`): **Safe** = originally clear / human-cleared without crop; **Publishable** = was `SAFE_AFTER_CROP` plus approved crop or blur and human safe/excellent. Gates still cannot queue or caption a `DO_NOT_POST` frame or an unattested library.
 - No exposed region means `REVIEW`, not automatic `SAFE`. `SAFE_AFTER_CROP` only when a candidate crop keeps the face and excludes exposed boxes. If every crop still contains one, the state is `DO_NOT_POST`.
 - Missing or uncertain detector fails closed to `REVIEW`. The app does not import NudeNet. The ONNX decoder is local. Weights stay outside git at `SAFETY_MODEL_PATH`.
-- Originals are mounted read-only. The browser and Gemini receive EXIF-stripped derivatives only. GPS is `has_gps`, never coordinates. Default `GEMINI_IMAGE_POLICY` is `text_only`.
+- Originals are mounted read-only. The browser and Gemini receive EXIF-stripped derivatives only. GPS is `has_gps`, never coordinates. Default `GEMINI_IMAGE_POLICY` is `preview` (Curate may attach preview/thumb bytes for gated Safe/Publishable frames; UI toggle per run). Opt out with `text_only`.
 - RQ with queues `io` and `ml`, not Celery. `PIPELINE_MODE=inline` runs the scan in the API process for tests and the fixture demo. `queue` enqueues it.
 - One password, HMAC session cookie, bind `127.0.0.1` unless `ALLOW_CONTAINER_BIND=true` inside Compose. Published ports stay on `127.0.0.1`.
 - Instagram publish uses the official Graph Content Publishing API only (`services/instagram/client.py`). Human-gated by default (`AUTO_PUBLISH=false`). Fake provider for CI.
@@ -61,8 +61,8 @@ See `docs/lifecycle.md`. Short path: Review (scan → rate → crop/blur) → Cu
 ## Gemini curation flow
 
 1. Human rates frames safe/excellent (and approves crop/blur when `SAFE_AFTER_CROP` → badge **Publishable**).
-2. `POST /api/curation` shortlists via local ranker, then Fake/Google Gemini returns ranked picks + tags + caption options as draft `CurationBatch` / `CurationPick` rows (not queued).
-3. Curate UI: reorder, accept/reject, edit tags/captions.
+2. `POST /api/curation` shortlists via local ranker (`limit` null/0 = all eligible; large sets chunked), optional `include_images` under the env ceiling, then Fake/Google Gemini returns ranked picks + tags + captions as draft `CurationBatch` / `CurationPick` rows (not queued).
+3. Curate UI: All eligible vs numeric limit, “Send image previews to Gemini” toggle, reorder/accept/reject, edit tags/captions.
 4. `POST /api/curation/queue` re-checks publishing gates and creates `PublishingQueueItem` rows in `CANDIDATE` state only.
 5. Instagram publish remains the existing Queue → Approve → Publish click.
 

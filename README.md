@@ -39,7 +39,7 @@ Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on
 ### Gemini captions
 
 1. Set `GEMINI_API_KEY` in `.env` (Google AI Studio / Gemini API).
-2. Keep `GEMINI_IMAGE_POLICY=text_only` unless you intentionally allow approved preview pixels (`safe_previews`).
+2. Default `GEMINI_IMAGE_POLICY=preview` lets Curate/captions attach EXIF-stripped preview/thumb JPEGs for Safe/Publishable frames only (toggle on Curate). Use `text_only` to opt out of pixels; `manual_only` blocks batch Gemini.
 3. Optional: `ACCOUNT_VOICE` to steer caption and comment-draft tone.
 4. From Review (`G`) or Queue → Generate captions. Or use **Curate** for a batch of ranked picks with tag + caption drafts. Missing key returns a clear error; scan/review/queue keep working.
 
@@ -91,7 +91,7 @@ Python package `instamagic` lives under `backend/instamagic` (API, models, servi
 | Surface | Risk | Mitigation |
 |---|---|---|
 | `GEMINI_API_KEY` | Key theft → billed abuse / prompt leakage | Env only; never log; audit rows store context hash + text context, not originals by default |
-| Gemini payloads | Path / pixel leak from library | `services/gemini/context.py` + `assert_safe_gemini_payload`; default `text_only` |
+| Gemini payloads | Path / pixel leak from library | `assert_safe_gemini_payload`; derivatives only under `preview` + Curate toggle; never originals / file URIs |
 | `INSTAGRAM_ACCESS_TOKEN` | Account takeover / unwanted posts | Env/secret store only; never logged; human Publish + gates |
 | Publish asset URLs | Unauthenticated JPEG fetch | Short-lived HMAC token; relative derivative path only; no session cookie |
 | `AUTO_PUBLISH` | Unattended posts | Fail-closed unless exact ack phrase; Compose forces false |

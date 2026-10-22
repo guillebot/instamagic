@@ -79,7 +79,9 @@ class GeminiProvider:
 
 class FakeGeminiProvider(GeminiProvider):
     def generate(self, context: dict[str, Any], image_bytes: bytes | None, policy: str) -> CaptionBatch:
-        if policy != "safe_previews":
+        from instamagic.services.gemini.context import gemini_allows_pixels
+
+        if not gemini_allows_pixels(policy):
             image_bytes = None
         _ = image_bytes
         mood = str(context.get("mood") or "quiet")
@@ -102,8 +104,9 @@ class GoogleGeminiProvider(GeminiProvider):
 
     def generate(self, context: dict[str, Any], image_bytes: bytes | None, policy: str) -> CaptionBatch:
         import httpx
+        from instamagic.services.gemini.context import gemini_allows_pixels
 
-        if policy != "safe_previews":
+        if not gemini_allows_pixels(policy):
             image_bytes = None
         parts: list[dict[str, Any]] = [{"text": caption_prompt(context)}]
         if image_bytes:

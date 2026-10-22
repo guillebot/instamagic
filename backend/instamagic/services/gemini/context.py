@@ -16,6 +16,32 @@ BANNED_PHRASES = (
     "follow4follow",
 )
 
+# Policies that may attach EXIF-stripped derivative JPEG bytes (never originals / paths).
+# preview / selected are aliases of safe_previews: curation/captions for gated frames only.
+GEMINI_PIXEL_POLICIES = frozenset({"safe_previews", "preview", "selected"})
+GEMINI_IMAGE_POLICIES = frozenset({"text_only", "manual_only", *GEMINI_PIXEL_POLICIES})
+
+
+def gemini_allows_pixels(policy: str) -> bool:
+    """True when Gemini may receive derivative preview/thumb bytes (not library originals)."""
+    return policy in GEMINI_PIXEL_POLICIES
+
+
+def resolve_curation_send_policy(*, env_policy: str, include_images: bool | None) -> str:
+    """Env is a ceiling; per-run include_images chooses text_only vs preview when allowed.
+
+    - manual_only: unchanged (caller blocks curation)
+    - text_only (or other non-pixel): ceiling forbids bytes → always text_only
+    - preview / safe_previews / selected: toggle allowed; default ON when include_images is None
+    """
+    if env_policy == "manual_only":
+        return "manual_only"
+    if not gemini_allows_pixels(env_policy):
+        return "text_only"
+    if include_images is False:
+        return "text_only"
+    return "preview"
+
 
 class GeminiContext(BaseModel):
     content_tags: list[str] = Field(default_factory=list)
@@ -106,10 +132,10 @@ def assert_safe_gemini_payload(payload: dict[str, Any], *, policy: str) -> None:
     lowered = blob.lower()
     if "originals" in lowered or "/photos/" in lowered or "\\photos\\" in lowered:
         raise GeminiBlocked("Gemini payload included a forbidden reference.")
-    if policy == "text_only" and "inline_data" in lowered:
-        raise GeminiBlocked("text_only Gemini requests must not include image bytes.")
-    if policy != "safe_previews" and "inline_data" in lowered:
-        raise GeminiBlocked("Gemini payload included unexpected image bytes.")
+    if "file://" in lowered or "file:\\" in lowered:
+        raise GeminiBlocked("Gemini payload included a forbidden file URI.")
+    if not gemini_allows_pixels(policy) and "inline_data" in lowered:
+        raise GeminiBlocked("This GEMINI_IMAGE_POLICY forbids image bytes in Gemini requests.")
 
 
 # Back-compat alias used by older tests / call sites.

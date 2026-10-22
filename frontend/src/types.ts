@@ -211,6 +211,8 @@ export type CommentDraftItem = {
 export type AppConfig = {
   version?: string;
   gemini_policy: string;
+  /** True when GEMINI_IMAGE_POLICY ceiling allows derivative preview bytes. */
+  gemini_pixels_allowed?: boolean;
   gemini_configured: boolean;
   auto_publish: boolean;
   instagram_configured?: boolean;

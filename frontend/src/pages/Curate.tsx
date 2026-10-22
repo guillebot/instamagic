@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
 import { lifecycleLabel } from "../lifecycle";
 import type {
@@ -23,16 +23,26 @@ export function CuratePage() {
     queryFn: () => api<CurationBatchSummary[]>("/api/curation"),
   });
 
+  const pixelsAllowed = config.data?.gemini_pixels_allowed ?? false;
   const [libraryId, setLibraryId] = useState("");
   const [folder, setFolder] = useState("");
-  const [limit, setLimit] = useState(12);
+  const [allEligible, setAllEligible] = useState(true);
+  const [limit, setLimit] = useState(48);
+  const [includeImages, setIncludeImages] = useState(true);
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (config.data) {
+      setIncludeImages(Boolean(config.data.gemini_pixels_allowed));
+    }
+  }, [config.data?.gemini_pixels_allowed]);
 
   const activeBatch = useQuery({
     queryKey: ["curation-batch", activeBatchId],
     queryFn: () => api<CurationBatch>(`/api/curation/${activeBatchId}`),
     enabled: Boolean(activeBatchId),
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 1500 : false),
   });
 
   const run = useMutation({
@@ -42,7 +52,8 @@ export function CuratePage() {
         body: JSON.stringify({
           library_id: libraryId || null,
           folder: folder.trim() || null,
-          limit,
+          limit: allEligible ? 0 : limit,
+          include_images: pixelsAllowed ? includeImages : false,
           confirmed: true,
         }),
       }),
@@ -60,8 +71,12 @@ export function CuratePage() {
       <h1>Curate</h1>
       <p>
         After Review (rate + crop/blur), Gemini ranks Safe and Publishable frames (human safe/excellent) and drafts
-        tags + captions. Reorder, accept/reject, then send to the publish queue. Nothing publishes until Queue.
-        Policy: {config.data?.gemini_policy ?? "…"}. Auto publish stays off.
+        tags + captions. Reorder, accept/reject, then send to the publish queue. Nothing publishes until Queue.{" "}
+        <strong>text_only</strong> sends scores, tags, and a short safe description — no picture bytes. With{" "}
+        <strong>Send image previews</strong> on (when the server ceiling allows), Gemini also gets EXIF-stripped
+        preview/thumb JPEGs for those candidates only — never library originals or DO_NOT_POST frames. Pixels leave
+        this machine to Google; you still decide what queues. Env ceiling: {config.data?.gemini_policy ?? "…"}. Auto
+        publish stays off.
       </p>
 
       <section className="panel">
@@ -86,20 +101,48 @@ export function CuratePage() {
               placeholder="optional relative folder"
             />
           </label>
-          <label>
-            Limit
+          <label className="row" style={{ alignItems: "center", gap: 8 }}>
             <input
-              type="number"
-              min={1}
-              max={24}
-              value={limit}
-              onChange={(event) => setLimit(Number(event.target.value) || 12)}
+              type="checkbox"
+              checked={allEligible}
+              onChange={(event) => setAllEligible(event.target.checked)}
             />
+            All eligible
+          </label>
+          {!allEligible ? (
+            <label>
+              Limit
+              <input
+                type="number"
+                min={1}
+                max={2000}
+                value={limit}
+                onChange={(event) => setLimit(Number(event.target.value) || 48)}
+              />
+            </label>
+          ) : null}
+          <label className="row" style={{ alignItems: "center", gap: 8 }} title={!pixelsAllowed ? "Server GEMINI_IMAGE_POLICY forbids image bytes (text_only / manual_only)." : undefined}>
+            <input
+              type="checkbox"
+              checked={pixelsAllowed && includeImages}
+              disabled={!pixelsAllowed}
+              onChange={(event) => setIncludeImages(event.target.checked)}
+            />
+            Send image previews to Gemini
           </label>
           <button className="button" type="button" disabled={run.isPending} onClick={() => run.mutate()}>
             {run.isPending ? "Curating…" : "Run Gemini curation"}
           </button>
         </div>
+        {run.isPending || activeBatch.data?.status === "running" ? (
+          <p className="muted">{activeBatch.data?.detail ?? "Ranking in chunks…"}</p>
+        ) : null}
+        {!pixelsAllowed ? (
+          <p className="muted">
+            Image previews are disabled by GEMINI_IMAGE_POLICY={config.data?.gemini_policy ?? "text_only"}. Set the
+            server to preview (or safe_previews) to enable the toggle.
+          </p>
+        ) : null}
         {error ? <p className="error">{error}</p> : null}
       </section>
 
@@ -211,6 +254,7 @@ function CurationBatchView({ batch, onChanged }: { batch: CurationBatch; onChang
           {send.isPending ? "Sending…" : `Send ${selected.size || ""} to publish queue`}
         </button>
       </div>
+      {batch.detail ? <p className="muted">{batch.detail}</p> : null}
       {error ? <p className="error">{error}</p> : null}
       <div className="card-list">
         {ordered.map((pick, index) => (

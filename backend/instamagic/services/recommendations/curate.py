@@ -28,12 +28,18 @@ from instamagic.models import (
 )
 from instamagic.models.enums import CurationBatchStatus, CurationPickStatus
 from instamagic.services.gemini.captions import CaptionDraft
-from instamagic.services.gemini.context import build_context
+from instamagic.services.gemini.context import (
+    build_context,
+    gemini_allows_pixels,
+    resolve_curation_send_policy,
+)
 from instamagic.services.gemini.curation import (
     CURATION_CAPTION_STYLES,
     CurationCandidatePayload,
     CurationPickDraft,
     CurationProvider,
+    CurationResult,
+    curation_chunk_size,
 )
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.images.folders import escape_like, normalize_folder
@@ -151,6 +157,75 @@ def collect_eligible(
     return eligible
 
 
+def resolve_curation_limit(limit: int | None, eligible_count: int) -> int:
+    """null/0 means all eligible; otherwise clamp to eligible count."""
+    if eligible_count <= 0:
+        return 0
+    if limit is None or limit <= 0:
+        return eligible_count
+    return min(limit, eligible_count)
+
+
+def chunk_payloads(
+    payloads: list[CurationCandidatePayload],
+    *,
+    chunk_size: int,
+) -> list[list[CurationCandidatePayload]]:
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
+    if not payloads:
+        return []
+    return [payloads[i : i + chunk_size] for i in range(0, len(payloads), chunk_size)]
+
+
+def merge_chunked_drafts(
+    chunk_results: list[CurationResult],
+    *,
+    payloads: list[CurationCandidatePayload],
+) -> list[CurationPickDraft]:
+    """Merge per-chunk Gemini ranks into one ordered list (local_score, then rank)."""
+    by_id = {item.image_id: item for item in payloads}
+    allowed_ids = set(by_id)
+    seen: set[str] = set()
+    collected: list[CurationPickDraft] = []
+    for result in chunk_results:
+        for draft in sorted(result.picks, key=lambda item: item.rank):
+            if draft.image_id not in allowed_ids or draft.image_id in seen:
+                continue
+            seen.add(draft.image_id)
+            collected.append(draft)
+    if not collected:
+        return [
+            CurationPickDraft(
+                image_id=item.image_id,
+                rank=index,
+                reasons=item.local_reasons,
+                tags=item.content_tags[:8],
+                captions=[
+                    CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
+                    for style, language in CURATION_CAPTION_STYLES
+                ],
+            )
+            for index, item in enumerate(payloads, start=1)
+        ]
+    collected.sort(
+        key=lambda draft: (
+            -(by_id[draft.image_id].local_score if draft.image_id in by_id else 0),
+            draft.rank,
+        )
+    )
+    return [
+        CurationPickDraft(
+            image_id=draft.image_id,
+            rank=index,
+            reasons=draft.reasons,
+            tags=draft.tags,
+            captions=draft.captions,
+        )
+        for index, draft in enumerate(collected, start=1)
+    ]
+
+
 def run_curation(
     session: Session,
     provider: CurationProvider,
@@ -158,13 +233,21 @@ def run_curation(
     library_id: UUID | None,
     folder: str | None,
     image_ids: list[UUID] | None,
-    limit: int,
+    limit: int | None,
     account_voice: str,
     policy: str,
     covering_blur_fn,
+    include_images: bool | None = None,
+    preview_bytes_fn=None,
 ) -> CurationBatch:
-    """Build a draft curation batch. Fail-closed; never queues or publishes."""
-    if policy == "manual_only":
+    """Build a draft curation batch. Fail-closed; never queues or publishes.
+
+    Large shortlists are chunked for Gemini, then merged into one CurationBatch.
+    When the env ceiling allows and include_images is on, derivative preview/thumb
+    bytes ride along (never originals / paths).
+    """
+    send_policy = resolve_curation_send_policy(env_policy=policy, include_images=include_images)
+    if send_policy == "manual_only" or policy == "manual_only":
         raise NotAllowed("GEMINI_IMAGE_POLICY=manual_only blocks batch curation.")
     eligible = collect_eligible(
         session,
@@ -176,6 +259,7 @@ def run_curation(
     if not eligible:
         raise NotAllowed("No SAFE/EXCELLENT attested candidates available for curation.")
 
+    effective_limit = resolve_curation_limit(limit, len(eligible))
     shortlist_inputs = [
         CandidateInput(
             image_id=str(item.image.id),
@@ -191,7 +275,7 @@ def run_curation(
         )
         for item in eligible
     ]
-    ranked = rank_candidates(shortlist_inputs, limit=limit)
+    ranked = rank_candidates(shortlist_inputs, limit=effective_limit)
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
     payloads = [
@@ -212,6 +296,15 @@ def run_curation(
         )
         for item in shortlist
     ]
+    chunk_size = curation_chunk_size(send_policy)
+    chunks = chunk_payloads(payloads, chunk_size=chunk_size)
+
+    pixels_by_id: dict[str, bytes] = {}
+    if gemini_allows_pixels(send_policy) and preview_bytes_fn is not None:
+        for item in shortlist:
+            raw = preview_bytes_fn(item.image)
+            if raw:
+                pixels_by_id[str(item.image.id)] = raw
 
     sample = shortlist[0]
     sample_crop = None
@@ -225,7 +318,7 @@ def run_curation(
             needs_crop=sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value,
             has_approved_crop=sample.approved_crop_id is not None,
             has_approved_covering_blur=sample.covering_blur,
-            policy="text_only",
+            policy=send_policy,
             operator_confirmed=True,
             content_tags=sample.tags,
             composition=sample.composition,
@@ -237,12 +330,16 @@ def run_curation(
     )
     audit = GeminiRequest(
         image_id=sample.image.id,
-        policy="text_only",
+        policy=send_policy,
         context_sha256=context.sha256(),
         context_json=json.dumps(
             {
                 "kind": "curation_batch",
                 "candidate_ids": [p.image_id for p in payloads],
+                "chunks": len(chunks),
+                "chunk_size": chunk_size,
+                "include_images": bool(pixels_by_id),
+                "pixels_attached": len(pixels_by_id),
                 "context": context.model_dump(),
             },
             sort_keys=True,
@@ -252,18 +349,39 @@ def run_curation(
     session.add(audit)
     session.flush()
 
+    # Store requested limit: 0 means "all eligible" at request time.
+    stored_limit = 0 if limit is None or limit <= 0 else int(limit)
     batch = CurationBatch(
         library_id=library_id,
         folder=folder,
-        status=CurationBatchStatus.READY.value,
-        limit=limit,
-        detail=f"shortlist={len(shortlist)}",
+        status=CurationBatchStatus.RUNNING.value,
+        limit=stored_limit,
+        detail=f"shortlist={len(shortlist)} chunks=0/{len(chunks)}",
     )
     session.add(batch)
     session.flush()
+    session.commit()
 
+    chunk_results: list[CurationResult] = []
     try:
-        result = provider.curate_batch(payloads, account_voice=account_voice, policy="text_only")
+        for index, chunk in enumerate(chunks, start=1):
+            batch.detail = f"shortlist={len(shortlist)} chunks={index - 1}/{len(chunks)}"
+            session.commit()
+            chunk_pixels = {
+                item.image_id: pixels_by_id[item.image_id]
+                for item in chunk
+                if item.image_id in pixels_by_id
+            } or None
+            chunk_results.append(
+                provider.curate_batch(
+                    chunk,
+                    account_voice=account_voice,
+                    policy=send_policy,
+                    image_bytes_by_id=chunk_pixels,
+                )
+            )
+            batch.detail = f"shortlist={len(shortlist)} chunks={index}/{len(chunks)}"
+            session.commit()
     except (GeminiBlocked, NotConfigured):
         audit.status = "failed"
         batch.status = CurationBatchStatus.FAILED.value
@@ -280,28 +398,7 @@ def run_curation(
         raise NotConfigured("Gemini curation failed.") from None
 
     audit.status = "succeeded"
-    allowed_ids = {p.image_id for p in payloads}
-    seen: set[str] = set()
-    ordered_drafts: list[CurationPickDraft] = []
-    for draft in sorted(result.picks, key=lambda item: item.rank):
-        if draft.image_id not in allowed_ids or draft.image_id in seen:
-            continue
-        seen.add(draft.image_id)
-        ordered_drafts.append(draft)
-    if not ordered_drafts:
-        ordered_drafts = [
-            CurationPickDraft(
-                image_id=str(item.image.id),
-                rank=index,
-                reasons=item.local_reasons,
-                tags=item.tags[:8],
-                captions=[
-                    CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
-                    for style, language in CURATION_CAPTION_STYLES
-                ],
-            )
-            for index, item in enumerate(shortlist, start=1)
-        ]
+    ordered_drafts = merge_chunked_drafts(chunk_results, payloads=payloads)
 
     for index, draft in enumerate(ordered_drafts, start=1):
         item = by_id[draft.image_id]
@@ -336,8 +433,13 @@ def run_curation(
         )
         session.add(pick)
 
+    batch.status = CurationBatchStatus.READY.value
     batch.finished_at = datetime.now(UTC)
-    batch.detail = f"picks={len(ordered_drafts)} shortlist={len(shortlist)}"
+    mode = "preview" if pixels_by_id else "text_only"
+    batch.detail = (
+        f"picks={len(ordered_drafts)} shortlist={len(shortlist)} "
+        f"chunks={len(chunks)} chunk_size={chunk_size} mode={mode} pixels={len(pixels_by_id)}"
+    )
     session.commit()
     session.refresh(batch)
     return batch

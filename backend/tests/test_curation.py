@@ -54,7 +54,7 @@ def test_curation_drafts_then_human_queues(client, app_env) -> None:
 
     created = client.post(
         "/api/curation",
-        json={"library_id": library_id, "limit": 12, "confirmed": True},
+        json={"library_id": library_id, "limit": 0, "include_images": False, "confirmed": True},
     )
     assert created.status_code == 201, created.text
     batch = created.json()

@@ -86,7 +86,7 @@ from instamagic.services.blurs.generator import (
 )
 from instamagic.services.crops.generator import validate_crop_window, window_excludes_unsafe
 from instamagic.services.factory import build_instagram
-from instamagic.services.gemini.context import build_context
+from instamagic.services.gemini.context import build_context, gemini_allows_pixels
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.geometry import Box
 from instamagic.services.images.derivatives import (
@@ -258,6 +258,7 @@ def config(request: Request, _auth: None = Depends(require_session), settings: S
     return {
         "version": settings.app_version,
         "gemini_policy": settings.gemini_image_policy,
+        "gemini_pixels_allowed": gemini_allows_pixels(settings.gemini_image_policy),
         "gemini_configured": settings.gemini_provider == "fake" or bool(settings.gemini_api_key),
         "auto_publish": settings.auto_publish,
         "instagram_configured": bool(ig.configured()) if ig is not None else settings.instagram_configured(),
@@ -1186,6 +1187,8 @@ def create_curation(
         account_voice=settings.account_voice,
         policy=settings.gemini_image_policy,
         covering_blur_fn=_has_approved_covering_blur,
+        include_images=body.include_images,
+        preview_bytes_fn=lambda image: _curation_derivative_bytes(settings, image),
     )
     return _curation_batch_out(session, batch)
 
@@ -1938,20 +1941,45 @@ def _curation_batch_out(session: Session, batch: CurationBatch) -> dict[str, obj
     return summary
 
 
+def _curation_derivative_bytes(settings: Settings, image: Image) -> bytes | None:
+    """Load EXIF-stripped preview/thumb (or approved crop/blur) for Gemini. Never originals."""
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        return None
+    approved = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
+    return _derivative_bytes_for_gemini(settings, image, approved, require_policy=False)
+
+
 def _preview_bytes(settings: Settings, image: Image, approved: CropSuggestion | None) -> bytes | None:
-    if settings.gemini_image_policy != "safe_previews":
+    return _derivative_bytes_for_gemini(settings, image, approved, require_policy=True)
+
+
+def _derivative_bytes_for_gemini(
+    settings: Settings,
+    image: Image,
+    approved: CropSuggestion | None,
+    *,
+    require_policy: bool,
+) -> bytes | None:
+    if require_policy and not gemini_allows_pixels(settings.gemini_image_policy):
+        return None
+    if image.model_state == SafetyState.DO_NOT_POST.value:
         return None
     relative = None
     if image.model_state == SafetyState.SAFE_AFTER_CROP.value:
-        approved_blur = next((blur for blur in image.blurs if blur.approved and blur.derivative_path), None)
+        approved_blur = next(
+            (blur for blur in (image.blurs or []) if blur.approved and blur.derivative_path),
+            None,
+        )
         if approved is not None and approved.derivative_path:
             relative = approved.derivative_path
         elif approved_blur is not None:
             relative = approved_blur.derivative_path
         else:
-            raise GeminiBlocked("SAFE_AFTER_CROP requires an approved crop or blur derivative.")
+            if require_policy:
+                raise GeminiBlocked("SAFE_AFTER_CROP requires an approved crop or blur derivative.")
+            return None
     else:
-        relative = image.preview_path
+        relative = image.preview_path or image.thumbnail_path
     if not relative:
         return None
     path = safe_join(settings.derivatives_root, relative)

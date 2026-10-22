@@ -76,6 +76,13 @@ else
     sed -i 's|^ORIGINALS_ROOT=./data/stage-library$|ORIGINALS_ROOT=/fotosarte|' .env
   fi
   grep -q '^ORIGINALS_ROOT=' .env || echo 'ORIGINALS_ROOT=/fotosarte' >> .env
+  # Product default: allow Curate to send derivative previews (toggleable per run).
+  if grep -q '^GEMINI_IMAGE_POLICY=' .env; then
+    sed -i 's|^GEMINI_IMAGE_POLICY=.*|GEMINI_IMAGE_POLICY=preview|' .env
+  else
+    echo 'GEMINI_IMAGE_POLICY=preview' >> .env
+  fi
+  echo "Set GEMINI_IMAGE_POLICY=preview"
 fi
 
 # Apply optional pin from the Mac deploy invocation (preserves other secrets).

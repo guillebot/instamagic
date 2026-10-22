@@ -7,7 +7,11 @@ from instamagic.services.gemini.captions import (
     caption_request_text,
     system_instruction,
 )
-from instamagic.services.gemini.context import GeminiContext, assert_safe_gemini_payload
+from instamagic.services.gemini.context import (
+    GeminiContext,
+    assert_safe_gemini_payload,
+    gemini_allows_pixels,
+)
 from instamagic.services.gemini.curation import (
     CurationCandidatePayload,
     CurationResult,
@@ -117,12 +121,18 @@ class GoogleGeminiProvider:
         *,
         account_voice: str,
         policy: str,
+        image_bytes_by_id: dict[str, bytes] | None = None,
     ) -> CurationResult:
-        """Batch curation always uses text contexts (no library pixels)."""
-        del policy
+        """Rank shortlisted frames. Pixels only when policy allows derivative JPEGs."""
         if not self._api_key:
             raise NotConfigured("GEMINI_API_KEY is not configured.")
-        body = build_curation_request_body(candidates, account_voice=account_voice)
+        pixels = image_bytes_by_id if gemini_allows_pixels(policy) else None
+        body = build_curation_request_body(
+            candidates,
+            account_voice=account_voice,
+            policy=policy,
+            image_bytes_by_id=pixels,
+        )
         return CurationResult.model_validate_json(self._post(body))
 
     def _post(self, body: dict[str, object]) -> str:
@@ -140,7 +150,7 @@ class GoogleGeminiProvider:
 
 
 def build_request_body(context: GeminiContext, *, policy: str, image_bytes: bytes | None) -> dict[str, object]:
-    pixels = image_bytes if policy == "safe_previews" else None
+    pixels = image_bytes if gemini_allows_pixels(policy) else None
     parts: list[dict[str, object]] = [{"text": caption_request_text(context)}]
     if pixels:
         import base64

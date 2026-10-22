@@ -118,7 +118,7 @@ Frontend nginx proxies `/api`, `/health`, and `/ready` to the Compose service na
 | Variable | Notes |
 |---|---|
 | `GEMINI_API_KEY` | Live captions / drafts. Empty → clear 503 on generate. |
-| `GEMINI_IMAGE_POLICY` | Default `text_only`. |
+| `GEMINI_IMAGE_POLICY` | Default `preview` (Curate toggle may send derivative JPEGs). `text_only` opts out; `manual_only` blocks batch Gemini. |
 | `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_BUSINESS_ACCOUNT_ID` | Graph publish. Never log. |
 | `PUBLIC_BASE_URL` | Public https Meta can fetch. LAN-only Traefik is insufficient for publish. |
 | `AUTO_PUBLISH` | Keep `false` on stage. |

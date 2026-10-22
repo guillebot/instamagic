@@ -60,6 +60,7 @@ class CommentDraftStatus(enum.StrEnum):
 
 
 class CurationBatchStatus(enum.StrEnum):
+    RUNNING = "running"
     READY = "ready"
     FAILED = "failed"
 
