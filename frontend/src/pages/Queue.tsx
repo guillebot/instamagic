@@ -1,14 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { lifecycleLabel } from "../lifecycle";
+import {
+  captionFirstLine,
+  readPublishedSectionExpanded,
+  splitQueueItems,
+  writePublishedSectionExpanded,
+} from "../queueGrouping";
 import type { AppConfig, CaptionItem, QueueItem } from "../types";
 
 export function QueuePage() {
   const queryClient = useQueryClient();
   const [carouselPick, setCarouselPick] = useState<string[]>([]);
+  const [publishedOpen, setPublishedOpen] = useState(() => readPublishedSectionExpanded());
   const queue = useQuery({ queryKey: ["queue"], queryFn: () => api<QueueItem[]>("/api/queue") });
+  const { active, published } = useMemo(() => splitQueueItems(queue.data ?? []), [queue.data]);
   const config = useQuery({ queryKey: ["config"], queryFn: () => api<AppConfig>("/api/config") });
   const ig = useQuery({
     queryKey: ["instagram-status"],
@@ -61,7 +69,7 @@ export function QueuePage() {
         <p className="muted">Select 2–10 approved-ready images below (checkbox), reorder after queueing.</p>
       </div>
       <div className="card-list">
-        {queue.data?.map((item) => (
+        {active.map((item) => (
           <QueueCard
             key={item.id}
             item={item}
@@ -75,7 +83,62 @@ export function QueuePage() {
         ))}
         {queue.data && queue.data.length === 0 ? <p>Nothing queued yet. Press P on a reviewed photograph.</p> : null}
       </div>
+      {published.length > 0 ? (
+        <section className="queue-published-section">
+          <button
+            type="button"
+            className="queue-published-toggle ghost"
+            aria-expanded={publishedOpen}
+            onClick={() => {
+              setPublishedOpen((open) => {
+                const next = !open;
+                writePublishedSectionExpanded(next);
+                return next;
+              });
+            }}
+          >
+            {publishedOpen ? "▾" : "▸"} Published ({published.length})
+          </button>
+          {publishedOpen ? (
+            <ul className="queue-published-list">
+              {published.map((item) => (
+                <PublishedQueueRow key={item.id} item={item} />
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
     </main>
+  );
+}
+
+function PublishedQueueRow({ item }: { item: QueueItem }) {
+  const isCarousel = item.media_type === "CAROUSEL" && (item.slides?.length ?? 0) > 1;
+  const thumb =
+    (isCarousel ? item.slides?.[0]?.image.thumbnail_url : item.image.thumbnail_url) ?? null;
+  const when = item.published_at ? new Date(item.published_at).toLocaleString() : "—";
+  const caption = captionFirstLine(item.published_caption);
+  const label = isCarousel ? `Carousel (${item.slides?.length ?? 0})` : item.image.filename;
+
+  return (
+    <li className="queue-published-row">
+      {thumb ? <img src={thumb} alt="" className="queue-published-thumb" loading="lazy" /> : <span className="queue-published-thumb empty" />}
+      <div className="queue-published-body">
+        <strong className="queue-published-title">{label}</strong>
+        <p className="queue-published-caption">{caption}</p>
+        <p className="queue-published-meta muted">
+          {when}
+          {item.permalink ? (
+            <>
+              {" · "}
+              <a href={item.permalink} target="_blank" rel="noreferrer">
+                Instagram
+              </a>
+            </>
+          ) : null}
+        </p>
+      </div>
+    </li>
   );
 }
 

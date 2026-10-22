@@ -2276,6 +2276,18 @@ def _refresh_crop_derivative(session: Session, settings: Settings, image: Image,
 
 def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]:
     image = _load_image(session, item.image_id)
+    ig_post = session.scalar(
+        select(InstagramPost)
+        .where(InstagramPost.queue_item_id == item.id)
+        .order_by(InstagramPost.published_at.desc())
+    )
+    published_caption: str | None = None
+    if ig_post and ig_post.caption:
+        published_caption = ig_post.caption
+    elif item.caption_id is not None:
+        caption_row = session.get(Caption, item.caption_id)
+        if caption_row is not None:
+            published_caption = caption_row.text
     slide_rows = slides_for_item(session, item) if item.media_type == "CAROUSEL" else []
     slides_payload = []
     for slide in slide_rows:
@@ -2301,6 +2313,8 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "schedule_mode": item.schedule_mode,
         "scheduled_at": item.scheduled_at,
         "publish_retry_after": item.publish_retry_after,
+        "permalink": ig_post.permalink if ig_post else None,
+        "published_caption": published_caption,
         "slides": slides_payload,
         "image": _image_out(session, image).model_dump(mode="json"),
     }
