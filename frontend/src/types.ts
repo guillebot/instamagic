@@ -30,6 +30,10 @@ export type ImageItem = {
   has_approved_covering_blur?: boolean;
   thumbnail_url: string | null;
   preview_url: string | null;
+  gemini_label_status?: string | null;
+  gemini_label_at?: string | null;
+  gemini_description?: string | null;
+  gemini_mood?: string | null;
 };
 
 export type CropItem = {

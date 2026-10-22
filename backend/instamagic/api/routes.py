@@ -47,6 +47,7 @@ from instamagic.models import (
     SafetyState,
     TagSource,
 )
+from instamagic.models.enums import JobKind
 from instamagic.schemas.dto import (
     AttestIn,
     BlurCreateIn,
@@ -65,6 +66,7 @@ from instamagic.schemas.dto import (
     CurationQueueIn,
     CurationReorderIn,
     FolderListing,
+    GeminiLabelIn,
     HashtagIn,
     HealthStatusOut,
     ImageOut,
@@ -154,13 +156,76 @@ from instamagic.services.posting.queue_schedule import (
 )
 from instamagic.services.posting.schedule_config import config_as_dict, config_view, update_config
 from instamagic.services.queues import snapshot_queues
-from instamagic.services.recommendations.curate import queue_picks, run_curation
+from instamagic.services.recommendations.curate import (
+    queue_picks,
+    run_curation,
+)
 from instamagic.services.recommendations.gates import publishing_gate
+from instamagic.services.recommendations.gemini_derivatives import (
+    curation_derivative_bytes as _curation_derivative_bytes_impl,
+)
+from instamagic.services.recommendations.gemini_derivatives import (
+    derivative_bytes_for_gemini,
+)
+from instamagic.services.recommendations.gemini_derivatives import (
+    has_approved_covering_blur as _has_approved_covering_blur_impl,
+)
+from instamagic.services.recommendations.label_job import (
+    create_gemini_label_job,
+    gemini_label_counts,
+    should_retry_label,
+)
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 router = APIRouter()
+
+
+def _enqueue_io(settings: Settings, func_name: str, processing_job_id: str, *, job_timeout: int) -> None:
+    if settings.pipeline_mode == "inline":
+        from instamagic.workers.tasks import run_curation_job, run_gemini_label_job_entry
+
+        if func_name.endswith("run_curation_job"):
+            run_curation_job(processing_job_id)
+        elif func_name.endswith("run_gemini_label_job_entry"):
+            run_gemini_label_job_entry(processing_job_id)
+        return
+    try:
+        from redis import Redis
+        from rq import Queue
+
+        Queue("io", connection=Redis.from_url(settings.redis_url)).enqueue(
+            func_name,
+            processing_job_id,
+            job_timeout=job_timeout,
+        )
+    except Exception as exc:
+        raise NotConfigured("Could not reach the worker queue.") from exc
+
+
+def _enqueue_gemini_label_work(
+    session: Session,
+    settings: Settings,
+    *,
+    library_id: UUID | None,
+    image_ids: list[UUID] | None,
+    all_eligible: bool,
+    existing_job: ProcessingJob | None = None,
+) -> ProcessingJob:
+    job = existing_job or create_gemini_label_job(
+        session,
+        library_id=library_id,
+        image_ids=image_ids,
+        all_eligible=all_eligible,
+    )
+    _enqueue_io(
+        settings,
+        "instamagic.workers.tasks.run_gemini_label_job_entry",
+        str(job.id),
+        job_timeout=60 * 60 * 6,
+    )
+    return job
 
 
 def _image_out(session: Session, image: Image) -> ImageOut:
@@ -202,6 +267,10 @@ def _image_out(session: Session, image: Image) -> ImageOut:
         has_approved_covering_blur=has_approved_covering_blur,
         thumbnail_url=f"/api/derivatives/{image.id}/thumbnail" if image.thumbnail_path else None,
         preview_url=f"/api/derivatives/{image.id}/preview" if image.preview_path else None,
+        gemini_label_status=image.gemini_label_status,
+        gemini_label_at=image.gemini_label_at,
+        gemini_description=image.gemini_description,
+        gemini_mood=image.gemini_mood,
     )
 
 
@@ -506,6 +575,18 @@ def list_jobs(
     return [_job_out(session, job) for job in jobs]
 
 
+@router.get("/api/jobs/{job_id}", response_model=JobOut)
+def get_job(
+    job_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> JobOut:
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise NotFound("Job was not found.")
+    return _job_out(session, job)
+
+
 @router.get("/api/queues", response_model=QueuesOut)
 def list_queues(_auth: None = Depends(require_session), settings: Settings = Depends(settings_dep)) -> QueuesOut:
     return snapshot_queues(settings.redis_url)
@@ -624,8 +705,10 @@ def get_image(image_id: UUID, _auth: None = Depends(require_session), session: S
 def rate(
     image_id: UUID,
     body: RatingIn,
+    request: Request,
     _auth: None = Depends(require_session),
     session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
 ) -> ImageOut:
     image = _load_image(session, image_id)
     try:
@@ -634,6 +717,16 @@ def rate(
         raise HTTPException(status_code=400, detail=str(exc)) from None
     rate_image(session, image, rating)
     session.refresh(image)
+    if rating in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value} and should_retry_label(
+        image.gemini_label_status, image.gemini_label_attempts
+    ):
+        _enqueue_gemini_label_work(
+            session,
+            settings,
+            library_id=image.library_id,
+            image_ids=[image.id],
+            all_eligible=False,
+        )
     return _image_out(session, _load_image(session, image_id))
 
 
@@ -1272,10 +1365,11 @@ def create_curation(
     session: Session = db_dep,
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
-    """Run Gemini + local curation. Draft picks only — never auto-queues or publishes."""
+    """Queue Gemini + local curation. Draft picks only — never auto-queues or publishes."""
     folder = None
     if body.folder:
         folder = _folder_or_400(body.folder)
+    defer = settings.pipeline_mode != "inline"
     batch = run_curation(
         session,
         request.app.state.gemini,
@@ -1288,8 +1382,67 @@ def create_curation(
         covering_blur_fn=_has_approved_covering_blur,
         include_images=body.include_images,
         preview_bytes_fn=lambda image: _curation_derivative_bytes(settings, image),
+        defer_execution=defer,
+        thinking_budget=settings.gemini_curation_thinking_budget,
     )
+    if defer:
+        job = ProcessingJob(
+            kind=JobKind.CURATE.value,
+            status=JobStatus.QUEUED.value,
+            library_id=body.library_id,
+            detail=json.dumps(
+                {
+                    "batch_id": str(batch.id),
+                    "include_images": body.include_images,
+                    "image_ids": [str(value) for value in body.image_ids or []],
+                },
+                sort_keys=True,
+            ),
+        )
+        session.add(job)
+        session.commit()
+        _enqueue_io(
+            settings,
+            "instamagic.workers.tasks.run_curation_job",
+            str(job.id),
+            job_timeout=60 * 60 * 2,
+        )
     return _curation_batch_out(session, batch)
+
+
+@router.post("/api/gemini/label", status_code=202)
+def enqueue_gemini_label(
+    body: GeminiLabelIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    if not body.all_eligible and not body.image_ids:
+        raise NotAllowed("Provide image_ids or set all_eligible=true.")
+    job = create_gemini_label_job(
+        session,
+        library_id=body.library_id,
+        image_ids=body.image_ids,
+        all_eligible=body.all_eligible,
+    )
+    _enqueue_gemini_label_work(
+        session,
+        settings,
+        library_id=body.library_id,
+        image_ids=body.image_ids,
+        all_eligible=body.all_eligible,
+        existing_job=job,
+    )
+    return {"job_id": str(job.id), "status": job.status}
+
+
+@router.get("/api/gemini/label/stats")
+def gemini_label_stats(
+    library_id: UUID | None = None,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, int]:
+    return gemini_label_counts(session, library_id=library_id, covering_blur_fn=_has_approved_covering_blur)
 
 
 @router.get("/api/curation")
@@ -2038,13 +2191,7 @@ def _window_from_row(blur: BlurCover) -> BlurWindow:
 
 
 def _has_approved_covering_blur(session: Session, image: Image) -> bool:
-    approved = [blur for blur in image.blurs if blur.approved]
-    if not approved:
-        return False
-    unsafe = clear_exposed_boxes(session, image.id)
-    if not unsafe:
-        return True
-    return covers_unsafe_boxes([_window_from_row(blur) for blur in approved], unsafe)
+    return _has_approved_covering_blur_impl(session, image)
 
 
 def _refresh_blur_derivative(session: Session, settings: Settings, image: Image) -> None:
@@ -2207,15 +2354,11 @@ def _curation_batch_out(session: Session, batch: CurationBatch) -> dict[str, obj
 
 
 def _curation_derivative_bytes(settings: Settings, image: Image) -> bytes | None:
-    """Load EXIF-stripped preview/thumb (or approved crop/blur) for Gemini. Never originals."""
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        return None
-    approved = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
-    return _derivative_bytes_for_gemini(settings, image, approved, require_policy=False)
+    return _curation_derivative_bytes_impl(settings, image)
 
 
 def _preview_bytes(settings: Settings, image: Image, approved: CropSuggestion | None) -> bytes | None:
-    return _derivative_bytes_for_gemini(settings, image, approved, require_policy=True)
+    return derivative_bytes_for_gemini(settings, image, approved, require_policy=True)
 
 
 def _derivative_bytes_for_gemini(
@@ -2225,32 +2368,7 @@ def _derivative_bytes_for_gemini(
     *,
     require_policy: bool,
 ) -> bytes | None:
-    if require_policy and not gemini_allows_pixels(settings.gemini_image_policy):
-        return None
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        return None
-    relative = None
-    if image.model_state == SafetyState.SAFE_AFTER_CROP.value:
-        approved_blur = next(
-            (blur for blur in (image.blurs or []) if blur.approved and blur.derivative_path),
-            None,
-        )
-        if approved is not None and approved.derivative_path:
-            relative = approved.derivative_path
-        elif approved_blur is not None:
-            relative = approved_blur.derivative_path
-        else:
-            if require_policy:
-                raise GeminiBlocked("SAFE_AFTER_CROP requires an approved crop or blur derivative.")
-            return None
-    else:
-        relative = image.preview_path or image.thumbnail_path
-    if not relative:
-        return None
-    path = safe_join(settings.derivatives_root, relative)
-    if not path.is_file():
-        return None
-    return path.read_bytes()
+    return derivative_bytes_for_gemini(settings, image, approved, require_policy=require_policy)
 
 
 def _encode_cursor(image: Image) -> str:

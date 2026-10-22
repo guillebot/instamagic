@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from instamagic.config import get_settings
 from instamagic.db import session_factory
 from instamagic.logging_config import get_logger
-from instamagic.services.factory import build_classifier, build_face_detector
+from instamagic.models import JobStatus, ProcessingJob
+from instamagic.models.enums import JobKind
+from instamagic.services.factory import build_classifier, build_face_detector, build_gemini
 from instamagic.services.pipeline import run_scan
+from instamagic.services.recommendations.curate import execute_curation_batch
+from instamagic.services.recommendations.gemini_derivatives import (
+    curation_derivative_bytes,
+    has_approved_covering_blur,
+)
+from instamagic.services.recommendations.label_job import run_gemini_label_job
 
 log = get_logger("worker.tasks")
 
@@ -26,6 +35,74 @@ def run_scan_job(library_id: str, job_id: str) -> None:
         log.info("scan_finished", library_id=library_id, job_id=job_id)
     except Exception:
         log.info("scan_failed", library_id=library_id, job_id=job_id)
+        raise
+    finally:
+        session.close()
+
+
+def run_curation_job(processing_job_id: str) -> None:
+    settings = get_settings()
+    session = session_factory()()
+    try:
+        job = session.get(ProcessingJob, UUID(processing_job_id))
+        if job is None or job.kind != JobKind.CURATE.value:
+            return
+        params = json.loads(job.detail or "{}")
+        batch_id = UUID(params["batch_id"])
+        image_ids = [UUID(value) for value in params.get("image_ids", []) if value]
+        job.status = JobStatus.RUNNING.value
+        session.commit()
+        execute_curation_batch(
+            session,
+            batch_id,
+            build_gemini(settings),
+            account_voice=settings.account_voice,
+            policy=settings.gemini_image_policy,
+            covering_blur_fn=has_approved_covering_blur,
+            include_images=params.get("include_images"),
+            preview_bytes_fn=lambda image: curation_derivative_bytes(settings, image),
+            thinking_budget=settings.gemini_curation_thinking_budget,
+            image_ids=image_ids or None,
+        )
+        job.status = JobStatus.SUCCEEDED.value
+        session.commit()
+        log.info("curation_finished", job_id=processing_job_id, batch_id=str(batch_id))
+    except Exception:
+        job = session.get(ProcessingJob, UUID(processing_job_id))
+        if job is not None:
+            job.status = JobStatus.FAILED.value
+            job.error = "Gemini curation failed."
+            session.commit()
+        log.info("curation_failed", job_id=processing_job_id)
+        raise
+    finally:
+        session.close()
+
+
+def run_gemini_label_job_entry(processing_job_id: str) -> None:
+    settings = get_settings()
+    session = session_factory()()
+    try:
+        run_gemini_label_job(
+            session,
+            build_gemini(settings),
+            UUID(processing_job_id),
+            policy=settings.gemini_image_policy,
+            account_voice=settings.account_voice,
+            preview_bytes_fn=lambda image: curation_derivative_bytes(settings, image),
+            covering_blur_fn=has_approved_covering_blur,
+            concurrency=settings.gemini_label_concurrency,
+            thinking_budget=settings.gemini_label_thinking_budget,
+            max_output_tokens=settings.gemini_label_max_output_tokens,
+        )
+        log.info("gemini_label_finished", job_id=processing_job_id)
+    except Exception:
+        job = session.get(ProcessingJob, UUID(processing_job_id))
+        if job is not None:
+            job.status = JobStatus.FAILED.value
+            job.error = "Gemini labeling failed."
+            session.commit()
+        log.info("gemini_label_failed", job_id=processing_job_id)
         raise
     finally:
         session.close()

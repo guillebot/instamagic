@@ -925,6 +925,12 @@ export function ReviewPage() {
                         {image.has_approved_covering_blur ? (
                           <span className="badge crop-approved">blur</span>
                         ) : null}
+                        {image.gemini_label_status?.startsWith("blocked:") ? (
+                          <span className="badge gemini-blocked" title="Gemini blocked captions — review this photo">
+                            Gemini blocked: {image.gemini_label_status.replace("blocked:", "")} — captions not
+                            generated, review this photo
+                          </span>
+                        ) : null}
                       </div>
                       <div className="meta">
                         <span>{image.human_rating ?? "unrated"}</span>

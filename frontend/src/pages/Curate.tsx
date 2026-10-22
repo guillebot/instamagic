@@ -8,6 +8,7 @@ import type {
   CurationBatch,
   CurationBatchSummary,
   CurationPick,
+  JobItem,
   LibraryItem,
 } from "../types";
 
@@ -25,6 +26,21 @@ export function CuratePage() {
 
   const pixelsAllowed = config.data?.gemini_pixels_allowed ?? false;
   const [libraryId, setLibraryId] = useState("");
+  const labelStats = useQuery({
+    queryKey: ["gemini-label-stats", libraryId],
+    queryFn: () =>
+      api<{ eligible: number; labeled: number; pending: number; blocked: number }>(
+        `/api/gemini/label/stats${libraryId ? `?library_id=${libraryId}` : ""}`,
+      ),
+  });
+  const [labelJobId, setLabelJobId] = useState<string | null>(null);
+  const labelJob = useQuery({
+    queryKey: ["gemini-label-job", labelJobId],
+    queryFn: () => api<JobItem>(`/api/jobs/${labelJobId}`),
+    enabled: Boolean(labelJobId),
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" || query.state.data?.status === "queued" ? 1500 : false,
+  });
   const [folder, setFolder] = useState("");
   const [allEligible, setAllEligible] = useState(true);
   const [limit, setLimit] = useState(48);
@@ -43,6 +59,22 @@ export function CuratePage() {
     queryFn: () => api<CurationBatch>(`/api/curation/${activeBatchId}`),
     enabled: Boolean(activeBatchId),
     refetchInterval: (query) => (query.state.data?.status === "running" ? 1500 : false),
+  });
+
+  const labelAll = useMutation({
+    mutationFn: () =>
+      api<{ job_id: string; status: string }>("/api/gemini/label", {
+        method: "POST",
+        body: JSON.stringify({
+          library_id: libraryId || null,
+          all_eligible: true,
+        }),
+      }),
+    onSuccess: async (payload) => {
+      setLabelJobId(payload.job_id);
+      await queryClient.invalidateQueries({ queryKey: ["gemini-label-stats"] });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Labeling failed."),
   });
 
   const run = useMutation({
@@ -133,7 +165,29 @@ export function CuratePage() {
           <button className="button" type="button" disabled={run.isPending} onClick={() => run.mutate()}>
             {run.isPending ? "Curating…" : "Run Gemini curation"}
           </button>
+          <button
+            className="button ghost"
+            type="button"
+            disabled={labelAll.isPending}
+            onClick={() => labelAll.mutate()}
+          >
+            {labelAll.isPending ? "Labeling…" : "Label all safe photos"}
+          </button>
         </div>
+        {labelStats.data ? (
+          <p className="muted">
+            Gemini labels: {labelStats.data.labeled} labeled · {labelStats.data.pending} pending ·{" "}
+            {labelStats.data.blocked} blocked ({labelStats.data.eligible} eligible)
+          </p>
+        ) : null}
+        {labelJob.data && (labelJob.data.status === "running" || labelJob.data.status === "queued") ? (
+          <p className="muted">
+            Labeling job {labelJob.data.status}
+            {labelJob.data.files_total != null
+              ? ` — ${labelJob.data.files_processed ?? 0}/${labelJob.data.files_total}`
+              : ""}
+          </p>
+        ) : null}
         {run.isPending || activeBatch.data?.status === "running" ? (
           <p className="muted">{activeBatch.data?.detail ?? "Ranking in chunks…"}</p>
         ) : null}

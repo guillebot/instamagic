@@ -27,14 +27,22 @@ def build_face_detector(settings: Settings) -> FakeFaceDetector | YuNetFaceDetec
 def build_gemini(settings: Settings) -> GeminiProvider:
     if settings.gemini_provider == "fake":
         return FakeGeminiProvider()
-    return GoogleGeminiProvider(settings.gemini_api_key, settings.gemini_model)
+    return GoogleGeminiProvider(
+        settings.gemini_api_key,
+        settings.gemini_model,
+        timeout=settings.gemini_request_timeout,
+    )
 
 
 def build_growth(settings: Settings) -> GrowthDraftProvider:
     if settings.gemini_provider == "fake":
         return FakeGrowthDraftProvider()
     # Reuse Google provider growth methods when live Gemini is configured.
-    return GoogleGeminiProvider(settings.gemini_api_key, settings.gemini_model)
+    return GoogleGeminiProvider(
+        settings.gemini_api_key,
+        settings.gemini_model,
+        timeout=settings.gemini_request_timeout,
+    )
 
 
 def build_instagram(settings: Settings, session: Session | None = None) -> InstagramClient:

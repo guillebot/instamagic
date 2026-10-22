@@ -46,7 +46,7 @@ Other badges: **Safe after crop** / **Safe after blur** (still needs alter; same
 | Ingest | Review → Scan | `POST /api/libraries/{id}/scan` (`io` / `ml` workers) |
 | Tag / rate | Review contact sheet + classify (`1`–`4`) | `POST /api/images/{id}/rating` |
 | Alter | Review → Crop (`C`) / Blur (`B`) | crop/blur approve endpoints |
-| Curate | **Curate** | `POST /api/curation`, reorder / accept / reject picks |
+| Curate | **Curate** | `POST /api/curation` (async worker job), `POST /api/gemini/label`, reorder / accept / reject picks |
 | Queue / publish | **Queue** | `POST /api/curation/queue` or `POST /api/queue` → Approve → Publish |
 | Schedule | **Schedule** (`/queue/schedule`) | `POST /api/queue/{id}/schedule` → worker tick publishes when due (gates re-run) |
 

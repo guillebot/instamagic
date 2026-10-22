@@ -48,6 +48,16 @@ class GeminiProvider(Protocol):
         image_bytes: bytes | None,
     ) -> CaptionBatch: ...
 
+    def label_image(
+        self,
+        context: GeminiContext,
+        *,
+        policy: str,
+        image_bytes: bytes | None,
+        thinking_budget: int,
+        max_output_tokens: int,
+    ): ...
+
     def curate_batch(
         self,
         candidates: list[CurationCandidatePayload],
@@ -55,6 +65,7 @@ class GeminiProvider(Protocol):
         account_voice: str,
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
+        thinking_budget: int = 512,
     ) -> CurationResult: ...
 
 
@@ -103,6 +114,39 @@ class FakeGeminiProvider:
             drafts.append(CaptionDraft(style=style, language=language, text=text))
         return CaptionBatch(captions=drafts)
 
+    def label_image(
+        self,
+        context: GeminiContext,
+        *,
+        policy: str,
+        image_bytes: bytes | None,
+        thinking_budget: int,
+        max_output_tokens: int,
+    ):
+        from instamagic.services.gemini.labeling import ImageLabelResult
+
+        del policy, image_bytes, thinking_budget, max_output_tokens
+        mood = context.mood or "quiet"
+        tags = list(dict.fromkeys([*(context.content_tags or []), mood.replace(" ", "")[:32]]))[:8]
+        captions = [
+            CaptionDraft(
+                style=style,
+                language=language,
+                text=(
+                    f"Luz {mood}, en una frase."
+                    if language == "es"
+                    else f"{style}: {mood} light, labeled for the feed."
+                ),
+            )
+            for style, language in CAPTION_SPECS[:4]
+        ]
+        return ImageLabelResult(
+            tags=tags,
+            mood=mood,
+            description=context.safe_description or "A photograph.",
+            captions=captions,
+        )
+
     def curate_batch(
         self,
         candidates: list[CurationCandidatePayload],
@@ -110,6 +154,7 @@ class FakeGeminiProvider:
         account_voice: str,
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
+        thinking_budget: int = 512,
     ) -> CurationResult:
         from instamagic.services.gemini.curation import (
             CURATION_CAPTION_STYLES,

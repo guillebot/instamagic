@@ -265,6 +265,12 @@ class BlurSuggestIn(BaseModel):
     strength: str = "standard"
 
 
+class GeminiLabelIn(BaseModel):
+    image_ids: list[UUID] | None = None
+    all_eligible: bool = False
+    library_id: UUID | None = None
+
+
 class ImageOut(BaseModel):
     id: UUID
     filename: str
@@ -292,6 +298,10 @@ class ImageOut(BaseModel):
     has_approved_covering_blur: bool = False
     thumbnail_url: str | None
     preview_url: str | None
+    gemini_label_status: str | None = None
+    gemini_label_at: datetime | None = None
+    gemini_description: str | None = None
+    gemini_mood: str | None = None
 
 
 class ImagePage(BaseModel):

@@ -112,6 +112,11 @@ class Image(Base):
     skip_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model_state: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     human_rating: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    gemini_label_status: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    gemini_label_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    gemini_label_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    gemini_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gemini_mood: Mapped[str | None] = mapped_column(String(128), nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
 
     library: Mapped[Library] = relationship(back_populates="images")
