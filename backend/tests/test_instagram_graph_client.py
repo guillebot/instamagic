@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from instamagic.services.instagram.client import GraphInstagramClient
+from instamagic.services.instagram.client import ACCOUNT_DETAIL_FIELDS, GraphInstagramClient
 
 
 def test_publish_waits_for_container_finished(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,15 +55,21 @@ def test_publish_waits_for_container_finished(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_fetch_account_uses_stored_page_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested_fields: list[str] = []
+
     def fake_get(url, params=None, timeout=None):
+        requested_fields.append((params or {}).get("fields", ""))
+
         class FakeResponse:
             status_code = 200
 
             def json(self):
+                # Minimal graph.facebook.com payload (no account_type on this host).
                 return {
-                    "id": "178414000",
+                    "id": "17841403337960568",
                     "username": "foto.sch",
-                    "account_type": "BUSINESS",
+                    "name": "Foto Schimmel",
+                    "followers_count": 1200,
                 }
 
         return FakeResponse()
@@ -71,8 +77,16 @@ def test_fetch_account_uses_stored_page_id(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("instamagic.services.instagram.client.httpx.get", fake_get)
     client = GraphInstagramClient(
         access_token="page-token",
-        business_account_id="178414000",
+        business_account_id="17841403337960568",
         facebook_page_id="page-photo-schimmel",
     )
     details = client.fetch_account_details()
+    assert requested_fields == [ACCOUNT_DETAIL_FIELDS]
+    assert "account_type" not in ACCOUNT_DETAIL_FIELDS
+    assert details.username == "foto.sch"
+    assert details.name == "Foto Schimmel"
+    assert details.followers_count == 1200
+    assert details.account_type is None
+    assert details.profile_picture_url is None
+    assert details.biography is None
     assert details.linked_facebook_page_id == "page-photo-schimmel"

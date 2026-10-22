@@ -1628,12 +1628,31 @@ def instagram_oauth_select_page(
     }
 
 
-@router.get("/api/public/publish-assets/{token}")
-def public_publish_asset(token: str, settings: Settings = Depends(settings_dep)) -> FileResponse:
-    """Unauthenticated short-lived JPEG for Meta's crawler. HMAC-gated; no session cookie."""
+@router.api_route(
+    "/api/public/publish-assets/{token}",
+    methods=["GET", "HEAD"],
+    response_model=None,
+)
+def public_publish_asset(
+    request: Request,
+    token: str,
+    settings: Settings = Depends(settings_dep),
+) -> FileResponse | Response:
+    """Unauthenticated short-lived JPEG for Meta's crawler. Token-gated; no session cookie."""
     asset = parse_publish_token(token, secret=settings.app_secret)
     path = resolve_publish_file(settings.derivatives_root, asset)
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
+    cache = {"Cache-Control": "private, max-age=60"}
+    if request.method == "HEAD":
+        stat = path.stat()
+        return Response(
+            status_code=200,
+            headers={
+                **cache,
+                "Content-Type": "image/jpeg",
+                "Content-Length": str(stat.st_size),
+            },
+        )
+    return FileResponse(path, media_type="image/jpeg", headers=cache)
 
 
 @router.get("/api/related-accounts")

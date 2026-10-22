@@ -63,9 +63,13 @@ def test_auto_publish_requires_ack_phrase() -> None:
 
 
 def test_publish_token_roundtrip() -> None:
-    token = mint_publish_token(relative_path="abc/preview.jpg", secret="test-secret-value-123456", ttl_seconds=120)
-    asset = parse_publish_token(token, secret="test-secret-value-123456")
-    assert asset.relative_path == "abc/preview.jpg"
+    from uuid import uuid4
+
+    relative = f"{uuid4()}/publish/feed.jpg"
+    secret = "test-secret-value-123456"
+    token = mint_publish_token(relative_path=relative, secret=secret, ttl_seconds=120)
+    asset = parse_publish_token(token, secret=secret)
+    assert asset.relative_path == relative
 
 
 def test_do_not_post_cannot_publish(client, app_env) -> None:
