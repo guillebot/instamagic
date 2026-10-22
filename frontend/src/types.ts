@@ -253,6 +253,12 @@ export type InstagramConnectionStatus = {
   oauth_redirect_uri?: string;
   oauth_scopes?: string;
   meta_docs_url?: string;
+  meta_apps_dashboard_url?: string;
+  meta_create_app_docs_url?: string;
+  meta_app_id?: string | null;
+  meta_app_secret_configured?: boolean;
+  meta_app_source?: string;
+  can_edit_meta_app?: boolean;
   account?: InstagramAccountDetails | null;
   account_fetched_at?: string | null;
   can_edit_database_credentials?: boolean;

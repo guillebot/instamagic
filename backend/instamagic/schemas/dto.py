@@ -104,6 +104,28 @@ class InstagramCredentialsIn(BaseModel):
         return text
 
 
+class MetaAppCredentialsIn(BaseModel):
+    """Meta Developer App ID + App Secret (secret sealed; never logged)."""
+
+    app_id: str = Field(min_length=1, max_length=64)
+    app_secret: str = Field(min_length=8, max_length=512)
+
+    @field_validator("app_id")
+    @classmethod
+    def clean_app_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text or any(ch in text for ch in "/\\\x00\n\r\t "):
+            raise ValueError("Meta App ID is not valid.")
+        return text
+
+    @field_validator("app_secret")
+    @classmethod
+    def clean_app_secret(cls, value: str) -> str:
+        text = value.strip()
+        if not text or any(ch in text for ch in "\x00\n\r"):
+            raise ValueError("Meta App Secret is not valid.")
+        return text
+
 
 class CommentDraftIn(BaseModel):
     image_id: UUID | None = None

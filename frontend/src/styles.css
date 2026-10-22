@@ -441,6 +441,7 @@ input, select, textarea {
 .ig-connect-panel .ig-connect-btn { width: fit-content; max-width: 100%; }
 .ig-redirect-hint { margin: 0; }
 .ig-setup { display: grid; gap: 12px; }
+.ig-meta-form { margin-top: 12px; }
 .ig-env-snippet {
   margin: 8px 0 0;
   padding: 10px 12px;

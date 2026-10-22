@@ -129,4 +129,55 @@ def test_oauth_start_requires_meta_app(graph_client) -> None:
     login(graph_client)
     response = graph_client.get("/api/instagram/oauth/start")
     assert response.status_code == 503
-    assert "META_APP_ID" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "Meta OAuth is not configured" in detail
+    assert "META_APP" in detail or "App ID" in detail
+
+
+def test_clear_instagram_credentials_keeps_meta_app(graph_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    from instamagic.services.instagram import client as ig_client
+
+    class StubGraph:
+        def __init__(self, **kwargs):
+            pass
+
+        def configured(self) -> bool:
+            return True
+
+        def fetch_account_details(self):
+            return ig_client.InstagramAccountDetails(
+                id="17841400000000000",
+                username="keep_meta",
+                name="Keep Meta",
+                followers_count=1,
+                media_count=0,
+                account_type="BUSINESS",
+            )
+
+        def publish_image(self, **kwargs):
+            raise AssertionError("publish must not run")
+
+    monkeypatch.setattr(
+        "instamagic.services.instagram.store.GraphInstagramClient",
+        StubGraph,
+    )
+    login(graph_client)
+    meta = graph_client.post(
+        "/api/instagram/meta-app",
+        json={"app_id": "keep-app-id", "app_secret": "keep-app-secret-xx"},
+    )
+    assert meta.status_code == 200, meta.text
+    token = "EAAB_this_is_a_long_lived_page_token_keep"
+    save = graph_client.post(
+        "/api/instagram/credentials",
+        json={"access_token": token, "business_account_id": "17841400000000000"},
+    )
+    assert save.status_code == 200, save.text
+    cleared = graph_client.delete("/api/instagram/credentials")
+    assert cleared.status_code == 200
+    after = cleared.json()
+    assert after["configured"] is False
+    assert after["oauth_available"] is True
+    assert after["meta_app_id"] == "keep-app-id"
+    assert after["meta_app_source"] == "database"
+    assert "keep-app-secret" not in str(after)

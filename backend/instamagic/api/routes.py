@@ -71,6 +71,7 @@ from instamagic.schemas.dto import (
     JobOut,
     LibraryIn,
     LoginIn,
+    MetaAppCredentialsIn,
     PublishIn,
     QueueIn,
     QueuesOut,
@@ -119,9 +120,12 @@ from instamagic.services.instagram.oauth import (
 from instamagic.services.instagram.publish import publish_queue_item
 from instamagic.services.instagram.store import (
     clear_credentials,
+    clear_meta_app_credentials,
     connection_status_fields,
+    resolve_meta_app_credentials,
     save_account_profile,
     save_credentials,
+    save_meta_app_credentials,
 )
 from instamagic.services.pipeline import (
     clear_exposed_boxes,
@@ -1413,18 +1417,64 @@ def instagram_account_refresh(
     }
 
 
+@router.post("/api/instagram/meta-app")
+def instagram_save_meta_app(
+    body: MetaAppCredentialsIn,
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Seal Meta App ID + App Secret in the DB so Connect works without META_* in .env."""
+    if settings.instagram_provider == "fake":
+        raise NotAllowed("Cannot save Meta app credentials while INSTAGRAM_PROVIDER=fake.")
+    try:
+        save_meta_app_credentials(
+            session,
+            settings,
+            app_id=body.app_id,
+            app_secret=body.app_secret,
+        )
+    except ValueError as exc:
+        raise NotAllowed(str(exc)) from exc
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    status = connection_status_fields(settings, session, configured=bool(client.configured()))
+    return {**status, "ok": True, "error": None, "account": status.get("account")}
+
+
+@router.delete("/api/instagram/meta-app")
+def instagram_clear_meta_app(
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Remove sealed Meta App credentials. Host META_* env (if any) still applies as fallback."""
+    if settings.instagram_provider == "fake":
+        raise NotAllowed("Fake provider has no Meta app credentials to clear.")
+    clear_meta_app_credentials(session)
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    status = connection_status_fields(settings, session, configured=bool(client.configured()))
+    return {**status, "ok": True, "error": None, "account": status.get("account")}
+
+
 @router.get("/api/instagram/oauth/start")
 def instagram_oauth_start(
     _auth: None = Depends(require_session),
     settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
 ) -> dict[str, object]:
-    """Return the Meta authorize URL when META_APP_ID / META_APP_SECRET are set."""
-    if not oauth_available(settings):
+    """Return the Meta authorize URL when Meta App ID/Secret are in DB or host env."""
+    meta = resolve_meta_app_credentials(settings, session)
+    if not oauth_available(meta):
         raise NotConfigured(
-            "Meta OAuth is not configured. Set META_APP_ID and META_APP_SECRET on the host, "
-            "or paste a long-lived token below."
+            "Meta OAuth is not configured. Save Meta App ID and App Secret on /instagram, "
+            "or set META_APP_ID / META_APP_SECRET on the host."
         )
-    url, _state = build_authorize_url(settings)
+    assert meta is not None
+    url, _state = build_authorize_url(settings, meta)
     return {"authorize_url": url, "redirect_uri": oauth_redirect_uri(settings)}
 
 
@@ -1456,7 +1506,11 @@ def instagram_oauth_callback(
         return _fail("Missing OAuth code or state.")
     try:
         verify_oauth_state(state, settings)
-        tokens = exchange_code_for_credentials(settings, code=code)
+        meta = resolve_meta_app_credentials(settings, session)
+        if not oauth_available(meta):
+            return _fail("Meta OAuth is not configured.")
+        assert meta is not None
+        tokens = exchange_code_for_credentials(settings, meta, code=code)
         save_credentials(
             session,
             settings,

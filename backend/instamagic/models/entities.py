@@ -372,8 +372,10 @@ class InstagramPost(Base):
 class InstagramConnection(Base):
     """Singleton row for operator Graph credentials + cached account profile.
 
-    Access token is sealed with APP_SECRET (Fernet). Never log ciphertext as if it were safe
-    to print in full; treat it like a secret. Env tokens still take precedence when both set.
+    Access token and Meta App Secret are sealed with APP_SECRET (Fernet). Never log
+    ciphertext as if it were safe to print in full; treat it like a secret.
+    Env Instagram tokens still take precedence when both env and DB are set.
+    Meta App ID/Secret prefer DB, then env fallback.
     """
 
     __tablename__ = "instagram_connections"
@@ -381,6 +383,8 @@ class InstagramConnection(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
     access_token_ciphertext: Mapped[str] = mapped_column(Text, default="")
     business_account_id: Mapped[str] = mapped_column(String(64), default="")
+    meta_app_id: Mapped[str] = mapped_column(String(64), default="")
+    meta_app_secret_ciphertext: Mapped[str] = mapped_column(Text, default="")
     account_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     account_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

@@ -17,7 +17,15 @@ from instamagic.services.instagram.client import (
     NotConfiguredInstagramClient,
     mask_access_token,
 )
-from instamagic.services.instagram.oauth import META_APP_DOCS_URL, OAUTH_SCOPES, oauth_redirect_uri
+from instamagic.services.instagram.oauth import (
+    META_APP_DOCS_URL,
+    META_APPS_DASHBOARD_URL,
+    META_CREATE_APP_DOCS_URL,
+    OAUTH_SCOPES,
+    MetaAppCredentials,
+    oauth_available,
+    oauth_redirect_uri,
+)
 from instamagic.services.secret_box import open_sealed, seal
 from sqlalchemy.orm import Session
 
@@ -33,6 +41,14 @@ class ResolvedCredentials:
 
 def get_connection(session: Session) -> InstagramConnection | None:
     return session.get(InstagramConnection, CONNECTION_ID)
+
+
+def _ensure_row(session: Session) -> InstagramConnection:
+    row = get_connection(session)
+    if row is None:
+        row = InstagramConnection(id=CONNECTION_ID)
+        session.add(row)
+    return row
 
 
 def resolve_credentials(settings: Settings, session: Session | None) -> ResolvedCredentials | None:
@@ -64,6 +80,30 @@ def resolve_credentials(settings: Settings, session: Session | None) -> Resolved
     )
 
 
+def resolve_meta_app_credentials(
+    settings: Settings,
+    session: Session | None,
+) -> MetaAppCredentials | None:
+    """Prefer sealed DB Meta app credentials; fall back to host env."""
+    if session is not None:
+        row = get_connection(session)
+        if row is not None:
+            app_id = (row.meta_app_id or "").strip()
+            cipher = (row.meta_app_secret_ciphertext or "").strip()
+            if app_id and cipher:
+                try:
+                    secret = open_sealed(cipher, app_secret=settings.app_secret)
+                except ValueError:
+                    secret = ""
+                if secret:
+                    return MetaAppCredentials(app_id=app_id, app_secret=secret, source="database")
+    env_id = settings.meta_app_id.strip()
+    env_secret = settings.meta_app_secret.strip()
+    if env_id and env_secret:
+        return MetaAppCredentials(app_id=env_id, app_secret=env_secret, source="env")
+    return None
+
+
 def build_instagram_client(settings: Settings, session: Session | None = None) -> InstagramClient:
     if settings.instagram_provider == "fake":
         return FakeInstagramClient()
@@ -92,10 +132,7 @@ def save_credentials(
         raise ValueError("Access token is too long.")
     if len(account_id) > 64 or any(ch in account_id for ch in "/\\\x00\n\r\t "):
         raise ValueError("Instagram business account id is not valid.")
-    row = get_connection(session)
-    if row is None:
-        row = InstagramConnection(id=CONNECTION_ID)
-        session.add(row)
+    row = _ensure_row(session)
     row.access_token_ciphertext = seal(token, app_secret=settings.app_secret)
     row.business_account_id = account_id
     row.updated_at = datetime.now(UTC)
@@ -104,11 +141,57 @@ def save_credentials(
     return row
 
 
+def save_meta_app_credentials(
+    session: Session,
+    settings: Settings,
+    *,
+    app_id: str,
+    app_secret: str,
+) -> InstagramConnection:
+    """Seal Meta App Secret with APP_SECRET. Never log plaintext app_secret."""
+    cleaned_id = app_id.strip()
+    cleaned_secret = app_secret.strip()
+    if not cleaned_id or not cleaned_secret:
+        raise ValueError("Meta App ID and App Secret are required.")
+    if len(cleaned_id) > 64 or any(ch in cleaned_id for ch in "/\\\x00\n\r\t "):
+        raise ValueError("Meta App ID is not valid.")
+    if len(cleaned_secret) > 512 or any(ch in cleaned_secret for ch in "\x00\n\r"):
+        raise ValueError("Meta App Secret is not valid.")
+    row = _ensure_row(session)
+    row.meta_app_id = cleaned_id
+    row.meta_app_secret_ciphertext = seal(cleaned_secret, app_secret=settings.app_secret)
+    row.updated_at = datetime.now(UTC)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
 def clear_credentials(session: Session) -> None:
+    """Clear sealed Page token + cached profile. Keeps Meta App ID/Secret."""
     row = get_connection(session)
     if row is None:
         return
-    session.delete(row)
+    row.access_token_ciphertext = ""
+    row.business_account_id = ""
+    row.account_json = None
+    row.account_fetched_at = None
+    row.updated_at = datetime.now(UTC)
+    # Drop empty shell rows that have no Meta app either.
+    if not (row.meta_app_id or "").strip() and not (row.meta_app_secret_ciphertext or "").strip():
+        session.delete(row)
+    session.commit()
+
+
+def clear_meta_app_credentials(session: Session) -> None:
+    """Clear sealed Meta App credentials. Keeps Instagram Page token if present."""
+    row = get_connection(session)
+    if row is None:
+        return
+    row.meta_app_id = ""
+    row.meta_app_secret_ciphertext = ""
+    row.updated_at = datetime.now(UTC)
+    if not row.access_token_ciphertext.strip() and not row.business_account_id.strip() and not row.account_json:
+        session.delete(row)
     session.commit()
 
 
@@ -150,6 +233,7 @@ def connection_status_fields(
     configured: bool,
 ) -> dict[str, object]:
     creds = resolve_credentials(settings, session)
+    meta = resolve_meta_app_credentials(settings, session)
     row = get_connection(session)
     cached = load_cached_account(session)
     token_masked: str | None
@@ -168,7 +252,13 @@ def connection_status_fields(
         token_masked = None
         business_id = (row.business_account_id.strip() if row else "") or None
 
-    oauth_ready = bool(settings.meta_app_id.strip() and settings.meta_app_secret.strip())
+    oauth_ready = oauth_available(meta)
+    meta_app_id_display: str | None = None
+    if meta is not None:
+        meta_app_id_display = meta.app_id
+    elif row is not None and (row.meta_app_id or "").strip():
+        meta_app_id_display = row.meta_app_id.strip()
+
     return {
         "configured": configured,
         "provider": settings.instagram_provider,
@@ -184,6 +274,12 @@ def connection_status_fields(
         "oauth_redirect_uri": oauth_redirect_uri(settings),
         "oauth_scopes": OAUTH_SCOPES,
         "meta_docs_url": META_APP_DOCS_URL,
+        "meta_apps_dashboard_url": META_APPS_DASHBOARD_URL,
+        "meta_create_app_docs_url": META_CREATE_APP_DOCS_URL,
+        "meta_app_id": meta_app_id_display,
+        "meta_app_secret_configured": oauth_ready,
+        "meta_app_source": meta.source if meta else "none",
+        "can_edit_meta_app": settings.instagram_provider != "fake",
         "account": cached,
         "account_fetched_at": row.account_fetched_at.isoformat() if row and row.account_fetched_at else None,
         "can_edit_database_credentials": settings.instagram_provider != "fake"

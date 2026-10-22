@@ -5,11 +5,17 @@ import type { InstagramAccountDetails, InstagramConnectionStatus, InstagramRefre
 
 const DEFAULT_META_DOCS =
   "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login";
+const DEFAULT_META_APPS = "https://developers.facebook.com/apps/";
+const DEFAULT_CREATE_DOCS =
+  "https://developers.facebook.com/docs/instagram-platform/create-an-instagram-app";
+const STAGE_REDIRECT = "https://instamagic.schimmel.homes/api/instagram/oauth/callback";
 
 export function InstagramPage() {
   const queryClient = useQueryClient();
   const [tokenInput, setTokenInput] = useState("");
   const [accountIdInput, setAccountIdInput] = useState("");
+  const [metaAppIdInput, setMetaAppIdInput] = useState("");
+  const [metaAppSecretInput, setMetaAppSecretInput] = useState("");
   const [banner, setBanner] = useState<string | null>(null);
   const [bannerKind, setBannerKind] = useState<"ok" | "error">("ok");
 
@@ -50,6 +56,12 @@ export function InstagramPage() {
       oauth_redirect_uri: body.oauth_redirect_uri,
       oauth_scopes: body.oauth_scopes,
       meta_docs_url: body.meta_docs_url,
+      meta_apps_dashboard_url: body.meta_apps_dashboard_url,
+      meta_create_app_docs_url: body.meta_create_app_docs_url,
+      meta_app_id: body.meta_app_id,
+      meta_app_secret_configured: body.meta_app_secret_configured,
+      meta_app_source: body.meta_app_source,
+      can_edit_meta_app: body.can_edit_meta_app,
       account: body.account,
       account_fetched_at: body.account_fetched_at,
       can_edit_database_credentials: body.can_edit_database_credentials,
@@ -106,11 +118,46 @@ export function InstagramPage() {
     onSuccess: async (body) => {
       await applyStatus(body);
       setBannerKind("ok");
-      setBanner("Database credentials cleared.");
+      setBanner("Database Instagram credentials cleared.");
     },
     onError: (err) => {
       setBannerKind("error");
       setBanner(err instanceof ApiError ? err.message : "Could not clear credentials.");
+    },
+  });
+
+  const saveMetaApp = useMutation({
+    mutationFn: () =>
+      api<InstagramRefreshResult>("/api/instagram/meta-app", {
+        method: "POST",
+        body: JSON.stringify({
+          app_id: metaAppIdInput,
+          app_secret: metaAppSecretInput,
+        }),
+      }),
+    onSuccess: async (body) => {
+      setMetaAppSecretInput("");
+      setMetaAppIdInput("");
+      await applyStatus(body);
+      setBannerKind("ok");
+      setBanner("Meta App ID/Secret saved (secret sealed). You can Connect with Meta now.");
+    },
+    onError: (err) => {
+      setBannerKind("error");
+      setBanner(err instanceof ApiError ? err.message : "Could not save Meta app credentials.");
+    },
+  });
+
+  const clearMetaApp = useMutation({
+    mutationFn: () => api<InstagramRefreshResult>("/api/instagram/meta-app", { method: "DELETE" }),
+    onSuccess: async (body) => {
+      await applyStatus(body);
+      setBannerKind("ok");
+      setBanner("Database Meta App credentials cleared.");
+    },
+    onError: (err) => {
+      setBannerKind("error");
+      setBanner(err instanceof ApiError ? err.message : "Could not clear Meta app credentials.");
     },
   });
 
@@ -141,6 +188,8 @@ export function InstagramPage() {
     connection?.oauth_scopes ||
     "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement";
   const metaDocs = connection?.meta_docs_url || DEFAULT_META_DOCS;
+  const metaApps = connection?.meta_apps_dashboard_url || DEFAULT_META_APPS;
+  const createDocs = connection?.meta_create_app_docs_url || DEFAULT_CREATE_DOCS;
 
   const onSave = (event: FormEvent) => {
     event.preventDefault();
@@ -152,19 +201,89 @@ export function InstagramPage() {
     saveCreds.mutate();
   };
 
+  const onSaveMetaApp = (event: FormEvent) => {
+    event.preventDefault();
+    if (!metaAppIdInput.trim() || !metaAppSecretInput.trim()) {
+      setBannerKind("error");
+      setBanner("Paste both the Meta App ID and App Secret from the Meta Developer Console.");
+      return;
+    }
+    saveMetaApp.mutate();
+  };
+
   return (
     <main className="page">
       <h1>Instagram connection</h1>
       <p>
         Connect a Professional Instagram account (Business/Creator linked to a Facebook Page) via Meta login.
-        Credentials are sealed in the database. This page never shows the full access token and never publishes.
+        Credentials are sealed in the database. This page never shows the full access token or App Secret and
+        never publishes.
       </p>
 
       {banner ? <p className={bannerKind === "ok" ? "ok" : "error"}>{banner}</p> : null}
       {statusError ? <p className="error">{statusError}</p> : null}
 
       <section className="panel ig-connect-panel">
-        <h2>Connect with Instagram / Meta</h2>
+        <h2>1. Meta Developer App</h2>
+        <MetaSetupChecklist
+          redirectUri={redirectUri}
+          scopes={scopes}
+          metaDocs={metaDocs}
+          metaApps={metaApps}
+          createDocs={createDocs}
+        />
+        {connection?.can_edit_meta_app !== false ? (
+          <form className="form-grid ig-meta-form" onSubmit={onSaveMetaApp}>
+            <label>
+              Meta App ID
+              <input
+                value={metaAppIdInput}
+                onChange={(e) => setMetaAppIdInput(e.target.value)}
+                placeholder={connection?.meta_app_id || "from App Dashboard → Settings → Basic"}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              Meta App Secret
+              <input
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                value={metaAppSecretInput}
+                onChange={(e) => setMetaAppSecretInput(e.target.value)}
+                placeholder="Show → copy from Settings → Basic (never shown after save)"
+              />
+            </label>
+            <div className="row span-2">
+              <button type="submit" className="button" disabled={saveMetaApp.isPending}>
+                {saveMetaApp.isPending ? "Saving…" : "Save Meta App ID & Secret"}
+              </button>
+              {connection?.meta_app_source === "database" ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={clearMetaApp.isPending}
+                  onClick={() => {
+                    if (window.confirm("Clear sealed Meta App credentials from the database?")) {
+                      clearMetaApp.mutate();
+                    }
+                  }}
+                >
+                  {clearMetaApp.isPending ? "Clearing…" : "Clear Meta App"}
+                </button>
+              ) : null}
+            </div>
+            <p className="muted span-2">
+              Sealed with <code>APP_SECRET</code> in Postgres. After save, the secret is never shown again.
+              Host <code>META_*</code> env remains an optional fallback (DB wins when both are set).
+            </p>
+          </form>
+        ) : null}
+      </section>
+
+      <section className="panel ig-connect-panel">
+        <h2>2. Connect with Instagram / Meta</h2>
         {connection?.oauth_available ? (
           <>
             <p className="muted">
@@ -190,7 +309,10 @@ export function InstagramPage() {
             </p>
           </>
         ) : (
-          <MetaSetupChecklist redirectUri={redirectUri} scopes={scopes} metaDocs={metaDocs} />
+          <p className="error">
+            Save Meta App ID and App Secret above (or set <code>META_APP_ID</code> /{" "}
+            <code>META_APP_SECRET</code> on the host) before Connect is available.
+          </p>
         )}
       </section>
 
@@ -228,8 +350,20 @@ export function InstagramPage() {
               </dd>
             </div>
             <div>
-              <dt>Meta OAuth on host</dt>
-              <dd>{connection.oauth_available ? "Ready (META_APP_ID / SECRET set)" : "Not configured"}</dd>
+              <dt>Meta App ID</dt>
+              <dd>{connection.meta_app_id || "Not set"}</dd>
+            </div>
+            <div>
+              <dt>Meta App Secret</dt>
+              <dd>
+                {connection.meta_app_secret_configured
+                  ? `Configured (${connection.meta_app_source ?? "unknown"})`
+                  : "Not set"}
+              </dd>
+            </div>
+            <div>
+              <dt>Meta OAuth</dt>
+              <dd>{connection.oauth_available ? "Ready" : "Not configured"}</dd>
             </div>
             <div>
               <dt>Graph version</dt>
@@ -252,8 +386,8 @@ export function InstagramPage() {
 
         {!connection?.configured ? (
           <p className="error">
-            Instagram is not configured yet. Use Connect with Meta once the host has{" "}
-            <code>META_APP_ID</code> / <code>META_APP_SECRET</code>, or expand Advanced below to paste a token.
+            Instagram is not configured yet. Save the Meta App above, then Connect — or expand Advanced to paste
+            a long-lived token.
           </p>
         ) : null}
 
@@ -341,52 +475,80 @@ function MetaSetupChecklist({
   redirectUri,
   scopes,
   metaDocs,
+  metaApps,
+  createDocs,
 }: {
   redirectUri: string;
   scopes: string;
   metaDocs: string;
+  metaApps: string;
+  createDocs: string;
 }) {
+  const copyRedirect = async () => {
+    try {
+      await navigator.clipboard.writeText(redirectUri);
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <div className="ig-setup">
-      <p className="error">
-        Meta OAuth is not enabled on this host yet. The Connect button stays off until{" "}
-        <code>META_APP_ID</code> and <code>META_APP_SECRET</code> are set in the host <code>.env</code> and the
-        API is restarted. You do not need to paste Instagram tokens — create a free Meta app (~5 minutes), then
-        come back here.
+      <p className="muted">
+        Create a free Meta app once (~5 minutes). You do <strong>not</strong> paste Instagram tokens here — only
+        the App ID and App Secret from the Meta console, then Connect.
       </p>
       <ol className="howto">
         <li>
-          Create an app at{" "}
-          <a href="https://developers.facebook.com/apps/" target="_blank" rel="noreferrer">
+          Open{" "}
+          <a href={metaApps} target="_blank" rel="noreferrer">
             developers.facebook.com/apps
           </a>{" "}
-          (type that supports Instagram Graph / Facebook Login).
+          and sign in. Click <strong>Create App</strong>.
         </li>
         <li>
-          Add the <strong>Facebook Login</strong> product. Under Valid OAuth Redirect URIs, paste exactly:
-          <br />
-          <code className="break-all">{redirectUri}</code>
-        </li>
-        <li>
-          Request (or use in Development mode with your admin/tester account) permissions:{" "}
-          <code>{scopes}</code>. Confirm names against{" "}
-          <a href={metaDocs} target="_blank" rel="noreferrer">
-            Meta Instagram API docs
+          Use case <strong>Other</strong> → app type <strong>Business</strong>. Name it (e.g. Instamagic) and
+          add a contact email. Details:{" "}
+          <a href={createDocs} target="_blank" rel="noreferrer">
+            Create a Meta app
           </a>
           .
         </li>
         <li>
-          Convert the Instagram account to Professional and link it to a Facebook Page you admin.
+          Add product <strong>Facebook Login</strong> (Facebook Login for Business). Skip Instagram-only
+          “business login” embed URLs — Instamagic uses the classic Facebook Login dialog.
         </li>
         <li>
-          On the Instamagic host <code>.env</code> (chmod 600), set:
-          <pre className="ig-env-snippet">{`META_APP_ID=<app id>
-META_APP_SECRET=<app secret>
-FRONTEND_ORIGIN=https://instamagic.schimmel.homes
-# optional explicit override:
-# META_OAUTH_REDIRECT_URI=${redirectUri}`}</pre>
-          Restart the API containers, reload this page, then use{" "}
-          <strong>Connect with Instagram / Meta</strong>.
+          Facebook Login → <strong>Settings</strong> → <strong>Valid OAuth Redirect URIs</strong>. Paste
+          exactly (Strict Mode requires an exact match):
+          <br />
+          <code className="break-all">{redirectUri}</code>{" "}
+          <button type="button" className="ghost" onClick={() => void copyRedirect()}>
+            Copy
+          </button>
+          {redirectUri !== STAGE_REDIRECT ? (
+            <span className="muted">
+              {" "}
+              (stage expected: <code className="break-all">{STAGE_REDIRECT}</code>)
+            </span>
+          ) : null}
+        </li>
+        <li>
+          Permissions Instamagic requests (Development mode: your admin/tester account is enough; Live needs
+          App Review for others): <code>{scopes}</code>. Confirm names against{" "}
+          <a href={metaDocs} target="_blank" rel="noreferrer">
+            Instagram API with Facebook Login
+          </a>
+          .
+        </li>
+        <li>
+          Convert the Instagram account to <strong>Professional</strong> and link it to a Facebook Page you
+          admin.
+        </li>
+        <li>
+          App Dashboard → <strong>Settings → Basic</strong>: copy <strong>App ID</strong> and{" "}
+          <strong>App Secret</strong> (Show), then paste them in the form below and Save. No host{" "}
+          <code>.env</code> restart required.
         </li>
       </ol>
       <p className="muted">

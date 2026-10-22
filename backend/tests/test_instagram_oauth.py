@@ -13,6 +13,7 @@ from instamagic.main import create_app
 from instamagic.models import Base
 from instamagic.services.instagram.oauth import (
     OAUTH_SCOPES,
+    MetaAppCredentials,
     OAuthTokens,
     build_authorize_url,
     exchange_code_for_credentials,
@@ -100,9 +101,13 @@ def test_oauth_redirect_explicit_override() -> None:
     assert oauth_redirect_uri(settings) == "https://custom.example/api/instagram/oauth/callback"
 
 
+def _meta() -> MetaAppCredentials:
+    return MetaAppCredentials(app_id="app-id-123", app_secret="app-secret-456", source="env")
+
+
 def test_build_authorize_url_includes_signed_state_and_scopes() -> None:
     settings = _settings()
-    url, state = build_authorize_url(settings)
+    url, state = build_authorize_url(settings, _meta())
     parsed = urlparse(url)
     assert parsed.netloc == "www.facebook.com"
     qs = parse_qs(parsed.query)
@@ -136,7 +141,10 @@ def test_status_exposes_oauth_setup_fields_without_secrets(graph_client) -> None
     assert status["oauth_redirect_uri"].endswith("/api/instagram/oauth/callback")
     assert "instagram_content_publish" in status["oauth_scopes"]
     assert status["meta_docs_url"].startswith("https://developers.facebook.com/")
+    assert status["meta_app_source"] == "none"
+    assert status["meta_app_secret_configured"] is False
     assert "META_APP_SECRET" not in str(status)
+    assert "app-secret" not in str(status).lower()
     assert "access_token" not in status
 
 
@@ -144,8 +152,9 @@ def test_oauth_callback_seals_credentials(meta_client, monkeypatch: pytest.Monke
     settings = get_settings()
     state = sign_payload("ig-oauth|nonce", settings)
 
-    def fake_exchange(settings_arg, *, code: str) -> OAuthTokens:
+    def fake_exchange(settings_arg, meta=None, *, code: str) -> OAuthTokens:
         assert code == "meta-code"
+        assert meta is not None
         return OAuthTokens(
             access_token="EAAB_page_token_from_oauth_xyz9",
             business_account_id="17841400000000000",
@@ -264,8 +273,51 @@ def test_exchange_discovers_ig_business_account(monkeypatch: pytest.MonkeyPatch)
             raise AssertionError(f"unexpected url {url}")
 
     monkeypatch.setattr("instamagic.services.instagram.oauth.httpx.Client", FakeClient)
-    tokens = exchange_code_for_credentials(settings, code="auth-code")
+    tokens = exchange_code_for_credentials(settings, _meta(), code="auth-code")
     assert tokens.business_account_id == "178414999"
     assert tokens.access_token == "EAAB_page_token_abc"
     assert tokens.page_id == "page-1"
     assert any("oauth/access_token" in c for c in calls)
+
+
+def test_meta_app_saved_in_db_enables_oauth_without_env(graph_client) -> None:
+    login(graph_client)
+    secret = "meta-app-secret-value-xyz"
+    save = graph_client.post(
+        "/api/instagram/meta-app",
+        json={"app_id": "db-app-id-999", "app_secret": secret},
+    )
+    assert save.status_code == 200, save.text
+    body = save.json()
+    assert body["ok"] is True
+    assert body["oauth_available"] is True
+    assert body["meta_app_id"] == "db-app-id-999"
+    assert body["meta_app_source"] == "database"
+    assert body["meta_app_secret_configured"] is True
+    assert secret not in str(body)
+    assert "app_secret" not in body
+
+    start = graph_client.get("/api/instagram/oauth/start")
+    assert start.status_code == 200, start.text
+    assert "facebook.com" in start.json()["authorize_url"]
+    assert "db-app-id-999" in start.json()["authorize_url"]
+    assert secret not in str(start.json())
+
+    cleared = graph_client.delete("/api/instagram/meta-app")
+    assert cleared.status_code == 200
+    assert cleared.json()["oauth_available"] is False
+    assert cleared.json()["meta_app_source"] == "none"
+
+
+def test_meta_app_db_wins_over_env(meta_client) -> None:
+    login(meta_client)
+    save = meta_client.post(
+        "/api/instagram/meta-app",
+        json={"app_id": "from-database", "app_secret": "db-secret-value-here"},
+    )
+    assert save.status_code == 200, save.text
+    status = meta_client.get("/api/instagram/status").json()
+    assert status["meta_app_id"] == "from-database"
+    assert status["meta_app_source"] == "database"
+    assert "db-secret" not in str(status)
+    assert "app-secret-456" not in str(status)

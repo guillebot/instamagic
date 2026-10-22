@@ -30,6 +30,8 @@ def test_protected_routes_require_session(client) -> None:
     ):
         assert client.get(path).status_code == 401, path
     assert client.post("/api/instagram/account").status_code == 401
+    assert client.post("/api/instagram/meta-app", json={}).status_code == 401
+    assert client.delete("/api/instagram/meta-app").status_code == 401
 
 
 def test_login_sets_httponly_session_cookie(client) -> None:

@@ -19,6 +19,19 @@ OAUTH_SCOPES = "instagram_basic,instagram_content_publish,pages_show_list,pages_
 META_APP_DOCS_URL = (
     "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login"
 )
+META_APPS_DASHBOARD_URL = "https://developers.facebook.com/apps/"
+META_CREATE_APP_DOCS_URL = (
+    "https://developers.facebook.com/docs/instagram-platform/create-an-instagram-app"
+)
+
+
+@dataclass(frozen=True)
+class MetaAppCredentials:
+    """Resolved Meta app client id + secret. Never log ``app_secret``."""
+
+    app_id: str
+    app_secret: str
+    source: str  # database | env
 
 
 @dataclass(frozen=True)
@@ -42,19 +55,20 @@ def oauth_redirect_uri(settings: Settings) -> str:
     return f"{base}/api/instagram/oauth/callback"
 
 
-def oauth_available(settings: Settings) -> bool:
-    return bool(settings.meta_app_id.strip() and settings.meta_app_secret.strip())
+def oauth_available(meta: MetaAppCredentials | None) -> bool:
+    return meta is not None and bool(meta.app_id.strip() and meta.app_secret.strip())
 
 
-def build_authorize_url(settings: Settings) -> tuple[str, str]:
-    if not oauth_available(settings):
+def build_authorize_url(settings: Settings, meta: MetaAppCredentials) -> tuple[str, str]:
+    if not oauth_available(meta):
         raise NotConfigured(
-            "Meta OAuth is not configured. Set META_APP_ID and META_APP_SECRET on the host."
+            "Meta OAuth is not configured. Save Meta App ID and App Secret on /instagram, "
+            "or set META_APP_ID and META_APP_SECRET on the host."
         )
     state = secrets.token_urlsafe(24)
     signed_state = sign_payload(f"ig-oauth|{state}", settings)
     params = {
-        "client_id": settings.meta_app_id.strip(),
+        "client_id": meta.app_id.strip(),
         "redirect_uri": oauth_redirect_uri(settings),
         "state": signed_state,
         "scope": OAUTH_SCOPES,
@@ -71,18 +85,25 @@ def verify_oauth_state(state: str, settings: Settings) -> None:
         raise NotAllowed("Invalid or expired OAuth state.")
 
 
-def exchange_code_for_credentials(settings: Settings, *, code: str) -> OAuthTokens:
-    if not oauth_available(settings):
+def exchange_code_for_credentials(
+    settings: Settings,
+    meta: MetaAppCredentials,
+    *,
+    code: str,
+) -> OAuthTokens:
+    if not oauth_available(meta):
         raise NotConfigured("Meta OAuth is not configured.")
     version = settings.instagram_graph_version.strip() or "v21.0"
     base = f"https://graph.facebook.com/{version}"
     redirect_uri = oauth_redirect_uri(settings)
+    app_id = meta.app_id.strip()
+    app_secret = meta.app_secret.strip()
     with httpx.Client(timeout=45.0) as client:
         short = client.get(
             f"{base}/oauth/access_token",
             params={
-                "client_id": settings.meta_app_id.strip(),
-                "client_secret": settings.meta_app_secret.strip(),
+                "client_id": app_id,
+                "client_secret": app_secret,
                 "redirect_uri": redirect_uri,
                 "code": code,
             },
@@ -96,8 +117,8 @@ def exchange_code_for_credentials(settings: Settings, *, code: str) -> OAuthToke
             f"{base}/oauth/access_token",
             params={
                 "grant_type": "fb_exchange_token",
-                "client_id": settings.meta_app_id.strip(),
-                "client_secret": settings.meta_app_secret.strip(),
+                "client_id": app_id,
+                "client_secret": app_secret,
                 "fb_exchange_token": short_token,
             },
         )
