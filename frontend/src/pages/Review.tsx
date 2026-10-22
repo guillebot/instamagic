@@ -5,6 +5,7 @@ import {
   MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -16,16 +17,24 @@ import { CropPanel } from "../CropPanel";
 import { SAFETY_FILTERS, lifecycleLabel } from "../lifecycle";
 import { acquireThumbSlot } from "../thumbQueue";
 import {
+  appendGridPage,
+  applyPendingNewPhotos,
+  buildRowTopIndex,
+  captureScrollAnchor,
   createNavStacks,
+  hardResetGridItems,
   indexOfImageId,
-  mergeImageListRefresh,
+  mergeGridUpdatesInPlace,
   navBack,
   navForward,
   navVisit,
   nextImageIdAfterCurrent,
   resolveCurrentImage,
+  scrollTopForAnchor,
   shouldApplyInitialImageFromUrl,
+  type GridImageItem,
   type ReviewNavStacks,
+  type ScrollAnchor,
 } from "../reviewNavigation";
 import type {
   AppConfig,
@@ -80,6 +89,7 @@ function GridThumb({ src }: { src: string }) {
       src={activeSrc}
       alt=""
       draggable={false}
+      loading="lazy"
       decoding="async"
       className={loaded ? "thumb-loaded" : "thumb-loading"}
       onLoad={finish}
@@ -125,10 +135,11 @@ const RATING_KEYS = [
 
 const GRID_GAP = 8;
 const TARGET_ROW_HEIGHT = 160;
+const PAGE_SIZE = 60;
 
 type JustifiedRow = {
   startIndex: number;
-  items: ImageItem[];
+  items: GridImageItem[];
   height: number;
 };
 
@@ -140,7 +151,7 @@ function imageAspect(image: ImageItem): number {
 }
 
 /** Pack images into same-height rows; tile width follows aspect so the full photo is visible. */
-function buildJustifiedRows(items: ImageItem[], containerWidth: number, rowHeight: number, gap: number): JustifiedRow[] {
+function buildJustifiedRows(items: GridImageItem[], containerWidth: number, rowHeight: number, gap: number): JustifiedRow[] {
   if (containerWidth <= 0 || items.length === 0) return [];
   const rows: JustifiedRow[] = [];
   let index = 0;
@@ -200,8 +211,10 @@ export function ReviewPage() {
   });
   const [libraryId, setLibraryId] = useState("");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const [items, setItems] = useState<ImageItem[]>([]);
+  const [items, setItems] = useState<GridImageItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [listExhausted, setListExhausted] = useState(false);
+  const [pendingNewPhotos, setPendingNewPhotos] = useState<ImageItem[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [pinnedImage, setPinnedImage] = useState<ImageItem | null>(null);
   const [navStacks, setNavStacks] = useState<ReviewNavStacks>(() => createNavStacks());
@@ -221,7 +234,16 @@ export function ReviewPage() {
   const pinnedRef = useRef<ImageItem | null>(null);
   const urlSelectionInitialized = useRef(false);
   const sessionImagesRef = useRef<Map<string, ImageItem>>(new Map());
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const cursorRef = useRef<string | null>(null);
+  const pendingScrollAnchorRef = useRef<ScrollAnchor | null>(null);
+  const suppressSelectionScrollRef = useRef(false);
+  const justifiedRowsRef = useRef<JustifiedRow[]>([]);
   const [width, setWidth] = useState(960);
+
+  useEffect(() => {
+    cursorRef.current = cursor;
+  }, [cursor]);
 
   useEffect(() => {
     currentIdRef.current = currentId;
@@ -321,46 +343,108 @@ export function ReviewPage() {
     return params.toString();
   }, [filters, libraryId, folder, recursive]);
 
-  async function load(reset: boolean, keepSelection = false) {
+  const rememberGridScrollAnchor = useCallback(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    pendingScrollAnchorRef.current = captureScrollAnchor(
+      el.scrollTop,
+      currentIdRef.current,
+      buildRowTopIndex(justifiedRowsRef.current, GRID_GAP),
+    );
+  }, []);
+
+  const restoreGridScrollAnchor = useCallback(() => {
+    const el = parentRef.current;
+    const anchor = pendingScrollAnchorRef.current;
+    if (!el || !anchor) return;
+    const top = scrollTopForAnchor(anchor, buildRowTopIndex(justifiedRowsRef.current, GRID_GAP));
+    if (top != null) el.scrollTop = top;
+    pendingScrollAnchorRef.current = null;
+  }, []);
+
+  async function fetchImagePage(nextCursor: string | null): Promise<Page> {
     const params = new URLSearchParams(queryString);
-    if (!reset && cursor) params.set("cursor", cursor);
-    const page = await api<Page>(`/api/images?${params.toString()}`);
-    if (reset) {
+    params.set("limit", String(PAGE_SIZE));
+    if (nextCursor) params.set("cursor", nextCursor);
+    return api<Page>(`/api/images?${params.toString()}`);
+  }
+
+  async function loadInitial(resetSelection = true) {
+    const page = await fetchImagePage(null);
+    setItems(hardResetGridItems(page.items));
+    setCursor(page.next_cursor);
+    setListExhausted(!page.next_cursor);
+    setPendingNewPhotos([]);
+    if (resetSelection) {
+      const urlImage = searchParams.get("image");
+      const pick =
+        urlImage && page.items.some((row) => row.id === urlImage)
+          ? urlImage
+          : page.items[0]?.id ?? null;
+      setCurrentId(pick);
+      setPinnedImage(null);
+      setNavStacks(createNavStacks());
+      setMultiIds(new Set());
+      if (pick) syncImageParam(pick, true);
+      urlSelectionInitialized.current = true;
+    }
+  }
+
+  const loadingMore = useRef(false);
+
+  async function loadMorePage() {
+    const nextCursor = cursorRef.current;
+    if (!nextCursor || loadingMore.current || listExhausted) return;
+    loadingMore.current = true;
+    rememberGridScrollAnchor();
+    try {
+      const page = await fetchImagePage(nextCursor);
+      setItems((previous) => appendGridPage(previous, page.items));
+      setCursor(page.next_cursor);
+      setListExhausted(!page.next_cursor);
+      suppressSelectionScrollRef.current = true;
+    } catch (err: unknown) {
+      setMessage(err instanceof Error ? err.message : "Could not load more.");
+    } finally {
+      loadingMore.current = false;
+    }
+  }
+
+  async function peekLibraryHeadFromScan() {
+    rememberGridScrollAnchor();
+    try {
+      const page = await fetchImagePage(null);
       setItems((previous) => {
-        const activeId = keepSelection ? currentIdRef.current : null;
-        const { items: merged, pinned } = mergeImageListRefresh(
-          previous,
-          page.items,
-          activeId,
-          pinnedRef.current,
-        );
-        if (pinned) setPinnedImage(pinned);
-        else if (activeId && merged.some((row) => row.id === activeId)) setPinnedImage(null);
+        const { items: merged, pendingNewItems } = mergeGridUpdatesInPlace(previous, page.items);
+        if (pendingNewItems.length > 0) {
+          setPendingNewPhotos((current) => {
+            const seen = new Set(current.map((row) => row.id));
+            const extra = pendingNewItems.filter((row) => !seen.has(row.id));
+            return extra.length ? [...current, ...extra] : current;
+          });
+        }
         return merged;
       });
-      if (!keepSelection) {
-        const urlImage = searchParams.get("image");
-        const pick =
-          urlImage && page.items.some((row) => row.id === urlImage)
-            ? urlImage
-            : page.items[0]?.id ?? null;
-        setCurrentId(pick);
-        setPinnedImage(null);
-        setNavStacks(createNavStacks());
-        setMultiIds(new Set());
-        if (pick) syncImageParam(pick, true);
-        urlSelectionInitialized.current = true;
-      }
-    } else {
-      setItems((current) => [...current, ...page.items]);
+      suppressSelectionScrollRef.current = true;
+      setFolderRefresh((value) => value + 1);
+    } catch {
+      /* scan peek is best-effort */
     }
-    setCursor(page.next_cursor);
+  }
+
+  function showPendingNewPhotos() {
+    if (pendingNewPhotos.length === 0) return;
+    rememberGridScrollAnchor();
+    setItems((previous) => applyPendingNewPhotos(previous, pendingNewPhotos));
+    setPendingNewPhotos([]);
+    suppressSelectionScrollRef.current = true;
   }
 
   useEffect(() => {
     if (!libraryId) return;
-    void load(true).catch((err: unknown) => setMessage(err instanceof Error ? err.message : "Could not load images."));
-    // cursor is intentionally read only for appends
+    void loadInitial(true).catch((err: unknown) =>
+      setMessage(err instanceof Error ? err.message : "Could not load images."),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryString, libraryId]);
 
@@ -394,6 +478,16 @@ export function ReviewPage() {
   }, [justifiedRows]);
 
   useEffect(() => {
+    justifiedRowsRef.current = justifiedRows;
+  }, [justifiedRows]);
+
+  useLayoutEffect(() => {
+    if (!suppressSelectionScrollRef.current) return;
+    restoreGridScrollAnchor();
+    suppressSelectionScrollRef.current = false;
+  }, [items, preview, restoreGridScrollAnchor]);
+
+  useEffect(() => {
     const initial = shouldApplyInitialImageFromUrl(
       urlSelectionInitialized.current,
       items,
@@ -421,6 +515,7 @@ export function ReviewPage() {
 
   useEffect(() => {
     if (!items.length || preview || !currentId) return;
+    if (suppressSelectionScrollRef.current) return;
     const itemIndex = indexOfImageId(items, currentId);
     if (itemIndex < 0) return;
     const rowIndex = rowIndexForItem(justifiedRows, itemIndex);
@@ -430,26 +525,20 @@ export function ReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId, preview]);
 
-  const loadingMore = useRef(false);
   useEffect(() => {
-    const el = parentRef.current;
-    if (!el || !cursor) return;
-    function onScroll() {
-      if (!el || !cursor || loadingMore.current) return;
-      const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (remaining > 600) return;
-      loadingMore.current = true;
-      void load(false)
-        .catch((err: unknown) => setMessage(err instanceof Error ? err.message : "Could not load more."))
-        .finally(() => {
-          loadingMore.current = false;
-        });
-    }
-    el.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => el.removeEventListener("scroll", onScroll);
+    const root = parentRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel || listExhausted) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMorePage();
+      },
+      { root, rootMargin: "480px 0px", threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor, items.length]);
+  }, [listExhausted, cursor, items.length]);
 
   const current = resolveCurrentImage(items, currentId, pinnedImage);
   useEffect(() => {
@@ -553,12 +642,15 @@ export function ReviewPage() {
         if (first) goToImage(first.id);
       }
     }
+    rememberGridScrollAnchor();
+    suppressSelectionScrollRef.current = true;
     setMessage("");
     setPrepMode(mode);
     setPreview(true);
   }
 
   function closeClassify() {
+    suppressSelectionScrollRef.current = true;
     setPreview(false);
     setPrepMode("rate");
   }
@@ -776,11 +868,7 @@ export function ReviewPage() {
             imageCount={libraries.data.find((library) => library.id === libraryId)?.image_count ?? 0}
             detectorAvailable={config.data?.detector_available ?? false}
             safetyClassifier={config.data?.safety_classifier ?? ""}
-            suspendImageRefresh={preview}
-            onImages={() => {
-              void load(true, true);
-              setFolderRefresh((value) => value + 1);
-            }}
+            onPeekLibraryHead={() => void peekLibraryHeadFromScan()}
             onLibraryRefresh={() => void queryClient.invalidateQueries({ queryKey: ["libraries"] })}
           />
           <select
@@ -865,6 +953,16 @@ export function ReviewPage() {
           onRecursive={setRecursive}
         />
       ) : null}
+      {pendingNewPhotos.length > 0 ? (
+        <div className="grid-refresh-banner" role="status">
+          <span>
+            {pendingNewPhotos.length} new photo{pendingNewPhotos.length === 1 ? "" : "s"} —{" "}
+          </span>
+          <button type="button" className="ghost" onClick={() => showPendingNewPhotos()}>
+            Show
+          </button>
+        </div>
+      ) : null}
       {message ? <p className="help">{message}</p> : null}
       {libraryId && items.length === 0 ? (
         <p className="help">
@@ -898,6 +996,7 @@ export function ReviewPage() {
                     "tile",
                     isSelected ? "selected" : "",
                     isMulti ? "multi" : "",
+                    image.gridStale ? "grid-stale" : "",
                   ]
                     .filter(Boolean)
                     .join(" ");
@@ -943,12 +1042,11 @@ export function ReviewPage() {
             );
           })}
         </div>
+        <div ref={sentinelRef} className="grid-sentinel" aria-hidden />
+        {listExhausted && items.length > 0 ? (
+          <p className="grid-end-marker">End of library · {items.length} photos</p>
+        ) : null}
       </div>
-      {cursor ? (
-        <button className="ghost" onClick={() => void load(false)}>
-          Load more
-        </button>
-      ) : null}
       <p className="help">
         Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move (→ next / forward, ← or Z or Backspace back), space
         classify, C crop, B blur, P queue, G captions. ⌘/Ctrl-click multi-select, Shift-click range. In classify: 1–4 rate
@@ -1148,16 +1246,14 @@ function ScanPanel({
   imageCount,
   detectorAvailable,
   safetyClassifier,
-  suspendImageRefresh,
-  onImages,
+  onPeekLibraryHead,
   onLibraryRefresh,
 }: {
   libraryId: string;
   imageCount: number;
   detectorAvailable: boolean;
   safetyClassifier: string;
-  suspendImageRefresh?: boolean;
-  onImages: () => void;
+  onPeekLibraryHead: () => void;
   onLibraryRefresh: () => void;
 }) {
   const [job, setJob] = useState<JobItem | null>(null);
@@ -1165,12 +1261,10 @@ function ScanPanel({
   const [queues, setQueues] = useState<QueuesStatus | null>(null);
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
-  const onImagesRef = useRef(onImages);
+  const onPeekRef = useRef(onPeekLibraryHead);
   const onLibraryRef = useRef(onLibraryRefresh);
-  const suspendRef = useRef(suspendImageRefresh);
-  onImagesRef.current = onImages;
+  onPeekRef.current = onPeekLibraryHead;
   onLibraryRef.current = onLibraryRefresh;
-  suspendRef.current = suspendImageRefresh;
 
   async function refreshJobs() {
     const jobs = await api<JobItem[]>(`/api/jobs?library_id=${encodeURIComponent(libraryId)}`);
@@ -1203,8 +1297,8 @@ function ScanPanel({
     Promise.all([refreshJobs(), refreshQueues()])
       .then(([result]) => {
         if (cancelled) return;
-        if (result.active && scanActive(result.active.status) && !suspendRef.current) {
-          onImagesRef.current();
+        if (result.active && scanActive(result.active.status)) {
+          onPeekRef.current();
           onLibraryRef.current();
         }
       })
@@ -1243,12 +1337,12 @@ function ScanPanel({
         polls += 1;
         still = result.active ? scanActive(result.active.status) : false;
         // Reload the grid only while a scan is active (or just finished) — never on idle polls.
-        if (!suspendRef.current && still && (polls === 1 || polls % 4 === 0)) {
-          onImagesRef.current();
+        if (still && (polls === 1 || polls % 4 === 0)) {
+          onPeekRef.current();
           onLibraryRef.current();
         }
-        if (!suspendRef.current && watchActive && !still) {
-          onImagesRef.current();
+        if (watchActive && !still) {
+          onPeekRef.current();
           onLibraryRef.current();
         }
       } catch (err: unknown) {
@@ -1299,7 +1393,7 @@ function ScanPanel({
       };
       setJob(visible);
       onLibraryRef.current();
-      if (!scanActive(visible.status)) onImagesRef.current();
+      if (!scanActive(visible.status)) onPeekRef.current();
     } catch (err: unknown) {
       if (err instanceof Error) setError(err.message);
       else setError("Scan could not start.");
