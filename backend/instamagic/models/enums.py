@@ -3,21 +3,21 @@ from __future__ import annotations
 import enum
 
 
-class SafetyState(str, enum.Enum):
+class SafetyState(enum.StrEnum):
     SAFE = "SAFE"
     SAFE_AFTER_CROP = "SAFE_AFTER_CROP"
     REVIEW = "REVIEW"
     DO_NOT_POST = "DO_NOT_POST"
 
 
-class HumanRating(str, enum.Enum):
+class HumanRating(enum.StrEnum):
     REJECT = "reject"
     REVIEW = "review"
     SAFE = "safe"
     EXCELLENT = "excellent"
 
 
-class QueueState(str, enum.Enum):
+class QueueState(enum.StrEnum):
     CANDIDATE = "CANDIDATE"
     APPROVED = "APPROVED"
     PUBLISHING = "PUBLISHING"
@@ -25,13 +25,13 @@ class QueueState(str, enum.Enum):
     FAILED = "FAILED"
 
 
-class JobKind(str, enum.Enum):
+class JobKind(enum.StrEnum):
     SCAN = "scan"
     DERIVATIVE = "derivative"
     ASSESS = "assess"
 
 
-class JobStatus(str, enum.Enum):
+class JobStatus(enum.StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
@@ -39,19 +39,19 @@ class JobStatus(str, enum.Enum):
     INTERRUPTED = "interrupted"
 
 
-class CaptionStatus(str, enum.Enum):
+class CaptionStatus(enum.StrEnum):
     GENERATED = "generated"
     USED = "used"
     MODIFIED = "modified"
     REJECTED = "rejected"
 
 
-class TagSource(str, enum.Enum):
+class TagSource(enum.StrEnum):
     HUMAN = "human"
     HEURISTIC = "heuristic"
 
 
-class CommentDraftStatus(str, enum.Enum):
+class CommentDraftStatus(enum.StrEnum):
     DRAFT = "draft"
     COPIED = "copied"
     DISCARDED = "discarded"
