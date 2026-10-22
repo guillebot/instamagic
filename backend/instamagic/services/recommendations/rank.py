@@ -25,7 +25,12 @@ class RankedCandidate:
     held_back: int = 0
 
 
-def rank_candidates(items: list[CandidateInput], limit: int = 20, hamming_threshold: int = 10) -> list[RankedCandidate]:
+def rank_candidates(
+    items: list[CandidateInput],
+    limit: int = 20,
+    offset: int = 0,
+    hamming_threshold: int = 10,
+) -> list[RankedCandidate]:
     scored = [(_score(item), item) for item in items]
     scored.sort(key=lambda pair: pair[0], reverse=True)
     selected: list[tuple[float, CandidateInput, int]] = []
@@ -46,11 +51,12 @@ def rank_candidates(items: list[CandidateInput], limit: int = 20, hamming_thresh
             if distance is not None and distance <= hamming_threshold and other_score <= score:
                 held += 1
         selected.append((score, item, held))
-        if len(selected) >= limit:
+        if len(selected) >= offset + limit:
             break
+    window = selected[offset : offset + limit]
     return [
         RankedCandidate(image_id=item.image_id, score=round(score * 100), reasons=_reasons(item, held), held_back=held)
-        for score, item, held in selected
+        for score, item, held in window
     ]
 
 

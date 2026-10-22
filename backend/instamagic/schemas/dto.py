@@ -292,6 +292,30 @@ class CandidateOut(BaseModel):
     held_back: int
     crop_aspect: str | None
     model_state: str | None
+    has_tags: bool = False
+    has_caption: bool = False
+    published: bool = False
+    gemini_label_status: str | None = None
+
+
+class CandidatePage(BaseModel):
+    items: list[CandidateOut]
+    next_offset: int | None = None
+
+
+class CandidateBulkIn(BaseModel):
+    image_ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
+class CandidateBulkItemResult(BaseModel):
+    image_id: UUID
+    ok: bool
+    error: str | None = None
+
+
+class CandidateBulkQueueResult(BaseModel):
+    results: list[CandidateBulkItemResult]
+    queued_count: int
 
 
 class JobOut(BaseModel):
