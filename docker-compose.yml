@@ -121,6 +121,39 @@ services:
       redis:
         condition: service_healthy
 
+  worker-gemini:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+    container_name: instamagic-worker-gemini
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:-}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: queue
+      AUTO_PUBLISH: "false"
+    command: python -m instamagic.workers gemini
+    volumes:
+      - ${ORIGINALS_ROOT:-./fixtures/library}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
   worker-ml:
     build:
       context: .

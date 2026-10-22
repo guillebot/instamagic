@@ -7,6 +7,8 @@ import structlog
 
 def configure_logging(level: str) -> None:
     logging.basicConfig(format="%(message)s", level=getattr(logging, level.upper(), logging.INFO))
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     def scrub(_logger, _method, event_dict):  # type: ignore[no-untyped-def]
         redacted = dict(event_dict)

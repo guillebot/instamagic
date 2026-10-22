@@ -15,9 +15,9 @@ from instamagic.services.gemini.context import assert_safe_gemini_payload, gemin
 from pydantic import BaseModel, Field, field_validator
 
 # One Gemini call stays small enough for cost/latency; run_curation chunks larger shortlists.
-GEMINI_CURATION_CHUNK_SIZE = 32
+GEMINI_CURATION_CHUNK_SIZE = 8
 # Fewer frames per call when derivative pixels ride along (payload + token cost).
-GEMINI_CURATION_PIXEL_CHUNK_SIZE = 16
+GEMINI_CURATION_PIXEL_CHUNK_SIZE = 4
 
 CURATION_CAPTION_STYLES: tuple[tuple[str, str], ...] = (
     ("minimal", "en"),
@@ -76,6 +76,7 @@ class CurationProvider(Protocol):
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
         thinking_budget: int = 512,
+        max_output_tokens: int | None = None,
     ) -> CurationResult: ...
 
 
@@ -84,7 +85,8 @@ def curation_chunk_size(policy: str) -> int:
 
 
 def curation_max_output_tokens(candidate_count: int) -> int:
-    return min(8192, max(1024, candidate_count * 256))
+    count = max(1, candidate_count)
+    return min(65536, max(2048, count * 600))
 
 
 def curation_system_instruction() -> str:

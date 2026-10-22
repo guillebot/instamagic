@@ -29,8 +29,8 @@ def test_chunk_and_merge_preserves_ids() -> None:
     payloads = [
         CurationCandidatePayload(image_id=f"id-{i}", local_score=100 - i) for i in range(40)
     ]
-    chunks = chunk_payloads(payloads, chunk_size=16)
-    assert len(chunks) == 3
+    chunks = chunk_payloads(payloads, chunk_size=8)
+    assert len(chunks) == 5
     provider = FakeGeminiProvider()
     results = [
         provider.curate_batch(chunk, account_voice="v", policy="text_only") for chunk in chunks

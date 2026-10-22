@@ -10,6 +10,7 @@ from uuid import UUID
 
 from instamagic.db import session_factory
 from instamagic.errors import GeminiBlocked, GeminiEmpty, GeminiTruncated, NotConfigured
+from instamagic.logging_config import get_logger
 from instamagic.models import (
     Caption,
     CaptionStatus,
@@ -31,13 +32,16 @@ from instamagic.services.gemini.labeling import (
     label_status_is_terminal,
     should_retry_label,
 )
-
-__all__ = ["should_retry_label", "label_status_is_terminal"]
+from instamagic.services.images.presentation import normalize_human_rating_filter
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.gates import gemini_gate
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+
+__all__ = ["should_retry_label", "label_status_is_terminal"]
+
+log = get_logger("gemini.label_job")
 
 
 def gemini_label_counts(
@@ -72,7 +76,13 @@ def resolve_label_targets(
     image_ids: list[UUID] | None,
     all_eligible: bool,
     covering_blur_fn,
-) -> list[Image]:
+) -> tuple[list[Image], dict[str, int]]:
+    skip_counts: dict[str, int] = {}
+    considered = 0
+
+    def skip(reason: str) -> None:
+        skip_counts[reason] = skip_counts.get(reason, 0) + 1
+
     if all_eligible or not image_ids:
         rows = collect_eligible(
             session,
@@ -97,19 +107,25 @@ def resolve_label_targets(
         )
     targets: list[Image] = []
     for image in images:
+        considered += 1
         if image.skip_reason is not None:
+            skip("skipped")
             continue
         if not is_attested(session, image.library_id):
+            skip("not_attested")
             continue
-        if image.human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
+        human_rating = normalize_human_rating_filter(image.human_rating) or image.human_rating
+        if human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
+            skip("not_safe_or_excellent")
             continue
         if image.model_state == SafetyState.DO_NOT_POST.value:
+            skip("do_not_post")
             continue
         approved = next((crop for crop in image.crops if crop.approved), None)
         covering = covering_blur_fn(session, image)
         gate = gemini_gate(
             attested=True,
-            human_rating=image.human_rating,
+            human_rating=human_rating,
             model_state=image.model_state,
             needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
             has_approved_crop=approved is not None,
@@ -118,13 +134,18 @@ def resolve_label_targets(
             policy="text_only",
         )
         if not gate.allowed:
+            skip("gate_blocked")
             continue
         if label_status_is_terminal(image.gemini_label_status):
+            skip("already_labeled")
             continue
         if not should_retry_label(image.gemini_label_status, image.gemini_label_attempts):
+            skip("not_retryable")
             continue
         targets.append(image)
-    return targets
+    skip_counts["considered"] = considered
+    skip_counts["targets"] = len(targets)
+    return targets, skip_counts
 
 
 def _apply_label_result(session: Session, image: Image, result) -> None:
@@ -156,6 +177,16 @@ def _apply_label_result(session: Session, image: Image, result) -> None:
     image.gemini_description = result.description[:2000]
     image.gemini_mood = (result.mood or "unspecified")[:128]
     image.gemini_label_status = "ok"
+    image.gemini_label_at = datetime.now(UTC)
+
+
+def _record_label_error(session: Session, image_id: UUID) -> None:
+    """Persist a terminal error after the labeling savepoint was rolled back."""
+    image = session.get(Image, image_id)
+    if image is None:
+        return
+    image.gemini_label_attempts = (image.gemini_label_attempts or 0) + 1
+    image.gemini_label_status = "error"
     image.gemini_label_at = datetime.now(UTC)
 
 
@@ -234,7 +265,12 @@ def label_one_image(
         image.gemini_label_status = "empty"
         image.gemini_label_at = datetime.now(UTC)
         return "empty"
-    _apply_label_result(session, image, result)
+    try:
+        _apply_label_result(session, image, result)
+    except Exception:
+        session.rollback()
+        _record_label_error(session, image.id)
+        return "error"
     return "ok"
 
 
@@ -259,7 +295,7 @@ def run_gemini_label_job(
     library_id = UUID(payload["library_id"]) if payload.get("library_id") else None
     image_ids = [UUID(value) for value in payload.get("image_ids", [])]
     all_eligible = bool(payload.get("all_eligible"))
-    targets = resolve_label_targets(
+    targets, skip_counts = resolve_label_targets(
         session,
         library_id=library_id,
         image_ids=image_ids or None,
@@ -277,15 +313,26 @@ def run_gemini_label_job(
 
     if not targets:
         job.status = JobStatus.SUCCEEDED.value
-        job.detail = json.dumps({"labeled": 0, "blocked": 0, "empty": 0, "error": 0})
+        job.detail = json.dumps(
+            {
+                "labeled": 0,
+                "blocked": 0,
+                "empty": 0,
+                "error": 0,
+                "skipped": skip_counts,
+            },
+            sort_keys=True,
+        )
         job.finished_at = datetime.now(UTC)
         session.commit()
+        log.info("gemini_label_finished", job_id=str(job_id), **skip_counts, labeled=0)
         return
 
     outcomes = {"ok": 0, "blocked": 0, "empty": 0, "error": 0}
 
     def work(image_id: UUID) -> tuple[UUID, str]:
         inner = session_factory()()
+        outcome = "error"
         try:
             image = inner.scalar(
                 select(Image)
@@ -298,18 +345,28 @@ def run_gemini_label_job(
             )
             if image is None:
                 return image_id, "error"
-            outcome = label_one_image(
-                inner,
-                provider,
-                image,
-                policy=policy,
-                account_voice=account_voice,
-                preview_bytes_fn=preview_bytes_fn,
-                thinking_budget=thinking_budget,
-                max_output_tokens=max_output_tokens,
-                covering_blur_fn=covering_blur_fn,
-            )
-            inner.commit()
+            try:
+                with inner.begin_nested():
+                    outcome = label_one_image(
+                        inner,
+                        provider,
+                        image,
+                        policy=policy,
+                        account_voice=account_voice,
+                        preview_bytes_fn=preview_bytes_fn,
+                        thinking_budget=thinking_budget,
+                        max_output_tokens=max_output_tokens,
+                        covering_blur_fn=covering_blur_fn,
+                    )
+                inner.commit()
+            except Exception:
+                inner.rollback()
+                _record_label_error(inner, image_id)
+                try:
+                    inner.commit()
+                except Exception:
+                    inner.rollback()
+                outcome = "error"
             time.sleep(min_delay_seconds)
             return image_id, outcome
         except Exception:
@@ -324,29 +381,48 @@ def run_gemini_label_job(
         for future in as_completed(futures):
             _image_id, outcome = future.result()
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
-            job = session.get(ProcessingJob, job_id)
-            if job is None:
-                continue
-            job.files_seen = (job.files_seen or 0) + 1
-            if outcome == "ok":
-                job.files_processed = (job.files_processed or 0) + 1
-            elif outcome == "blocked":
-                job.files_skipped = (job.files_skipped or 0) + 1
-            elif outcome == "error":
-                job.files_failed = (job.files_failed or 0) + 1
-            else:
-                job.files_skipped = (job.files_skipped or 0) + 1
-            job.current_path = str(_image_id)
-            session.commit()
+            try:
+                job = session.get(ProcessingJob, job_id)
+                if job is None:
+                    continue
+                job.files_seen = (job.files_seen or 0) + 1
+                if outcome == "ok":
+                    job.files_processed = (job.files_processed or 0) + 1
+                elif outcome == "blocked":
+                    job.files_skipped = (job.files_skipped or 0) + 1
+                elif outcome == "error":
+                    job.files_failed = (job.files_failed or 0) + 1
+                else:
+                    job.files_skipped = (job.files_skipped or 0) + 1
+                job.current_path = str(_image_id)
+                session.commit()
+            except Exception:
+                session.rollback()
 
     job = session.get(ProcessingJob, job_id)
     if job is None:
         return
     job.status = JobStatus.SUCCEEDED.value
-    job.detail = json.dumps(outcomes)
+    job.detail = json.dumps(
+        {
+            **outcomes,
+            "labeled": outcomes.get("ok", 0),
+            "skipped": skip_counts,
+        },
+        sort_keys=True,
+    )
     job.finished_at = datetime.now(UTC)
     job.current_path = None
     session.commit()
+    log.info(
+        "gemini_label_finished",
+        job_id=str(job_id),
+        labeled=outcomes.get("ok", 0),
+        blocked=outcomes.get("blocked", 0),
+        empty=outcomes.get("empty", 0),
+        error=outcomes.get("error", 0),
+        **skip_counts,
+    )
 
 
 def create_gemini_label_job(

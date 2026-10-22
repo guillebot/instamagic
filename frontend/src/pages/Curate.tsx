@@ -98,6 +98,16 @@ export function CuratePage() {
     onError: (err) => setError(err instanceof ApiError ? err.message : "Curation failed."),
   });
 
+  const curationBusy =
+    run.isPending ||
+    Boolean(
+      batches.data?.some(
+        (batch) =>
+          batch.status === "running" &&
+          (!libraryId || batch.library_id === libraryId || batch.library_id == null),
+      ),
+    );
+
   return (
     <main className="page">
       <h1>Curate</h1>
@@ -162,8 +172,13 @@ export function CuratePage() {
             />
             Send image previews to Gemini
           </label>
-          <button className="button" type="button" disabled={run.isPending} onClick={() => run.mutate()}>
-            {run.isPending ? "Curating…" : "Run Gemini curation"}
+          <button
+            className="button"
+            type="button"
+            disabled={curationBusy}
+            onClick={() => run.mutate()}
+          >
+            {curationBusy ? "Curating…" : "Run Gemini curation"}
           </button>
           <button
             className="button ghost"

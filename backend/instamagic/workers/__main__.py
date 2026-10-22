@@ -30,9 +30,11 @@ def _start_heartbeat(connection: Redis, queue_name: str) -> threading.Event:
 
 
 def main() -> None:
-    queue_name = sys.argv[1] if len(sys.argv) > 1 else "io"
-    if queue_name not in {"io", "ml"}:
-        raise SystemExit("Worker queue must be io or ml.")
+    from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, QUEUE_ML
+
+    queue_name = sys.argv[1] if len(sys.argv) > 1 else QUEUE_IO
+    if queue_name not in {QUEUE_IO, QUEUE_ML, QUEUE_GEMINI}:
+        raise SystemExit("Worker queue must be io, ml, or gemini.")
     settings = get_settings()
     configure_logging(settings.log_level)
     log = get_logger("worker")
@@ -41,7 +43,7 @@ def main() -> None:
 
         assert_configured_external_mounts(settings.library_roots())
     log.info("worker_start", queue=queue_name)
-    if queue_name == "io":
+    if queue_name == QUEUE_IO:
         from instamagic.workers.resume import requeue_interrupted_scans
         from instamagic.workers.scheduler_loop import start_scheduler_thread
 

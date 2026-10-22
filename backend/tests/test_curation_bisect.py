@@ -15,8 +15,9 @@ class BlockingProvider:
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
         thinking_budget: int = 512,
+        max_output_tokens: int | None = None,
     ) -> CurationResult:
-        del account_voice, policy, image_bytes_by_id, thinking_budget
+        del account_voice, policy, image_bytes_by_id, thinking_budget, max_output_tokens
         for item in candidates:
             if item.image_id in self.blocked_ids:
                 raise GeminiBlocked("blocked", reason="PROHIBITED_CONTENT")

@@ -74,6 +74,19 @@ def test_queue_rejects_blur_that_does_not_cover_when_flag_false() -> None:
     assert any("covering blur" in reason or "approved crop" in reason for reason in result.reasons)
 
 
+def test_gemini_allows_safe_human_rating_with_classifier_review() -> None:
+    result = gemini_gate(
+        attested=True,
+        human_rating="excellent",
+        model_state="REVIEW",
+        needs_crop=False,
+        has_approved_crop=False,
+        operator_confirmed=True,
+        policy="preview",
+    )
+    assert result.allowed
+
+
 def test_gemini_manual_policy_needs_confirmation() -> None:
     result = gemini_gate(
         attested=True,

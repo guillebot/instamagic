@@ -182,6 +182,43 @@ services:
       - internal
     logging: *default-logging
 
+  worker-gemini:
+    image: ${IMAGE_PREFIX:-gschimmel}/instamagic-backend:${IMAGE_TAG:-latest}
+    container_name: instamagic-worker-gemini
+    restart: unless-stopped
+    <<: *app-user
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://instamagic:${POSTGRES_PASSWORD}@postgres:5432/instamagic
+      REDIS_URL: redis://redis:6379/0
+      BIND_HOST: 0.0.0.0
+      ALLOW_CONTAINER_BIND: "true"
+      DERIVATIVES_ROOT: /data/derivatives
+      ALLOWED_LIBRARY_ROOTS: /data/originals
+      SUGGESTED_LIBRARY_ROOT: /data/originals
+      REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
+      SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
+      SAFETY_MODEL_PATH: ${SAFETY_MODEL_PATH:-/models/320n.onnx}
+      SAFETY_MODEL_SHA256: ${SAFETY_MODEL_SHA256:?set SAFETY_MODEL_SHA256}
+      GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
+      PIPELINE_MODE: queue
+      AUTO_PUBLISH: "false"
+      ENVIRONMENT: stage
+      FRONTEND_ORIGIN: https://instamagic.schimmel.homes
+    command: python -m instamagic.workers gemini
+    volumes:
+      - ${ORIGINALS_ROOT:-/fotosarte}:/data/originals:ro
+      - ./models:/models:ro
+      - derivatives:/data/derivatives
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    logging: *default-logging
+
   worker-ml:
     image: ${IMAGE_PREFIX:-gschimmel}/instamagic-backend:${IMAGE_TAG:-latest}
     container_name: instamagic-worker-ml
