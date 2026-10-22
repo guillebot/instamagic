@@ -44,6 +44,7 @@ from instamagic.models import (
     PublishingQueueItem,
     QueueState,
     RelatedAccount,
+    RelatedAccountDiscovery,
     SafetyState,
     TagSource,
 )
@@ -112,6 +113,16 @@ from instamagic.services.images.presentation import (
     normalize_human_rating_filter,
 )
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
+from instamagic.services.instagram.business_discovery import (
+    discovery_out,
+    sync_related_account_discovery,
+)
+from instamagic.services.instagram.hashtag_research import (
+    HashtagResearchUnavailable,
+    budget_status,
+    research_hashtag,
+    suggest_tags_from_research,
+)
 from instamagic.services.instagram.insights_sync import (
     refresh_token_scopes,
     sync_instagram_insights,
@@ -1757,6 +1768,63 @@ def update_related_account(
     return _related_out(row)
 
 
+@router.get("/api/hashtag-research/budget")
+def hashtag_research_budget(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, int]:
+    return budget_status(session)
+
+
+@router.post("/api/hashtag-research/{tag}")
+def hashtag_research_lookup(
+    tag: str,
+    request: Request,
+    force: bool = Query(default=False),
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    try:
+        return research_hashtag(session, client, tag, force=force)
+    except HashtagResearchUnavailable as exc:
+        raise NotConfigured(str(exc.detail)) from exc
+
+
+@router.get("/api/related-accounts/{account_id}/discovery")
+def get_related_discovery(
+    account_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    account = session.get(RelatedAccount, account_id)
+    if account is None:
+        raise NotFound("Related account was not found.")
+    row = session.get(RelatedAccountDiscovery, account_id)
+    if row is None:
+        return {"handle": account.handle, "cached": False}
+    return {**discovery_out(row, account.handle), "cached": True}
+
+
+@router.post("/api/related-accounts/{account_id}/discovery")
+def sync_related_discovery(
+    account_id: UUID,
+    request: Request,
+    force: bool = Query(default=False),
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    account = session.get(RelatedAccount, account_id)
+    if account is None:
+        raise NotFound("Related account was not found.")
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    return sync_related_account_discovery(session, client, account, force=force)
+
+
 @router.delete("/api/related-accounts/{account_id}", status_code=204)
 def delete_related_account(
     account_id: UUID,
@@ -1938,7 +2006,8 @@ def suggest_hashtags(
         raise
     except Exception:
         raise NotConfigured("Gemini request failed.") from None
-    return {"tags": suggestion.tags}
+    merged = suggest_tags_from_research(session, suggestion.tags)
+    return {"tags": merged, "gemini_tags": suggestion.tags, "research_tags": [t for t in merged if t not in suggestion.tags]}
 
 
 def _crop_out(image: Image, crop: CropSuggestion) -> CropOut:

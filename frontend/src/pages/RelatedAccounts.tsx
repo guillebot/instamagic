@@ -11,8 +11,65 @@ const emptyForm = {
   notes: "",
 };
 
+function AccountDiscovery({ accountId, handle }: { accountId: string; handle: string }) {
+  const queryClient = useQueryClient();
+  const discovery = useQuery({
+    queryKey: ["related-discovery", accountId],
+    queryFn: () =>
+      api<{
+        cached: boolean;
+        followers_count?: number;
+        avg_likes?: number;
+        posts_per_week?: number;
+        common_hashtags?: string[];
+      }>(`/api/related-accounts/${accountId}/discovery`),
+  });
+  const sync = useMutation({
+    mutationFn: () =>
+      api(`/api/related-accounts/${accountId}/discovery?force=true`, { method: "POST" }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["related-discovery", accountId] }),
+  });
+  const data = discovery.data;
+  return (
+    <div className="muted">
+      <button className="ghost" type="button" disabled={sync.isPending} onClick={() => sync.mutate()}>
+        {sync.isPending ? "Syncing…" : "Sync business discovery"}
+      </button>
+      {data?.cached ? (
+        <p>
+          @{handle}: {data.followers_count ?? "—"} followers · avg likes {data.avg_likes?.toFixed(0) ?? "—"} ·{" "}
+          {data.posts_per_week?.toFixed(1) ?? "—"} posts/week
+          {data.common_hashtags?.length ? ` · tags: ${data.common_hashtags.map((t) => `#${t}`).join(" ")}` : ""}
+        </p>
+      ) : (
+        <p>No cached discovery yet (daily cache).</p>
+      )}
+    </div>
+  );
+}
+
 export function RelatedAccountsPage() {
   const queryClient = useQueryClient();
+  const budget = useQuery({
+    queryKey: ["hashtag-budget"],
+    queryFn: () =>
+      api<{ used_unique_hashtags_7d: number; remaining_unique_hashtags_7d: number }>(
+        "/api/hashtag-research/budget",
+      ),
+  });
+  const [hashtagInput, setHashtagInput] = useState("");
+  const [hashtagResult, setHashtagResult] = useState<string | null>(null);
+  const hashtagLookup = useMutation({
+    mutationFn: (tag: string) =>
+      api<{ hashtag: string; top_media: { caption?: string }[] }>(`/api/hashtag-research/${encodeURIComponent(tag)}`, {
+        method: "POST",
+      }),
+    onSuccess: (body) => {
+      setHashtagResult(`#${body.hashtag}: ${body.top_media?.length ?? 0} top posts cached`);
+      void queryClient.invalidateQueries({ queryKey: ["hashtag-budget"] });
+    },
+    onError: (err) => setHashtagResult(err instanceof ApiError ? err.message : "Hashtag lookup failed"),
+  });
   const accounts = useQuery({
     queryKey: ["related-accounts"],
     queryFn: () => api<RelatedAccountItem[]>("/api/related-accounts"),
@@ -83,6 +140,30 @@ export function RelatedAccountsPage() {
       </p>
 
       <section className="panel">
+        <h2>Hashtag research</h2>
+        <p className="muted">
+          Uses Graph hashtag search (requires Instagram Public Content Access). Budget:{" "}
+          {budget.data?.remaining_unique_hashtags_7d ?? "—"} of 30 unique tags left in the rolling 7-day window.
+        </p>
+        <div className="row">
+          <input
+            value={hashtagInput}
+            onChange={(e) => setHashtagInput(e.target.value)}
+            placeholder="streetphotography"
+          />
+          <button
+            className="button"
+            type="button"
+            disabled={!hashtagInput.trim() || hashtagLookup.isPending}
+            onClick={() => hashtagLookup.mutate(hashtagInput.trim())}
+          >
+            Research
+          </button>
+        </div>
+        {hashtagResult ? <p className="muted">{hashtagResult}</p> : null}
+      </section>
+
+      <section className="panel">
         <h2>Add account</h2>
         <div className="form-grid">
           <label>
@@ -148,6 +229,7 @@ export function RelatedAccountsPage() {
               ) : null}
               {account.why_relevant ? <p>{account.why_relevant}</p> : null}
               {account.notes ? <p className="muted">{account.notes}</p> : null}
+              <AccountDiscovery accountId={account.id} handle={account.handle} />
               <button className="ghost" onClick={() => void remove(account.id)}>
                 Remove
               </button>
