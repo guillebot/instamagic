@@ -71,11 +71,10 @@ def test_label_job_continues_after_apply_failure(client, app_env, monkeypatch) -
         client.post(f"/api/images/{item['id']}/rating", json={"rating": "safe"})
 
     original_apply = label_job_module._apply_label_result
-    calls = {"n": 0}
 
     def flaky_apply(session, image, result):
-        calls["n"] += 1
-        if calls["n"] == 1:
+        # Deterministic under parallel label workers (order of completion is not stable).
+        if image.relative_path.endswith("a.jpg"):
             raise RuntimeError("simulated persistence failure")
         return original_apply(session, image, result)
 
