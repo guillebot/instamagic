@@ -240,7 +240,9 @@ export function CropPanel({ image, captureKeys = true, onApproved, onStatus }: P
         {isDoNotPost ? (
           <p className="error">DO_NOT_POST — crop cannot override. Rate reject or leave blocked.</p>
         ) : isSafeAfterCrop ? (
-          <p className="help">SAFE_AFTER_CROP — approve a crop that excludes the unsafe region, then rate 3/4.</p>
+          <p className="help">
+            Safe after crop — approve a crop that excludes the unsafe region, then rate 3/4 to become Publishable.
+          </p>
         ) : (
           <p className="help">
             Adjust and save a crop. Model stays {modelState || "REVIEW"}; rating 3/4 marks it safe.

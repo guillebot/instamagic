@@ -37,8 +37,8 @@ function Shell() {
           <NavLink to="/" end>
             Review
           </NavLink>
-          <NavLink to="/queue">Queue</NavLink>
           <NavLink to="/curate">Curate</NavLink>
+          <NavLink to="/queue">Queue</NavLink>
           <NavLink to="/candidates">Next</NavLink>
           <NavLink to="/related">Related</NavLink>
           <NavLink to="/instagram">Instagram</NavLink>

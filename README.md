@@ -8,11 +8,10 @@ This is a single-operator app. It is not a follower, like, or comment spam tool.
 
 1. Point it at one library folder.
 2. Scan JPG, JPEG, PNG, and WEBP. RAW files (CR2, CR3, NEF, ARW, DNG) are recorded and skipped.
-3. Review a dark contact sheet (cover tiles). Keys: `1` reject, `2` review, `3` safe, `4` excellent, arrows, space classify (rate-and-advance), `C` crops, `B` blur, `P` queue, `G` captions. ⌘/Ctrl-click multi-select; Shift-click range.
-4. Approve a non-destructive crop when the local model says `SAFE_AFTER_CROP`.
-5. Optionally open **Curate**: Gemini ranks SAFE/EXCELLENT frames, suggests tags + captions as drafts. You reorder, accept/reject, edit, then **Send to publish queue** only for what you approve.
-6. Queue a frame (or receive it from Curate), generate/edit captions if needed, approve, then **Publish** to Instagram (human-gated).
-7. Keep a **Related accounts** research list and draft insightful comments for you to post manually.
+3. **Review** — scan, rate (`1` reject … `4` excellent), crop (`C`) / blur (`B`) when the model says safe-after-crop. Badges: Safe (originally clear) vs Publishable (remediated + rated). See `docs/lifecycle.md`.
+4. **Curate** — Gemini ranks Safe/Publishable frames, suggests tags + captions. Reorder, accept/reject, then send to the publish queue.
+5. **Queue** — human last word: approve, edit captions, **Publish** to Instagram (human-gated).
+6. Keep a **Related accounts** research list and draft insightful comments for you to post manually.
 
 Queueing, captions, curation, and publish all require an adult attestation on the library and a human rating of safe or excellent. A model state of `DO_NOT_POST` cannot be overridden into the queue or publish path. Curation never auto-queues or auto-publishes.
 

@@ -1,8 +1,10 @@
 export type SafetyState =
   | "SAFE"
+  | "PUBLISHABLE"
   | "SAFE_AFTER_CROP"
   | "SAFE_AFTER_BLUR"
   | "REVIEW"
+  | "REJECTED"
   | "DO_NOT_POST"
   | "UNREVIEWED";
 
@@ -25,6 +27,7 @@ export type ImageItem = {
   duplicate_count: number;
   has_gps: boolean;
   has_approved_crop?: boolean;
+  has_approved_covering_blur?: boolean;
   thumbnail_url: string | null;
   preview_url: string | null;
 };

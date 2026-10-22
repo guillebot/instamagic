@@ -1,5 +1,7 @@
 # Architecture
 
+Picture lifecycle (Review → Curate → Queue) and Safe vs Publishable badges: [`lifecycle.md`](lifecycle.md).
+
 Three zones:
 
 1. Originals. A read-only mount. The scanner records a relative path, hashes, and `has_gps`. It does not write into the library and it does not put coordinates or original bytes on an API response.

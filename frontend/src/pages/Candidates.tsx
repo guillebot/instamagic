@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
+import { lifecycleLabel } from "../lifecycle";
 import type { CandidateItem } from "../types";
 
 export function CandidatesPage() {
@@ -19,7 +20,7 @@ export function CandidatesPage() {
             <div>
               <strong>Score {candidate.score}/100</strong>
               <p>
-                {candidate.image.effective_state} · model {candidate.model_state ?? "—"}
+                {lifecycleLabel(candidate.image.effective_state)} · model {candidate.model_state ?? "—"}
                 {candidate.crop_aspect ? ` · crop ${candidate.crop_aspect}` : ""}
               </p>
               <ul>

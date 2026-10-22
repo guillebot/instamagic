@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { ApiError, api } from "../api";
+import { lifecycleLabel } from "../lifecycle";
 import type {
   AppConfig,
   CaptionItem,
@@ -58,8 +59,9 @@ export function CuratePage() {
     <main className="page">
       <h1>Curate</h1>
       <p>
-        Gemini ranks SAFE / EXCELLENT frames and drafts tags + captions. Nothing is queued or published until you
-        choose. Policy: {config.data?.gemini_policy ?? "…"}. Auto publish stays off.
+        After Review (rate + crop/blur), Gemini ranks Safe and Publishable frames (human safe/excellent) and drafts
+        tags + captions. Reorder, accept/reject, then send to the publish queue. Nothing publishes until Queue.
+        Policy: {config.data?.gemini_policy ?? "…"}. Auto publish stays off.
       </p>
 
       <section className="panel">
@@ -308,7 +310,8 @@ function CurationPickCard({
           </button>
         </div>
         <p className="muted">
-          {pick.image.filename} · {pick.image.effective_state} · model {pick.image.model_state ?? "—"}
+          {pick.image.filename} · {lifecycleLabel(pick.image.effective_state)} · model{" "}
+          {pick.image.model_state ?? "—"}
         </p>
         <ul>
           {pick.reasons.map((reason) => (

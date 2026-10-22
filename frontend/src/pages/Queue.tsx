@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
+import { lifecycleLabel } from "../lifecycle";
 import type { AppConfig, CaptionItem, QueueItem } from "../types";
 
 export function QueuePage() {
@@ -23,8 +24,8 @@ export function QueuePage() {
     <main className="page">
       <h1>Publishing queue</h1>
       <p>
-        Human-gated publish: approve → generate/edit caption → Publish. Auto publish stays{" "}
-        {config.data?.auto_publish ? "enabled (ack required at boot)" : "off"}. Instagram:{" "}
+        Last step after Review → Curate: reorder is done upstream; here you approve, edit captions, and Publish.
+        Auto publish stays {config.data?.auto_publish ? "enabled (ack required at boot)" : "off"}. Instagram:{" "}
         {ig.data?.configured ? `ready (${ig.data.provider})` : "not configured"}.{" "}
         <Link to="/instagram">Connection helper</Link>.
       </p>
@@ -124,8 +125,8 @@ function QueueCard({
         <strong>{item.image.filename}</strong>
         <p>
           {item.state}
-          {item.last_error ? ` · ${item.last_error}` : ""} · {item.image.effective_state} · model{" "}
-          {item.image.model_state}
+          {item.last_error ? ` · ${item.last_error}` : ""} · {lifecycleLabel(item.image.effective_state)} ·
+          model {item.image.model_state}
         </p>
         <div className="row">
           {item.state === "CANDIDATE" ? (

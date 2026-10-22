@@ -130,6 +130,10 @@ router = APIRouter()
 def _image_out(session: Session, image: Image) -> ImageOut:
     approved_queue = next(iter(image.queue_items), None) if image.queue_items else None
     has_approved_crop = any(crop.approved for crop in image.crops) if image.crops is not None else False
+    # Badge/filter use any approved blur; publishing_gate still verifies coverage geometry.
+    has_approved_covering_blur = (
+        any(blur.approved for blur in image.blurs) if image.blurs is not None else False
+    )
     return ImageOut(
         id=image.id,
         filename=image.filename,
@@ -148,12 +152,18 @@ def _image_out(session: Session, image: Image) -> ImageOut:
         session_name=image.session_name,
         model_state=image.model_state,
         human_rating=image.human_rating,
-        effective_state=effective_state(image.human_rating, image.model_state),
+        effective_state=effective_state(
+            image.human_rating,
+            image.model_state,
+            has_approved_crop=has_approved_crop,
+            has_approved_covering_blur=has_approved_covering_blur,
+        ),
         aesthetic_score=image.score.aesthetic_score if image.score else None,
         queued=bool(image.queue_items),
         queue_state=approved_queue.state if approved_queue else None,
         duplicate_count=duplicate_count(session, image.id),
         has_approved_crop=has_approved_crop,
+        has_approved_covering_blur=has_approved_covering_blur,
         thumbnail_url=f"/api/derivatives/{image.id}/thumbnail" if image.thumbnail_path else None,
         preview_url=f"/api/derivatives/{image.id}/preview" if image.preview_path else None,
     )
@@ -492,7 +502,12 @@ def list_images(
     stmt = (
         select(Image)
         .where(Image.skip_reason.is_(None))
-        .options(selectinload(Image.score), selectinload(Image.queue_items), selectinload(Image.crops))
+        .options(
+            selectinload(Image.score),
+            selectinload(Image.queue_items),
+            selectinload(Image.crops),
+            selectinload(Image.blurs),
+        )
         .order_by(Image.ingested_at.desc(), Image.id.desc())
     )
     if library_id:

@@ -13,6 +13,7 @@ import { useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { BlurPanel } from "../BlurPanel";
 import { CropPanel } from "../CropPanel";
+import { SAFETY_FILTERS, lifecycleLabel } from "../lifecycle";
 import { acquireThumbSlot } from "../thumbQueue";
 import type {
   AppConfig,
@@ -110,14 +111,6 @@ const RATING_KEYS = [
   { key: "4", rating: "excellent", label: "Excellent" },
 ] as const;
 
-/** Safety badge filter: values match /api/images?model_state= (effective state). */
-const SAFETY_FILTERS = [
-  { value: "SAFE", label: "Safe" },
-  { value: "SAFE_AFTER_CROP", label: "Safe after crop" },
-  { value: "SAFE_AFTER_BLUR", label: "Safe after blur" },
-  { value: "REVIEW", label: "Review" },
-  { value: "DO_NOT_POST", label: "Do not post" },
-] as const;
 const GRID_GAP = 8;
 const TARGET_ROW_HEIGHT = 160;
 
@@ -749,8 +742,13 @@ export function ReviewPage() {
                         <span className="tile-empty">No preview</span>
                       )}
                       <div className="meta meta-top">
-                        <span className={`badge ${image.effective_state}`}>{image.effective_state}</span>
-                        {image.has_approved_crop ? <span className="badge crop-approved">crop</span> : <span />}
+                        <span className={`badge ${image.effective_state}`}>
+                          {lifecycleLabel(image.effective_state)}
+                        </span>
+                        {image.has_approved_crop ? <span className="badge crop-approved">crop</span> : null}
+                        {image.has_approved_covering_blur ? (
+                          <span className="badge crop-approved">blur</span>
+                        ) : null}
                       </div>
                       <div className="meta">
                         <span>{image.human_rating ?? "unrated"}</span>

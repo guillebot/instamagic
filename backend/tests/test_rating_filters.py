@@ -57,8 +57,10 @@ def test_human_rating_and_effective_safe_filters(client, app_env) -> None:
     # Badge filter (model_state query) must use effective_state, not raw model_state.
     assert names(model_state="SAFE") == ["c.jpg", "d.jpg"]
     assert names(model_state="REVIEW") == ["b.jpg"]
-    assert names(model_state="DO_NOT_POST") == ["a.jpg"]
+    assert names(model_state="REJECTED") == ["a.jpg"]
+    assert names(model_state="DO_NOT_POST") == []  # human reject → Rejected, not Unsafe
     assert names(model_state="SAFE_AFTER_CROP") == []
+    assert names(model_state="PUBLISHABLE") == []
 
     # Folder scoping still applies — Other/e.jpg is rated nowhere.
     assert "e.jpg" not in names(model_state="SAFE")
@@ -172,7 +174,7 @@ def test_safe_after_crop_and_blur_filters(client, app_env) -> None:
     ]
     assert "unsafe-out.jpg" not in names(model_state="SAFE_AFTER_CROP", recursive="true")
 
-    # Human rating overrides badge — rated-safe unsafe frame leaves the remediable filters.
+    # Rated safe without crop/blur stays remediable (not Safe, not Publishable yet).
     items = client.get(
         "/api/images",
         params={"library_id": library_id, "folder": "Album"},
@@ -180,7 +182,21 @@ def test_safe_after_crop_and_blur_filters(client, app_env) -> None:
     unsafe_id = next(row["id"] for row in items if row["filename"] == "unsafe-top.jpg")
     rated = client.post(f"/api/images/{unsafe_id}/rating", json={"rating": "safe"}).json()
     assert rated["model_state"] == "SAFE_AFTER_CROP"
-    assert rated["effective_state"] == "SAFE"
+    assert rated["effective_state"] == "SAFE_AFTER_CROP"
+    assert names(model_state="SAFE_AFTER_CROP") == ["unsafe-top.jpg"]
+    assert names(model_state="SAFE_AFTER_BLUR") == ["unsafe-top.jpg"]
+    assert names(model_state="SAFE") == []
+    assert names(model_state="PUBLISHABLE") == []
+
+    crops = client.get(f"/api/images/{unsafe_id}/crops").json()
+    crop = next(item for item in crops if item.get("excludes_unsafe"))
+    approved = client.post(
+        f"/api/images/{unsafe_id}/crops/{crop['id']}/approve",
+        json={"x": crop["x"], "y": crop["y"], "width": crop["width"], "height": crop["height"]},
+    )
+    assert approved.status_code == 200, approved.text
+    after = client.get(f"/api/images/{unsafe_id}").json()
+    assert after["effective_state"] == "PUBLISHABLE"
+    assert names(model_state="PUBLISHABLE") == ["unsafe-top.jpg"]
     assert names(model_state="SAFE_AFTER_CROP") == []
-    assert names(model_state="SAFE_AFTER_BLUR") == []
-    assert names(model_state="SAFE") == ["unsafe-top.jpg"]
+    assert names(model_state="SAFE") == []

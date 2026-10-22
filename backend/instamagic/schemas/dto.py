@@ -205,6 +205,7 @@ class ImageOut(BaseModel):
     queue_state: str | None
     duplicate_count: int
     has_approved_crop: bool = False
+    has_approved_covering_blur: bool = False
     thumbnail_url: str | None
     preview_url: str | None
 

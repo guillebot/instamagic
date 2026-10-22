@@ -18,7 +18,7 @@ Uvicorn loads `instamagic.main:create_app` with `--factory`. Importing the packa
 ## Decisions that are already locked
 
 - No age model. Adulthood is an operator attestation stored on the library, with the exact statement in `config.ATTESTATION_STATEMENT`.
-- `model_state` and `human_rating` are separate. Aesthetic score never changes the safety state. A human rating changes the badge, and it still cannot queue or caption a `DO_NOT_POST` frame or an unattested library.
+- `model_state` and `human_rating` are separate. Aesthetic score never changes the safety state. The UI badge is `effective_state` (see `docs/lifecycle.md`): **Safe** = originally clear / human-cleared without crop; **Publishable** = was `SAFE_AFTER_CROP` plus approved crop or blur and human safe/excellent. Gates still cannot queue or caption a `DO_NOT_POST` frame or an unattested library.
 - No exposed region means `REVIEW`, not automatic `SAFE`. `SAFE_AFTER_CROP` only when a candidate crop keeps the face and excludes exposed boxes. If every crop still contains one, the state is `DO_NOT_POST`.
 - Missing or uncertain detector fails closed to `REVIEW`. The app does not import NudeNet. The ONNX decoder is local. Weights stay outside git at `SAFETY_MODEL_PATH`.
 - Originals are mounted read-only. The browser and Gemini receive EXIF-stripped derivatives only. GPS is `has_gps`, never coordinates. Default `GEMINI_IMAGE_POLICY` is `text_only`.
@@ -54,9 +54,13 @@ cd frontend && npx tsc --noEmit
 
 Tests use SQLite and the fake classifier. They do not download weights and they do not call Gemini. The Gemini firewall test fails if a context payload contains a filesystem path.
 
+## Picture lifecycle
+
+See `docs/lifecycle.md`. Short path: Review (scan → rate → crop/blur) → Curate (Gemini pick/sort) → Queue (approve → publish).
+
 ## Gemini curation flow
 
-1. Human rates frames SAFE/EXCELLENT (and approves crop/blur when `SAFE_AFTER_CROP`).
+1. Human rates frames safe/excellent (and approves crop/blur when `SAFE_AFTER_CROP` → badge **Publishable**).
 2. `POST /api/curation` shortlists via local ranker, then Fake/Google Gemini returns ranked picks + tags + caption options as draft `CurationBatch` / `CurationPick` rows (not queued).
 3. Curate UI: reorder, accept/reject, edit tags/captions.
 4. `POST /api/curation/queue` re-checks publishing gates and creates `PublishingQueueItem` rows in `CANDIDATE` state only.
