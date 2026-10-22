@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from instamagic.config import Settings
 from instamagic.models.entities import Image, PublishingQueueItem
 from instamagic.models.enums import SafetyState
@@ -10,6 +7,8 @@ from instamagic.services.blurs.generator import BlurWindow, covers_unsafe_boxes
 from instamagic.services.instagram.store import load_cached_account
 from instamagic.services.pipeline import clear_exposed_boxes, is_attested
 from instamagic.services.recommendations.gates import gemini_gate, publishing_gate
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 
 def _window_from_blur(blur) -> BlurWindow:

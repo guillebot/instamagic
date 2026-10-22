@@ -72,8 +72,8 @@ from instamagic.schemas.dto import (
     HashtagIn,
     HealthStatusOut,
     ImageOut,
-    ImagePublishReadinessOut,
     ImagePage,
+    ImagePublishReadinessOut,
     InstagramCredentialsIn,
     InstagramOAuthSelectIn,
     JobOut,
@@ -156,13 +156,13 @@ from instamagic.services.posting.carousel_queue import (
     reorder_carousel_slides,
     slides_for_item,
 )
-from instamagic.services.posting.readiness import build_image_publish_readiness
 from instamagic.services.posting.queue_schedule import (
     fill_slots_from_approved,
     list_upcoming,
     schedule_queue_item,
     unschedule_queue_item,
 )
+from instamagic.services.posting.readiness import build_image_publish_readiness
 from instamagic.services.posting.schedule_config import config_as_dict, config_view, update_config
 from instamagic.services.queues import snapshot_queues
 from instamagic.services.recommendations.curate import (
