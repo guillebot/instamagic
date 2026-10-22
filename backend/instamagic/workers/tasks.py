@@ -9,7 +9,12 @@ from instamagic.db import session_factory
 from instamagic.logging_config import get_logger
 from instamagic.models import JobStatus, ProcessingJob
 from instamagic.models.enums import JobKind
-from instamagic.services.factory import build_classifier, build_face_detector, build_gemini, build_instagram
+from instamagic.services.factory import (
+    build_classifier,
+    build_face_detector,
+    build_gemini,
+    build_instagram,
+)
 from instamagic.services.instagram.insights_sync import sync_instagram_insights
 from instamagic.services.pipeline import run_scan
 from instamagic.services.recommendations.curate import execute_curation_batch
