@@ -15,6 +15,7 @@ class CandidateInput:
     model_state: str | None
     sharpness: float
     composition: float
+    performance_score: float = 0.0
 
 
 @dataclass
@@ -25,8 +26,15 @@ class RankedCandidate:
     held_back: int = 0
 
 
-def rank_candidates(items: list[CandidateInput], limit: int = 20, hamming_threshold: int = 10) -> list[RankedCandidate]:
-    scored = [(_score(item), item) for item in items]
+def rank_candidates(
+    items: list[CandidateInput],
+    limit: int = 20,
+    hamming_threshold: int = 10,
+    *,
+    performance_weight: float = 0.0,
+) -> list[RankedCandidate]:
+    weight = max(0.0, min(0.5, performance_weight))
+    scored = [(_score(item, performance_weight=weight), item) for item in items]
     scored.sort(key=lambda pair: pair[0], reverse=True)
     selected: list[tuple[float, CandidateInput, int]] = []
     for score, item in scored:
@@ -49,24 +57,33 @@ def rank_candidates(items: list[CandidateInput], limit: int = 20, hamming_thresh
         if len(selected) >= limit:
             break
     return [
-        RankedCandidate(image_id=item.image_id, score=round(score * 100), reasons=_reasons(item, held), held_back=held)
+        RankedCandidate(
+            image_id=item.image_id,
+            score=round(score * 100),
+            reasons=_reasons(item, held, performance_weight=weight),
+            held_back=held,
+        )
         for score, item, held in selected
     ]
 
 
-def _score(item: CandidateInput) -> float:
+def _score(item: CandidateInput, *, performance_weight: float = 0.0) -> float:
     human = {"excellent": 1.0, "safe": 0.75}.get(item.human_rating or "", 0.4)
     crop_bonus = 1.0 if item.has_approved_crop else 0.4
-    return (
+    local = (
         0.35 * _clamp(item.aesthetic_score)
         + 0.25 * human
         + 0.20 * _clamp(item.uniqueness)
         + 0.10 * crop_bonus
         + 0.10 * _clamp(item.composition)
     )
+    if performance_weight <= 0:
+        return local
+    perf = _clamp(item.performance_score)
+    return (1.0 - performance_weight) * local + performance_weight * perf
 
 
-def _reasons(item: CandidateInput, held: int) -> list[str]:
+def _reasons(item: CandidateInput, held: int, *, performance_weight: float = 0.0) -> list[str]:
     reasons: list[str] = []
     if item.sharpness >= 0.6:
         reasons.append("High local sharpness.")
@@ -80,7 +97,12 @@ def _reasons(item: CandidateInput, held: int) -> list[str]:
         reasons.append(f"Local safety state is {item.model_state}.")
     if held:
         reasons.append(f"{held} near-duplicate frames were held back.")
-    reasons.append("No Instagram performance history yet, so this rank uses local signals only.")
+    if performance_weight > 0 and item.performance_score > 0.05:
+        reasons.append("Past Instagram engagement for similar tags or this frame boosted the rank.")
+    elif performance_weight > 0:
+        reasons.append("Little Instagram history yet — rank leans on local quality signals.")
+    else:
+        reasons.append("No Instagram performance history yet, so this rank uses local signals only.")
     return reasons
 
 
