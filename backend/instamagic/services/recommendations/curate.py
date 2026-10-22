@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from instamagic.errors import GeminiBlocked, NotAllowed, NotConfigured, NotFound
+from instamagic.errors import GeminiBlocked, GeminiTruncated, NotAllowed, NotConfigured, NotFound
 from instamagic.logging_config import get_logger
 from instamagic.models import (
     Caption,
@@ -22,12 +22,13 @@ from instamagic.models import (
     HumanRating,
     Image,
     ImageTag,
+    ProcessingJob,
     PublishingQueueItem,
     QueueState,
     SafetyState,
     TagSource,
 )
-from instamagic.models.enums import CurationBatchStatus, CurationPickStatus
+from instamagic.models.enums import CurationBatchStatus, CurationPickStatus, JobKind, JobStatus
 from instamagic.services.gemini.captions import CaptionDraft
 from instamagic.services.gemini.context import (
     build_context,
@@ -41,13 +42,15 @@ from instamagic.services.gemini.curation import (
     CurationProvider,
     CurationResult,
     curation_chunk_size,
+    curation_max_output_tokens,
 )
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.images.folders import escape_like, normalize_folder
+from instamagic.services.images.presentation import normalize_human_rating_filter
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.gates import gemini_gate, publishing_gate
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 log = get_logger("curate")
@@ -84,9 +87,15 @@ def collect_eligible(
     stmt = (
         select(Image)
         .where(Image.skip_reason.is_(None))
-        .where(Image.human_rating.in_([HumanRating.SAFE.value, HumanRating.EXCELLENT.value]))
-        .where(Image.model_state.is_not(None))
-        .where(Image.model_state != SafetyState.DO_NOT_POST.value)
+        .where(
+            func.lower(Image.human_rating).in_([HumanRating.SAFE.value, HumanRating.EXCELLENT.value])
+        )
+        .where(
+            or_(
+                Image.model_state.is_(None),
+                Image.model_state != SafetyState.DO_NOT_POST.value,
+            )
+        )
         .options(
             selectinload(Image.score),
             selectinload(Image.crops),
@@ -111,13 +120,16 @@ def collect_eligible(
             attested[image.library_id] = is_attested(session, image.library_id)
         if not attested[image.library_id]:
             continue
+        human_rating = normalize_human_rating_filter(image.human_rating) or image.human_rating
+        if human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
+            continue
         approved = next((crop for crop in image.crops if crop.approved), None)
         covering_blur = covering_blur_fn(session, image)
         if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved is None and not covering_blur:
             continue
         gate = gemini_gate(
             attested=True,
-            human_rating=image.human_rating,
+            human_rating=human_rating,
             model_state=image.model_state,
             needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
             has_approved_crop=approved is not None,
@@ -268,6 +280,7 @@ def curate_chunk_resilient(
     policy: str,
     image_bytes_by_id: dict[str, bytes] | None,
     thinking_budget: int,
+    max_output_tokens: int | None = None,
 ) -> ResilientCurationOutcome:
     chunk_pixels = None
     if image_bytes_by_id:
@@ -276,20 +289,9 @@ def curate_chunk_resilient(
             for item in chunk
             if item.image_id in image_bytes_by_id
         } or None
-    try:
-        result = provider.curate_batch(
-            chunk,
-            account_voice=account_voice,
-            policy=policy,
-            image_bytes_by_id=chunk_pixels,
-            thinking_budget=thinking_budget,
-        )
-        return ResilientCurationOutcome([result], [])
-    except GeminiBlocked as exc:
-        if len(chunk) <= 1:
-            image_id = chunk[0].image_id if chunk else "unknown"
-            log.info("curation_image_blocked", image_id=image_id, reason=exc.reason)
-            return ResilientCurationOutcome([], [image_id])
+    token_budget = max_output_tokens or curation_max_output_tokens(len(chunk))
+
+    def _bisect() -> ResilientCurationOutcome:
         mid = len(chunk) // 2
         left = curate_chunk_resilient(
             provider,
@@ -311,6 +313,29 @@ def curate_chunk_resilient(
             left.chunk_results + right.chunk_results,
             left.blocked_ids + right.blocked_ids,
         )
+
+    try:
+        result = provider.curate_batch(
+            chunk,
+            account_voice=account_voice,
+            policy=policy,
+            image_bytes_by_id=chunk_pixels,
+            thinking_budget=thinking_budget,
+            max_output_tokens=token_budget,
+        )
+        return ResilientCurationOutcome([result], [])
+    except GeminiTruncated:
+        if len(chunk) <= 1:
+            image_id = chunk[0].image_id if chunk else "unknown"
+            log.info("curation_image_truncated", image_id=image_id)
+            return ResilientCurationOutcome([], [image_id])
+        return _bisect()
+    except GeminiBlocked as exc:
+        if len(chunk) <= 1:
+            image_id = chunk[0].image_id if chunk else "unknown"
+            log.info("curation_image_blocked", image_id=image_id, reason=exc.reason)
+            return ResilientCurationOutcome([], [image_id])
+        return _bisect()
 
 
 def execute_curation_batch(
@@ -492,13 +517,6 @@ def _execute_curation_gemini(
         batch.finished_at = datetime.now(UTC)
         session.commit()
         raise
-    except Exception:
-        audit.status = "failed"
-        batch.status = CurationBatchStatus.FAILED.value
-        batch.error = "Gemini curation failed."
-        batch.finished_at = datetime.now(UTC)
-        session.commit()
-        raise NotConfigured("Gemini curation failed.") from None
 
     audit.status = "succeeded"
     ordered_drafts = merge_chunked_drafts(chunk_results, payloads=payloads)
@@ -800,3 +818,107 @@ def queue_picks(
         queued.append(item)
     session.commit()
     return queued
+
+
+def processing_job_for_batch(session: Session, batch_id: UUID) -> ProcessingJob | None:
+    jobs = session.scalars(
+        select(ProcessingJob)
+        .where(ProcessingJob.kind == JobKind.CURATE.value)
+        .order_by(ProcessingJob.created_at.desc())
+        .limit(50)
+    ).all()
+    for job in jobs:
+        try:
+            params = json.loads(job.detail or "{}")
+        except json.JSONDecodeError:
+            continue
+        if params.get("batch_id") == str(batch_id):
+            return job
+    return None
+
+
+def _rq_has_curation_job(redis_url: str, processing_job_id: str) -> bool:
+    from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO
+    from redis import Redis
+    from rq import Queue
+    from rq.job import Job
+    from rq.registry import StartedJobRegistry
+
+    try:
+        connection = Redis.from_url(redis_url)
+        connection.ping()
+    except Exception:
+        return False
+    try:
+        for queue_name in (QUEUE_GEMINI, QUEUE_IO):
+            queue = Queue(queue_name, connection=connection)
+            job_id_sets = [list(queue.job_ids), StartedJobRegistry(queue=queue).get_job_ids()]
+            for job_ids in job_id_sets:
+                for job_id in job_ids:
+                    try:
+                        job = Job.fetch(job_id, connection=connection)
+                    except Exception:
+                        continue
+                    if job.args and str(job.args[0]) == processing_job_id:
+                        return True
+    except Exception:
+        return False
+    return False
+
+
+def reconcile_stale_curation_batches(session: Session, redis_url: str) -> int:
+    """Mark RUNNING batches failed when their queue worker job is gone."""
+    running = session.scalars(
+        select(CurationBatch).where(CurationBatch.status == CurationBatchStatus.RUNNING.value)
+    ).all()
+    if not running:
+        return 0
+    updated = 0
+    now = datetime.now(UTC)
+    for batch in running:
+        job = processing_job_for_batch(session, batch.id)
+        if job is None:
+            batch.status = CurationBatchStatus.FAILED.value
+            batch.error = "No curation worker job was found for this batch."
+            batch.finished_at = now
+            updated += 1
+            continue
+        if job.status in {JobStatus.SUCCEEDED.value, JobStatus.FAILED.value}:
+            if batch.status == CurationBatchStatus.RUNNING.value:
+                batch.status = CurationBatchStatus.FAILED.value
+                batch.error = batch.error or "Curation worker finished without updating the batch."
+                batch.finished_at = now
+                updated += 1
+            continue
+        if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value} and not _rq_has_curation_job(
+            redis_url, str(job.id)
+        ):
+            job.status = JobStatus.FAILED.value
+            job.error = "Curation worker job expired or was lost from the queue."
+            job.finished_at = now
+            batch.status = CurationBatchStatus.FAILED.value
+            batch.error = "Curation worker job expired or was lost from the queue."
+            batch.finished_at = now
+            updated += 1
+    if updated:
+        session.commit()
+    return updated
+
+
+def active_curation_in_flight(session: Session, library_id: UUID | None) -> bool:
+    batch_stmt = select(CurationBatch).where(CurationBatch.status == CurationBatchStatus.RUNNING.value)
+    if library_id is None:
+        batch_stmt = batch_stmt.where(CurationBatch.library_id.is_(None))
+    else:
+        batch_stmt = batch_stmt.where(CurationBatch.library_id == library_id)
+    if session.scalar(batch_stmt.limit(1)) is not None:
+        return True
+    job_stmt = select(ProcessingJob).where(
+        ProcessingJob.kind == JobKind.CURATE.value,
+        ProcessingJob.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+    )
+    if library_id is None:
+        job_stmt = job_stmt.where(ProcessingJob.library_id.is_(None))
+    else:
+        job_stmt = job_stmt.where(ProcessingJob.library_id == library_id)
+    return session.scalar(job_stmt.limit(1)) is not None

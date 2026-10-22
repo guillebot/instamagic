@@ -66,6 +66,7 @@ class GeminiProvider(Protocol):
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
         thinking_budget: int = 512,
+        max_output_tokens: int | None = None,
     ) -> CurationResult: ...
 
 
@@ -155,6 +156,7 @@ class FakeGeminiProvider:
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
         thinking_budget: int = 512,
+        max_output_tokens: int | None = None,
     ) -> CurationResult:
         from instamagic.services.gemini.curation import (
             CURATION_CAPTION_STYLES,
@@ -164,7 +166,7 @@ class FakeGeminiProvider:
             CurationResult as Result,
         )
 
-        del account_voice, policy, image_bytes_by_id
+        del account_voice, policy, image_bytes_by_id, thinking_budget, max_output_tokens
         ordered = sorted(candidates, key=lambda item: item.local_score, reverse=True)
         picks: list[CurationPickDraft] = []
         for index, item in enumerate(ordered, start=1):

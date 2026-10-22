@@ -160,6 +160,7 @@ class GoogleGeminiProvider:
         policy: str,
         image_bytes_by_id: dict[str, bytes] | None = None,
         thinking_budget: int = 512,
+        max_output_tokens: int | None = None,
     ) -> CurationResult:
         """Rank shortlisted frames. Pixels only when policy allows derivative JPEGs."""
         if not self._api_key:
@@ -171,7 +172,7 @@ class GoogleGeminiProvider:
             policy=policy,
             image_bytes_by_id=pixels,
             thinking_budget=thinking_budget,
-            max_output_tokens=curation_max_output_tokens(len(candidates)),
+            max_output_tokens=max_output_tokens or curation_max_output_tokens(len(candidates)),
         )
         return CurationResult.model_validate_json(self._post(body))
 

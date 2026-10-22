@@ -8,7 +8,10 @@ from rq import Queue, Worker
 from rq.job import Job
 from rq.registry import FailedJobRegistry, StartedJobRegistry
 
-QUEUE_NAMES = ("io", "ml")
+QUEUE_IO = "io"
+QUEUE_ML = "ml"
+QUEUE_GEMINI = "gemini"
+QUEUE_NAMES = (QUEUE_IO, QUEUE_ML, QUEUE_GEMINI)
 
 
 def _describe_job(job: Job, status: str) -> QueueJobOut:

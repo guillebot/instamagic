@@ -52,9 +52,11 @@ def gemini_gate(
         has_approved_covering_blur=has_approved_covering_blur,
     )
     reasons = list(result.reasons)
-    if human_rating == HumanRating.REVIEW.value or (
-        human_rating is None and model_state in {None, SafetyState.REVIEW.value}
-    ):
+    # Human "review" rating is blocked. Classifier REVIEW with human safe/excellent is allowed.
+    if human_rating == HumanRating.REVIEW.value:
+        if "A human safe or excellent rating is required." not in reasons:
+            reasons.append("Review images are not sent to Gemini.")
+    elif human_rating is None and model_state in {None, SafetyState.REVIEW.value}:
         if "A human safe or excellent rating is required." not in reasons:
             reasons.append("Review images are not sent to Gemini.")
     if policy == "manual_only" and not operator_confirmed:

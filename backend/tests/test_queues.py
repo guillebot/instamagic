@@ -15,7 +15,7 @@ def test_queues_endpoint_handles_redis_down(client, monkeypatch) -> None:
     result = snapshot_queues("redis://localhost:1/0")
     assert result.available is False
     assert result.detail == "queue unavailable"
-    assert {queue.name for queue in result.queues} == {"io", "ml"}
+    assert {queue.name for queue in result.queues} == {"io", "ml", "gemini"}
 
     # API path with patched snapshot
     monkeypatch.setattr(

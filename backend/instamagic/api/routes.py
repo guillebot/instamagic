@@ -168,10 +168,12 @@ from instamagic.services.posting.queue_schedule import (
 )
 from instamagic.services.posting.readiness import build_image_publish_readiness
 from instamagic.services.posting.schedule_config import config_as_dict, config_view, update_config
-from instamagic.services.queues import snapshot_queues
+from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, snapshot_queues
 from instamagic.services.recommendations.candidates_bulk import bulk_enqueue, bulk_reject
 from instamagic.services.recommendations.curate import (
+    active_curation_in_flight,
     queue_picks,
+    reconcile_stale_curation_batches,
     run_curation,
 )
 from instamagic.services.recommendations.gates import publishing_gate
@@ -196,7 +198,14 @@ from sqlalchemy.orm import Session, selectinload
 router = APIRouter()
 
 
-def _enqueue_io(settings: Settings, func_name: str, processing_job_id: str, *, job_timeout: int) -> None:
+def _enqueue_worker_job(
+    settings: Settings,
+    func_name: str,
+    processing_job_id: str,
+    *,
+    job_timeout: int,
+    queue_name: str = QUEUE_IO,
+) -> None:
     if settings.pipeline_mode == "inline":
         from instamagic.workers.tasks import run_curation_job, run_gemini_label_job_entry
 
@@ -209,7 +218,7 @@ def _enqueue_io(settings: Settings, func_name: str, processing_job_id: str, *, j
         from redis import Redis
         from rq import Queue
 
-        Queue("io", connection=Redis.from_url(settings.redis_url)).enqueue(
+        Queue(queue_name, connection=Redis.from_url(settings.redis_url)).enqueue(
             func_name,
             processing_job_id,
             job_timeout=job_timeout,
@@ -233,11 +242,12 @@ def _enqueue_gemini_label_work(
         image_ids=image_ids,
         all_eligible=all_eligible,
     )
-    _enqueue_io(
+    _enqueue_worker_job(
         settings,
         "instamagic.workers.tasks.run_gemini_label_job_entry",
         str(job.id),
         job_timeout=60 * 60 * 6,
+        queue_name=QUEUE_GEMINI,
     )
     return job
 
@@ -1483,6 +1493,9 @@ def create_curation(
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
     """Queue Gemini + local curation. Draft picks only — never auto-queues or publishes."""
+    reconcile_stale_curation_batches(session, settings.redis_url)
+    if active_curation_in_flight(session, body.library_id):
+        raise NotAllowed("A Gemini curation batch is already queued or running for this library.")
     folder = None
     if body.folder:
         folder = _folder_or_400(body.folder)
@@ -1518,11 +1531,12 @@ def create_curation(
         )
         session.add(job)
         session.commit()
-        _enqueue_io(
+        _enqueue_worker_job(
             settings,
             "instamagic.workers.tasks.run_curation_job",
             str(job.id),
             job_timeout=60 * 60 * 2,
+            queue_name=QUEUE_GEMINI,
         )
     return _curation_batch_out(session, batch)
 
@@ -1566,7 +1580,9 @@ def gemini_label_stats(
 def list_curation(
     _auth: None = Depends(require_session),
     session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
 ) -> list[dict[str, object]]:
+    reconcile_stale_curation_batches(session, settings.redis_url)
     rows = session.scalars(select(CurationBatch).order_by(CurationBatch.created_at.desc()).limit(30)).all()
     return [_curation_batch_summary(row) for row in rows]
 
@@ -1576,7 +1592,9 @@ def get_curation(
     batch_id: UUID,
     _auth: None = Depends(require_session),
     session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
+    reconcile_stale_curation_batches(session, settings.redis_url)
     batch = session.get(CurationBatch, batch_id)
     if batch is None:
         raise NotFound("Curation batch was not found.")
