@@ -53,6 +53,7 @@ from instamagic.models.enums import JobKind
 from instamagic.schemas.dto import (
     AttestIn,
     BlurCreateIn,
+    BlurUpdateIn,
     BlurOut,
     BlurStrengthIn,
     BlurSuggestIn,
@@ -943,6 +944,9 @@ def create_blur(
             Box(body.x, body.y, body.width, body.height),
             strength=body.strength,
             reason=body.reason.strip() or "Manual ellipse cover.",
+            shape=body.shape,
+            rotation_deg=body.rotation_deg,
+            corner_radius=body.corner_radius,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -955,6 +959,8 @@ def create_blur(
         width=window.width,
         height=window.height,
         shape=window.shape,
+        rotation_deg=window.rotation_deg,
+        corner_radius=window.corner_radius,
         feather=window.feather,
         radius=window.radius,
         strength=window.strength,
@@ -1030,6 +1036,86 @@ def set_blur_strength(
     return [_blur_out(image, blur) for blur in image.blurs]
 
 
+@router.patch("/api/images/{image_id}/blurs/{blur_id}", response_model=BlurOut)
+def update_blur(
+    image_id: UUID,
+    blur_id: UUID,
+    body: BlurUpdateIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> BlurOut:
+    from instamagic.services.blurs.validate import validate_blur_geometry
+
+    image = _load_image(session, image_id)
+    blur = session.get(BlurCover, blur_id)
+    if blur is None or blur.image_id != image.id:
+        raise NotFound("Blur cover was not found.")
+    if image.width is None or image.height is None:
+        raise NotAllowed("Image dimensions are unknown.")
+    current = _window_from_row(blur)
+    window = BlurWindow(
+        x=body.x if body.x is not None else current.x,
+        y=body.y if body.y is not None else current.y,
+        width=body.width if body.width is not None else current.width,
+        height=body.height if body.height is not None else current.height,
+        shape=body.shape if body.shape is not None else current.shape,
+        feather=current.feather,
+        radius=current.radius,
+        strength=body.strength if body.strength is not None else current.strength,
+        reason=body.reason if body.reason is not None else current.reason,
+        covers_unsafe=current.covers_unsafe,
+        rotation_deg=body.rotation_deg if body.rotation_deg is not None else current.rotation_deg,
+        corner_radius=body.corner_radius if body.corner_radius is not None else current.corner_radius,
+    )
+    if body.strength is not None and body.strength != current.strength:
+        window = with_strength(window, body.strength)
+    try:
+        validate_blur_geometry(image.width, image.height, window)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    blur.x = window.x
+    blur.y = window.y
+    blur.width = window.width
+    blur.height = window.height
+    blur.shape = window.shape
+    blur.rotation_deg = window.rotation_deg
+    blur.corner_radius = window.corner_radius
+    blur.radius = window.radius
+    blur.strength = window.strength
+    blur.reason = window.reason
+    blur.approved = False
+    for other in image.blurs:
+        if other.id != blur.id:
+            other.approved = False
+    _refresh_blur_derivative(session, settings, image)
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        reset_blur_unlock(image)
+    session.commit()
+    session.refresh(blur)
+    return _blur_out(image, blur)
+
+
+@router.delete("/api/images/{image_id}/blurs/{blur_id}", status_code=204)
+def delete_blur(
+    image_id: UUID,
+    blur_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> None:
+    image = _load_image(session, image_id)
+    blur = session.get(BlurCover, blur_id)
+    if blur is None or blur.image_id != image.id:
+        raise NotFound("Blur cover was not found.")
+    session.delete(blur)
+    session.flush()
+    _refresh_blur_derivative(session, settings, image)
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        reset_blur_unlock(image)
+    session.commit()
+
+
 @router.post("/api/images/{image_id}/blurs/approve", response_model=list[BlurOut])
 def approve_blurs(
     image_id: UUID,
@@ -1055,7 +1141,9 @@ def approve_blurs(
             raise NotAllowed(str(exc)) from exc
         apply_unlock_result(image, result)
     else:
-        if unsafe and not covers_unsafe_boxes(windows, unsafe):
+        if image.width is None or image.height is None:
+            raise NotAllowed("Image dimensions are unknown.")
+        if unsafe and not covers_unsafe_boxes(windows, unsafe, (image.width, image.height)):
             for blur in image.blurs:
                 blur.approved = False
             session.commit()
@@ -2611,6 +2699,8 @@ def _blur_out(image: Image, blur: BlurCover) -> BlurOut:
         width=blur.width,
         height=blur.height,
         shape=blur.shape,
+        rotation_deg=blur.rotation_deg,
+        corner_radius=blur.corner_radius,
         feather=blur.feather,
         radius=blur.radius,
         strength=blur.strength,
@@ -2633,6 +2723,8 @@ def _window_from_row(blur: BlurCover) -> BlurWindow:
         reason=blur.reason,
         covers_unsafe=blur.covers_unsafe,
         strength=blur.strength,
+        rotation_deg=blur.rotation_deg,
+        corner_radius=blur.corner_radius,
     )
 
 

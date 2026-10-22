@@ -35,16 +35,11 @@ class BlurWindow:
     reason: str
     covers_unsafe: bool
     strength: str = "standard"
+    rotation_deg: float = 0.0
+    corner_radius: float = 0.0
 
     def as_box(self) -> Box:
         return Box(self.x, self.y, self.width, self.height)
-
-    def core_radii(self) -> tuple[float, float, float, float]:
-        cx = self.x + self.width / 2
-        cy = self.y + self.height / 2
-        rx = max(0.0, self.width / 2 - self.feather)
-        ry = max(0.0, self.height / 2 - self.feather)
-        return cx, cy, rx, ry
 
 
 def suggest_blurs(
@@ -70,25 +65,33 @@ def manual_blur(
     *,
     strength: str = "standard",
     reason: str = "Manual ellipse cover.",
+    shape: str = "ellipse",
+    rotation_deg: float = 0.0,
+    corner_radius: float = 0.0,
 ) -> BlurWindow:
+    from instamagic.services.blurs.validate import validate_blur_geometry
+
     if strength not in STRENGTHS:
         raise ValueError("Strength must be subtle, standard, or strong.")
-    clamped = _clamp_box(box, image_width, image_height)
-    if clamped.width < 2 or clamped.height < 2:
+    if box.width < 2 or box.height < 2:
         raise ValueError("Blur region is too small.")
-    feather = _feather_for(clamped.width, clamped.height)
-    return BlurWindow(
-        x=clamped.x,
-        y=clamped.y,
-        width=clamped.width,
-        height=clamped.height,
-        shape="ellipse",
+    feather = _feather_for(box.width, box.height)
+    window = BlurWindow(
+        x=box.x,
+        y=box.y,
+        width=box.width,
+        height=box.height,
+        shape=shape,
         feather=feather,
-        radius=sigma_for(clamped.width, clamped.height, strength),
+        radius=sigma_for(box.width, box.height, strength),
         reason=reason,
         covers_unsafe=False,
         strength=strength,
+        rotation_deg=rotation_deg,
+        corner_radius=corner_radius,
     )
+    validate_blur_geometry(image_width, image_height, window)
+    return window
 
 
 def sigma_for(width: int, height: int, strength: str) -> float:
@@ -112,6 +115,8 @@ def with_strength(window: BlurWindow, strength: str) -> BlurWindow:
         reason=window.reason,
         covers_unsafe=window.covers_unsafe,
         strength=strength,
+        rotation_deg=window.rotation_deg,
+        corner_radius=window.corner_radius,
     )
 
 
@@ -130,59 +135,27 @@ def region_coverages(
     padding: int = 4,
 ) -> list[RegionCoverage]:
     """Fraction of each unsafe box covered by the combined blur masks (0–1)."""
-    if not unsafe_boxes:
-        return []
-    width, height = image_size
-    combined = Image.new("L", (width, height), 0)
-    for cover in covers:
-        mask = feathered_ellipse_mask(
-            (width, height),
-            x=cover.x,
-            y=cover.y,
-            width=cover.width,
-            height=cover.height,
-            feather=cover.feather,
-        )
-        combined = _lighter_mask(combined, mask)
-    cover_arr = np.asarray(combined, dtype=np.float32) / 255.0
-    rows: list[RegionCoverage] = []
-    for box in unsafe_boxes:
-        x0 = max(0, box.x - padding)
-        y0 = max(0, box.y - padding)
-        x1 = min(width, box.x + box.width + padding)
-        y1 = min(height, box.y + box.height + padding)
-        if x1 <= x0 or y1 <= y0:
-            rows.append(RegionCoverage(box=box, coverage=0.0))
-            continue
-        patch = cover_arr[y0:y1, x0:x1]
-        rows.append(RegionCoverage(box=box, coverage=float(np.mean(patch)) if patch.size else 0.0))
-    return rows
+    from instamagic.services.blurs.masks import region_coverages_rotated
+
+    del min_ratio
+    pairs = region_coverages_rotated(covers, unsafe_boxes, image_size, padding=padding)
+    return [RegionCoverage(box=box, coverage=coverage) for box, coverage in pairs]
 
 
-def covers_unsafe_boxes(covers: list[BlurWindow], unsafe_boxes: list[Box]) -> bool:
-    """True when every unsafe box lies inside the opaque (feathered) core of some cover."""
-    if not unsafe_boxes:
-        return True
-    if not covers:
-        return False
-    return all(any(_core_contains(cover, box) for cover in covers) for box in unsafe_boxes)
+def covers_unsafe_boxes(
+    covers: list[BlurWindow],
+    unsafe_boxes: list[Box],
+    image_size: tuple[int, int] | None = None,
+) -> bool:
+    """True when every unsafe box lies inside the opaque core of some cover."""
+    from instamagic.services.blurs.masks import covers_unsafe_boxes_rotated
 
-
-def _core_contains(cover: BlurWindow, box: Box) -> bool:
-    cx, cy, rx, ry = cover.core_radii()
-    if rx <= 0 or ry <= 0:
-        return False
-    corners = (
-        (box.x, box.y),
-        (box.x + box.width, box.y),
-        (box.x, box.y + box.height),
-        (box.x + box.width, box.y + box.height),
-    )
-    return all(_point_in_ellipse(px, py, cx, cy, rx, ry) for px, py in corners)
-
-
-def _point_in_ellipse(px: float, py: float, cx: float, cy: float, rx: float, ry: float) -> bool:
-    return ((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2 <= 1.0 + 1e-9
+    if image_size is None:
+        # Legacy callers without image size: infer from cover bounds (best effort).
+        max_x = max(cover.x + cover.width for cover in covers) if covers else 1
+        max_y = max(cover.y + cover.height for cover in covers) if covers else 1
+        image_size = (max(max_x, 1), max(max_y, 1))
+    return covers_unsafe_boxes_rotated(covers, unsafe_boxes, image_size)
 
 
 def feathered_ellipse_mask(
@@ -216,30 +189,41 @@ def feathered_ellipse_mask(
 
 
 def apply_blur_covers(image: Image.Image, covers: list[BlurWindow]) -> Image.Image:
-    """Composite Gaussian-blurred RGB only where feathered ellipse masks are opaque."""
+    """Composite Gaussian-blurred RGB only where feathered shape masks are opaque."""
+    from instamagic.services.blurs.masks import feathered_shape_mask
+
     rgb = image if image.mode == "RGB" else image.convert("RGB")
     if not covers:
         return rgb.copy()
-    result = rgb.copy()
-    # Group by radius so we blur once per sigma.
+    pad = int(max(cover.radius for cover in covers) * 4) + max(cover.feather for cover in covers) + 8
+    padded = Image.new("RGB", (rgb.width + 2 * pad, rgb.height + 2 * pad))
+    padded.paste(rgb, (pad, pad))
+    result = padded.copy()
     by_radius: dict[float, list[BlurWindow]] = {}
     for cover in covers:
         by_radius.setdefault(round(cover.radius, 3), []).append(cover)
     for radius, group in by_radius.items():
-        blurred = rgb.filter(ImageFilter.GaussianBlur(radius=radius))
-        combined = Image.new("L", rgb.size, 0)
+        blurred = padded.filter(ImageFilter.GaussianBlur(radius=radius))
+        combined = Image.new("L", padded.size, 0)
         for cover in group:
-            mask = feathered_ellipse_mask(
-                rgb.size,
-                x=cover.x,
-                y=cover.y,
+            shifted = BlurWindow(
+                x=cover.x + pad,
+                y=cover.y + pad,
                 width=cover.width,
                 height=cover.height,
+                shape=cover.shape,
                 feather=cover.feather,
+                radius=cover.radius,
+                reason=cover.reason,
+                covers_unsafe=cover.covers_unsafe,
+                strength=cover.strength,
+                rotation_deg=cover.rotation_deg,
+                corner_radius=cover.corner_radius,
             )
+            mask = feathered_shape_mask(padded.size, shifted)
             combined = _lighter_mask(combined, mask)
         result = Image.composite(blurred, result, combined)
-    return result
+    return result.crop((pad, pad, pad + rgb.width, pad + rgb.height))
 
 
 def _lighter_mask(a: Image.Image, b: Image.Image) -> Image.Image:
@@ -267,7 +251,6 @@ def _cover_for_unsafe(
     box to the image, or edge regions shift the center and fail containment.
     The mask renderer already clips to the bitmap.
     """
-    del image_width, image_height  # geometry is box-centered; mask clips at draw time
     reason = (
         "Suggested ellipse over a detected unsafe region. "
         "The feathered core must fully cover that region before approval."
@@ -300,8 +283,10 @@ def _cover_for_unsafe(
             reason=reason,
             covers_unsafe=True,
             strength=strength,
+            rotation_deg=0.0,
+            corner_radius=0.0,
         )
-        if _core_contains(candidate, box):
+        if covers_unsafe_boxes([candidate], [box], image_size=(image_width, image_height)):
             return candidate
         core_rx += 4.0
         core_ry += 4.0

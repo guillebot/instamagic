@@ -773,6 +773,8 @@ def render_blur_derivative(
             reason=cover.reason,
             covers_unsafe=cover.covers_unsafe,
             strength=cover.strength,
+            rotation_deg=cover.rotation_deg,
+            corner_radius=cover.corner_radius,
         )
         for cover in covers
     ]

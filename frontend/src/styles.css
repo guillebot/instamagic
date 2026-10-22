@@ -461,6 +461,7 @@ input, select, textarea {
   object-fit: contain;
 }
 .blur-draw-stage {
+  overflow: visible;
   cursor: crosshair;
 }
 .blur-ellipse.draft {
@@ -528,10 +529,36 @@ input, select, textarea {
   position: absolute;
   border: 2px solid #7eb8d4;
   border-radius: 50%;
-  pointer-events: none;
+  pointer-events: auto;
   box-shadow: inset 0 0 24px rgba(126, 184, 212, 0.18);
 }
 .blur-ellipse.approved { border-color: #8fd4a4; box-shadow: inset 0 0 24px rgba(143, 212, 164, 0.22); }
+.blur-ellipse.selected { border-color: #9ec5ff; box-shadow: inset 0 0 20px rgba(158, 197, 255, 0.35); }
+.blur-handle.resize-handle.se {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  border: 2px solid #9ec5ff;
+  background: #1a2740;
+  cursor: nwse-resize;
+  padding: 0;
+}
+.blur-handle.rotate-handle {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  border: 2px solid #9ec5ff;
+  background: #1a2740;
+  cursor: grab;
+  padding: 0;
+}
 .blur-ellipse.highlight-unsafe {
   border-color: #e8a0a0;
   box-shadow: inset 0 0 18px rgba(232, 160, 160, 0.35);

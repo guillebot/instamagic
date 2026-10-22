@@ -229,6 +229,8 @@ class BlurCover(Base):
     width: Mapped[int] = mapped_column(Integer)
     height: Mapped[int] = mapped_column(Integer)
     shape: Mapped[str] = mapped_column(String(16), default="ellipse")
+    rotation_deg: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    corner_radius: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
     feather: Mapped[int] = mapped_column(Integer, default=8)
     radius: Mapped[float] = mapped_column(Float, default=20.0)
     strength: Mapped[str] = mapped_column(String(16), default="standard")
