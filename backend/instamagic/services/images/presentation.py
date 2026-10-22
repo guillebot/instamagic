@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, or_
-
 from instamagic.models.enums import HumanRating, SafetyState
+from sqlalchemy import and_, or_
 
 # Human ratings are stored lowercase; accept badge-style / case variants from filters.
 _HUMAN_RATING_ALIASES = {
