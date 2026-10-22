@@ -18,7 +18,15 @@ Workflow: `.github/workflows/docker-publish.yml` (on `main` / `master`, tags `v*
 | `<prefix>/instamagic-backend` | API, migrate, worker-io, worker-ml |
 | `<prefix>/instamagic-frontend` | nginx SPA |
 
-Tags: `latest` (default branch), `sha-<shortsha>`, semver / `v*` tag names, branch name.
+Tags: **`YYYYMMDD-XX`** (preferred pin), `latest` (default branch), `sha-<shortsha>`, semver / `v*` tag names, branch name.
+
+### Build version (`YYYYMMDD-XX`)
+
+- **Format:** calendar date + sequential build that day (`01`, `02`, …).
+- **Timezone:** `America/Argentina/Buenos_Aires` (local release day). Documented here so CI and operators stay consistent; do not mix UTC dates for the same release.
+- **Injection:** CI sets `APP_VERSION` as a Docker build-arg. Backend image gets `ENV APP_VERSION`; frontend bake-in is `VITE_APP_VERSION`. Running API exposes it on `/health` (public) and `/api/config` (authed). UI shows the same id in the topbar chip and on the login screen.
+- **Computation:** `scripts/compute-app-version.sh` (used by `docker-publish.yml`) lists existing GHCR tags for `instamagic-backend` matching today’s date and increments `XX`.
+- **Stage pin:** after publish, set host `.env` `IMAGE_TAG` to that version (e.g. `IMAGE_PREFIX=ghcr.io/guillebot IMAGE_TAG=20261022-01 scripts/deploy-stage.sh`).
 
 **Registry preference:** Docker Hub when GitHub Actions variable `DOCKERHUB_USERNAME` and secret `DOCKERHUB_TOKEN` are set (same names as Metrik/MonkeyTracker; org already has `DOCKERHUB_USERNAME=gschimmel`). GHCR (`ghcr.io/guillebot/instamagic-*`) is always pushed as a fallback. Stage `.env` `IMAGE_PREFIX` must match the Hub namespace you pull from (default `gschimmel`), or `ghcr.io/guillebot` for GHCR-only.
 
@@ -64,9 +72,16 @@ Or on the host after images exist:
 
 ```sh
 cd /opt/docker/instamagic
-# pin a release: edit IMAGE_TAG=v0.1.0 (or sha-…)
+# pin a release: edit IMAGE_TAG=20261022-01 (or sha-…)
 docker compose pull
-docker compose up -d
+docker compose up -d --force-recreate
+```
+
+From the Mac after CI finishes:
+
+```sh
+IMAGE_PREFIX=ghcr.io/guillebot IMAGE_TAG=20261022-01 scripts/deploy-stage.sh
+curl -fsS https://instamagic.schimmel.homes/health   # {"status":"ok","version":"20261022-01"}
 ```
 
 Stage defaults (`deploy/stage.env.example`): `ORIGINALS_ROOT=/fotosarte`, `APP_UID=1000` / `APP_GID=100` (host `guille` / `users`), `SAFETY_CLASSIFIER=onnx` + required `SAFETY_MODEL_SHA256`, `AUTO_PUBLISH=false`, `FRONTEND_ORIGIN=https://instamagic.schimmel.homes`. `SAFETY_CLASSIFIER=fake` is refused when `ENVIRONMENT=stage`.

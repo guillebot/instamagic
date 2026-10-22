@@ -2,13 +2,31 @@
 # Slim stage deploy to 10.1.1.8:/opt/docker/instamagic.
 # Copies compose + env example only (no source tree, no --build).
 # Host pulls images from Docker Hub / GHCR. Secrets stay on the host.
+#
+# Optional pin (recommended after CI publish):
+#   IMAGE_PREFIX=ghcr.io/guillebot IMAGE_TAG=20261022-01 scripts/deploy-stage.sh
 set -euo pipefail
 
 HOST="${INSTAMAGIC_STAGE_HOST:-guille@10.1.1.8}"
 REMOTE="${INSTAMAGIC_STAGE_PATH:-/opt/docker/instamagic}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Optional overrides written into host .env before pull (alnum + ._-/: only).
+PIN_PREFIX="${IMAGE_PREFIX:-}"
+PIN_TAG="${IMAGE_TAG:-}"
+
+if [[ -n "$PIN_PREFIX" && ! "$PIN_PREFIX" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+  echo "Refusing IMAGE_PREFIX with unexpected characters: ${PIN_PREFIX}" >&2
+  exit 1
+fi
+if [[ -n "$PIN_TAG" && ! "$PIN_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "Refusing IMAGE_TAG with unexpected characters: ${PIN_TAG}" >&2
+  exit 1
+fi
 
 echo "Deploying stage compose to ${HOST}:${REMOTE} (no source tree, no build)..."
+if [[ -n "$PIN_PREFIX" || -n "$PIN_TAG" ]]; then
+  echo "Pin overrides: IMAGE_PREFIX=${PIN_PREFIX:-'(unchanged)'} IMAGE_TAG=${PIN_TAG:-'(unchanged)'}"
+fi
 ssh -o BatchMode=yes "$HOST" "sudo mkdir -p '$REMOTE' && sudo chown guille:guille '$REMOTE'"
 
 # Host pull-all.sh expects docker-compose.yml. Stage file is the only compose on host.
@@ -20,8 +38,11 @@ scp -o BatchMode=yes \
   "$ROOT/deploy/stage.env.example" \
   "$HOST:$REMOTE/stage.env.example"
 
-ssh -o BatchMode=yes "$HOST" bash -s <<'REMOTE'
+# Pass pin via argv (validated above); keep heredoc quoted so host secrets stay local.
+ssh -o BatchMode=yes "$HOST" bash -s -- "$PIN_PREFIX" "$PIN_TAG" <<'REMOTE'
 set -euo pipefail
+PIN_PREFIX="${1:-}"
+PIN_TAG="${2:-}"
 cd /opt/docker/instamagic
 mkdir -p data/stage-library models
 
@@ -57,6 +78,24 @@ else
   grep -q '^ORIGINALS_ROOT=' .env || echo 'ORIGINALS_ROOT=/fotosarte' >> .env
 fi
 
+# Apply optional pin from the Mac deploy invocation (preserves other secrets).
+if [[ -n "${PIN_PREFIX:-}" ]]; then
+  if grep -q '^IMAGE_PREFIX=' .env; then
+    sed -i "s|^IMAGE_PREFIX=.*|IMAGE_PREFIX=${PIN_PREFIX}|" .env
+  else
+    echo "IMAGE_PREFIX=${PIN_PREFIX}" >> .env
+  fi
+  echo "Set IMAGE_PREFIX=${PIN_PREFIX}"
+fi
+if [[ -n "${PIN_TAG:-}" ]]; then
+  if grep -q '^IMAGE_TAG=' .env; then
+    sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${PIN_TAG}|" .env
+  else
+    echo "IMAGE_TAG=${PIN_TAG}" >> .env
+  fi
+  echo "Set IMAGE_TAG=${PIN_TAG}"
+fi
+
 if [[ ! -f models/320n.onnx ]]; then
   echo "WARNING: models/320n.onnx missing. Stage requires ONNX (SAFETY_CLASSIFIER=fake is refused)."
   echo "  Copy weights to ${PWD}/models/ before expecting scans to classify."
@@ -67,7 +106,7 @@ docker compose config -q
 
 echo "Pulling images (IMAGE_PREFIX/IMAGE_TAG from .env)..."
 if docker compose pull; then
-  docker compose up -d
+  docker compose up -d --force-recreate
   docker compose ps
 else
   echo "WARNING: docker compose pull failed (images not published yet, or wrong IMAGE_PREFIX)."

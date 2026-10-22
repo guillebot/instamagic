@@ -8,10 +8,17 @@ from tests.conftest import login
 
 
 def test_health_and_login_required(client) -> None:
-    assert client.get("/health").status_code == 200
+    health = client.get("/health")
+    assert health.status_code == 200
+    body = health.json()
+    assert body["status"] == "ok"
+    assert "version" in body
     assert client.get("/api/libraries").status_code == 401
     login(client)
     assert client.get("/api/auth/session").json()["authenticated"] is True
+    config = client.get("/api/config")
+    assert config.status_code == 200
+    assert config.json()["version"] == body["version"]
 
 
 def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None:

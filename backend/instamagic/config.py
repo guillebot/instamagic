@@ -30,6 +30,8 @@ def _load_dotenv_file(path: Path) -> None:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
+    # Build id injected at image build (YYYYMMDD-XX). Default for local/dev.
+    app_version: str = "dev"
     environment: str = "local"
     database_url: str = "postgresql+psycopg://instamagic:instamagic@127.0.0.1:5432/instamagic"
     redis_url: str = "redis://127.0.0.1:6379/0"

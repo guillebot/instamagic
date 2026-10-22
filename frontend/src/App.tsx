@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
 import { api } from "./api";
+import { VersionChip } from "./VersionChip";
 import { LoginPage } from "./pages/Login";
 import { CandidatesPage } from "./pages/Candidates";
 import { QueuePage } from "./pages/Queue";
@@ -26,7 +27,10 @@ function Shell() {
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand">Instamagic</div>
+        <div className="brand-row">
+          <div className="brand">Instamagic</div>
+          <VersionChip />
+        </div>
         <nav className="nav">
           <NavLink to="/" end>
             Review

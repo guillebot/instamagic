@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, api } from "../api";
+import { VersionChip } from "../VersionChip";
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -39,6 +40,9 @@ export function LoginPage() {
         <button className="button" type="submit">
           Unlock
         </button>
+        <p className="login-version muted">
+          Build <VersionChip />
+        </p>
       </form>
     </main>
   );

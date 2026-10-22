@@ -1,6 +1,9 @@
 # Pin to multi-arch manifest-list digest (index), not a per-arch manifest.
 FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 COPY backend /app

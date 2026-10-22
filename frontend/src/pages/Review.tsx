@@ -69,6 +69,67 @@ const RATING_KEYS = [
   { key: "4", rating: "excellent", label: "Excellent" },
 ] as const;
 const GRID_GAP = 8;
+const TARGET_ROW_HEIGHT = 160;
+
+type JustifiedRow = {
+  startIndex: number;
+  items: ImageItem[];
+  height: number;
+};
+
+function imageAspect(image: ImageItem): number {
+  if (image.width && image.height && image.height > 0) return image.width / image.height;
+  if (image.orientation === "portrait") return 3 / 4;
+  if (image.orientation === "landscape") return 4 / 3;
+  return 1;
+}
+
+/** Pack images into same-height rows; tile width follows aspect so the full photo is visible. */
+function buildJustifiedRows(items: ImageItem[], containerWidth: number, rowHeight: number, gap: number): JustifiedRow[] {
+  if (containerWidth <= 0 || items.length === 0) return [];
+  const rows: JustifiedRow[] = [];
+  let index = 0;
+  while (index < items.length) {
+    const startIndex = index;
+    const rowItems: ImageItem[] = [];
+    let aspectSum = 0;
+    while (index < items.length) {
+      const aspect = imageAspect(items[index]);
+      const nextCount = rowItems.length + 1;
+      const widthNeeded = (aspectSum + aspect) * rowHeight + gap * (nextCount - 1);
+      if (rowItems.length > 0 && widthNeeded > containerWidth) break;
+      rowItems.push(items[index]);
+      aspectSum += aspect;
+      index += 1;
+      if (rowItems.length >= 14) break;
+    }
+    const gaps = gap * Math.max(0, rowItems.length - 1);
+    const isLast = index >= items.length;
+    const scale = aspectSum > 0 ? (containerWidth - gaps) / (aspectSum * rowHeight) : 1;
+    const height = Math.max(
+      96,
+      Math.round(rowHeight * (isLast ? Math.min(scale, 1) : scale)),
+    );
+    rows.push({ startIndex, items: rowItems, height });
+  }
+  return rows;
+}
+
+function rowIndexForItem(rows: JustifiedRow[], itemIndex: number): number {
+  return rows.findIndex(
+    (row) => itemIndex >= row.startIndex && itemIndex < row.startIndex + row.items.length,
+  );
+}
+
+function neighborIndex(rows: JustifiedRow[], itemIndex: number, direction: -1 | 1): number {
+  const rowIdx = rowIndexForItem(rows, itemIndex);
+  if (rowIdx < 0) return itemIndex;
+  const row = rows[rowIdx];
+  const col = itemIndex - row.startIndex;
+  const nextRow = rows[rowIdx + direction];
+  if (!nextRow) return itemIndex;
+  return nextRow.startIndex + Math.min(col, nextRow.items.length - 1);
+}
 
 export function ReviewPage() {
   const queryClient = useQueryClient();
@@ -161,25 +222,31 @@ export function ReviewPage() {
   useEffect(() => {
     const element = parentRef.current;
     if (!element) return;
-    const observer = new ResizeObserver(() => setWidth(element.clientWidth));
+    const observer = new ResizeObserver(() => {
+      const next = element.clientWidth;
+      setWidth((prev) => (prev === next ? prev : next));
+    });
     observer.observe(element);
+    setWidth((prev) => (prev === element.clientWidth ? prev : element.clientWidth));
     return () => observer.disconnect();
   }, [items.length]);
 
-  const columns = Math.max(2, Math.floor(width / 190));
-  const cellSize = Math.max(96, Math.floor((width - GRID_GAP * Math.max(0, columns - 1)) / columns));
-  const rowSize = cellSize + GRID_GAP;
-  const rowCount = Math.ceil(items.length / columns);
+  const justifiedRows = useMemo(
+    () => buildJustifiedRows(items, width, TARGET_ROW_HEIGHT, GRID_GAP),
+    [items, width],
+  );
   const virtualizer = useVirtualizer({
-    count: rowCount,
+    count: justifiedRows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => rowSize,
+    estimateSize: (index) => (justifiedRows[index]?.height ?? TARGET_ROW_HEIGHT) + GRID_GAP,
     overscan: 4,
   });
 
   useEffect(() => {
     virtualizer.measure();
-  }, [rowSize, virtualizer]);
+    // Only remeasure when row geometry changes — not on every virtualizer identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [justifiedRows]);
 
   useEffect(() => {
     if (items.length === 0) return;
@@ -187,10 +254,13 @@ export function ReviewPage() {
   }, [items.length, selected]);
 
   useEffect(() => {
-    if (!items.length) return;
-    const rowIndex = Math.floor(selected / columns);
+    if (!items.length || preview) return;
+    const rowIndex = rowIndexForItem(justifiedRows, selected);
+    if (rowIndex < 0) return;
     virtualizer.scrollToIndex(rowIndex, { align: "auto" });
-  }, [selected, columns, items.length, virtualizer]);
+    // Scroll only when selection moves (or row packing changes), never while classify is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, justifiedRows, preview]);
 
   const current = items[selected];
   const multiActive = multiIds.size > 0;
@@ -344,7 +414,10 @@ export function ReviewPage() {
     return () => {
       document.removeEventListener("focusin", onFocusIn);
       dialog.removeEventListener("keydown", onTab);
-      previouslyFocused?.focus?.();
+      // preventScroll avoids grid scrollbar thrash (width oscillation → remount flicker).
+      if (previouslyFocused && document.contains(previouslyFocused)) {
+        previouslyFocused.focus({ preventScroll: true });
+      }
     };
   }, [preview, current?.id]);
 
@@ -383,8 +456,14 @@ export function ReviewPage() {
       }
       if (event.key === "ArrowRight") setSelected((index) => Math.min(items.length - 1, index + 1));
       if (event.key === "ArrowLeft") setSelected((index) => Math.max(0, index - 1));
-      if (event.key === "ArrowDown") setSelected((index) => Math.min(items.length - 1, index + columns));
-      if (event.key === "ArrowUp") setSelected((index) => Math.max(0, index - columns));
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSelected((index) => neighborIndex(justifiedRows, index, 1));
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelected((index) => neighborIndex(justifiedRows, index, -1));
+      }
       if (event.key === " ") {
         event.preventDefault();
         openClassify();
@@ -513,8 +592,8 @@ export function ReviewPage() {
       <div className="grid-scroll" ref={parentRef}>
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
           {virtualizer.getVirtualItems().map((virtualRow) => {
-            const start = virtualRow.index * columns;
-            const rowItems = items.slice(start, start + columns);
+            const row = justifiedRows[virtualRow.index];
+            if (!row) return null;
             return (
               <div
                 key={virtualRow.key}
@@ -524,13 +603,13 @@ export function ReviewPage() {
                   top: 0,
                   left: 0,
                   width: "100%",
-                  height: `${cellSize}px`,
+                  height: `${row.height}px`,
                   transform: `translateY(${virtualRow.start}px)`,
-                  gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
                 }}
               >
-                {rowItems.map((image, offset) => {
-                  const index = start + offset;
+                {row.items.map((image, offset) => {
+                  const index = row.startIndex + offset;
+                  const aspect = imageAspect(image);
                   const isSelected = index === selected;
                   const isMulti = multiIds.has(image.id);
                   const tileClass = [
@@ -545,6 +624,7 @@ export function ReviewPage() {
                       key={image.id}
                       type="button"
                       className={tileClass}
+                      style={{ aspectRatio: `${aspect}`, height: "100%" }}
                       aria-pressed={isSelected || isMulti}
                       aria-label={`${image.relative_path}, ${image.human_rating ?? "unrated"}`}
                       onClick={(event) => selectTile(index, event)}
@@ -799,7 +879,8 @@ function ScanPanel({
   const active = scanActive(job?.status);
 
   useEffect(() => {
-    if (!active && !libraryId) return;
+    // Elapsed clock only while a scan is running — idle setState every 1s was wasteful.
+    if (!active || !libraryId) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [active, libraryId]);
@@ -812,13 +893,15 @@ function ScanPanel({
     const watchActive = active;
 
     async function poll() {
+      let still = false;
       try {
         const result = await refreshJobs();
         await refreshQueues();
         if (stopped) return;
         setError("");
         polls += 1;
-        const still = result.active ? scanActive(result.active.status) : false;
+        still = result.active ? scanActive(result.active.status) : false;
+        // Reload the grid only while a scan is active (or just finished) — never on idle polls.
         if (still && (polls === 1 || polls % 4 === 0)) {
           onImagesRef.current();
           onLibraryRef.current();
@@ -830,10 +913,13 @@ function ScanPanel({
       } catch (err: unknown) {
         if (!stopped) setError(err instanceof Error ? err.message : "Could not refresh scan status.");
       }
-      if (!stopped) timer = window.setTimeout(() => void poll(), 1500);
+      if (!stopped) {
+        // Fast while scanning; slow status-only poll when idle (no image refetch above).
+        timer = window.setTimeout(() => void poll(), still || watchActive ? 1500 : 12000);
+      }
     }
 
-    timer = window.setTimeout(() => void poll(), active ? 1500 : 4000);
+    timer = window.setTimeout(() => void poll(), active ? 1500 : 12000);
     return () => {
       stopped = true;
       window.clearTimeout(timer);

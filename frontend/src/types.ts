@@ -169,6 +169,7 @@ export type CommentDraftItem = {
 };
 
 export type AppConfig = {
+  version?: string;
   gemini_policy: string;
   gemini_configured: boolean;
   auto_publish: boolean;

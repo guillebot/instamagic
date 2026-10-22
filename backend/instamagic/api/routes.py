@@ -160,8 +160,8 @@ def _load_image(session: Session, image_id: UUID) -> Image:
 
 
 @router.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health(settings: Settings = Depends(settings_dep)) -> dict[str, str]:
+    return {"status": "ok", "version": settings.app_version}
 
 
 @router.get("/ready")
@@ -213,6 +213,7 @@ def auth_session(_auth: None = Depends(require_session)) -> dict[str, bool]:
 def config(request: Request, _auth: None = Depends(require_session), settings: Settings = Depends(settings_dep)) -> dict[str, object]:
     classifier = request.app.state.classifier
     return {
+        "version": settings.app_version,
         "gemini_policy": settings.gemini_image_policy,
         "gemini_configured": settings.gemini_provider == "fake" or bool(settings.gemini_api_key),
         "auto_publish": settings.auto_publish,

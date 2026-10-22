@@ -33,6 +33,8 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: instamagic-migrate
     env_file: .env
     environment:
@@ -49,6 +51,8 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: instamagic-backend
     env_file: .env
     environment:
@@ -66,6 +70,7 @@ services:
       GEMINI_PROVIDER: ${GEMINI_PROVIDER:-google}
       PIPELINE_MODE: ${PIPELINE_MODE:-queue}
       AUTO_PUBLISH: "false"
+      APP_VERSION: ${APP_VERSION:-dev}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -87,6 +92,8 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: instamagic-worker-io
     env_file: .env
     environment:
@@ -118,6 +125,8 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: instamagic-worker-ml
     env_file: .env
     environment:
@@ -149,6 +158,8 @@ services:
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: instamagic-frontend
     ports:
       - "127.0.0.1:5173:80"
