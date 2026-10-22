@@ -5,6 +5,7 @@ description = "Local review and publishing assistant for an existing Instagram p
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14",
+  "cryptography>=43",
   "fastapi>=0.115",
   "httpx>=0.28",
   "numpy>=2.1",

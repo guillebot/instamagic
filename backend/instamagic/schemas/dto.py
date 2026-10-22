@@ -81,6 +81,30 @@ class RelatedAccountIn(BaseModel):
         return text[:64]
 
 
+class InstagramCredentialsIn(BaseModel):
+    """Paste a long-lived Page access token + IG business user id (never logged)."""
+
+    access_token: str = Field(min_length=20, max_length=4096)
+    business_account_id: str = Field(min_length=1, max_length=64)
+
+    @field_validator("access_token")
+    @classmethod
+    def clean_token(cls, value: str) -> str:
+        text = value.strip()
+        if not text or any(ch in text for ch in "\x00\n\r"):
+            raise ValueError("Access token is not valid.")
+        return text
+
+    @field_validator("business_account_id")
+    @classmethod
+    def clean_account_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text or any(ch in text for ch in "/\\\x00\n\r\t "):
+            raise ValueError("Instagram business account id is not valid.")
+        return text
+
+
+
 class CommentDraftIn(BaseModel):
     image_id: UUID | None = None
     related_account_id: UUID | None = None
@@ -98,15 +122,17 @@ class HashtagIn(BaseModel):
 
 
 class CurationIn(BaseModel):
+    """limit null/0 = all eligible Safe/Publishable frames (chunked Gemini calls)."""
+
     library_id: UUID | None = None
     folder: str | None = Field(default=None, max_length=1024)
     image_ids: list[UUID] | None = None
-    limit: int = Field(default=12, ge=1, le=24)
+    limit: int | None = Field(default=12, ge=0, le=2000)
     confirmed: bool = False
 
 
 class CurationReorderIn(BaseModel):
-    pick_ids: list[UUID] = Field(min_length=1, max_length=50)
+    pick_ids: list[UUID] = Field(min_length=1, max_length=500)
 
 
 class CurationPickUpdate(BaseModel):
@@ -117,7 +143,7 @@ class CurationPickUpdate(BaseModel):
 
 
 class CurationQueueIn(BaseModel):
-    pick_ids: list[UUID] = Field(min_length=1, max_length=50)
+    pick_ids: list[UUID] = Field(min_length=1, max_length=500)
 
 
 class CropOut(BaseModel):
@@ -179,6 +205,10 @@ class BlurCreateIn(BaseModel):
 
 class BlurStrengthIn(BaseModel):
     strength: str
+
+
+class BlurSuggestIn(BaseModel):
+    strength: str = "standard"
 
 
 class ImageOut(BaseModel):

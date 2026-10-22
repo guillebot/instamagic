@@ -4,15 +4,12 @@ from instamagic.config import Settings
 from instamagic.services.gemini.captions import FakeGeminiProvider, GeminiProvider
 from instamagic.services.gemini.google import GoogleGeminiProvider
 from instamagic.services.gemini.growth import FakeGrowthDraftProvider, GrowthDraftProvider
-from instamagic.services.instagram.client import (
-    FakeInstagramClient,
-    GraphInstagramClient,
-    InstagramClient,
-    NotConfiguredInstagramClient,
-)
+from instamagic.services.instagram.client import InstagramClient
+from instamagic.services.instagram.store import build_instagram_client
 from instamagic.services.safety.classifier import OnnxYoloSafetyClassifier
 from instamagic.services.safety.faces import YuNetFaceDetector
 from instamagic.services.safety.fake import FakeFaceDetector, FakeSafetyClassifier
+from sqlalchemy.orm import Session
 
 
 def build_classifier(settings: Settings) -> FakeSafetyClassifier | OnnxYoloSafetyClassifier:
@@ -40,13 +37,6 @@ def build_growth(settings: Settings) -> GrowthDraftProvider:
     return GoogleGeminiProvider(settings.gemini_api_key, settings.gemini_model)
 
 
-def build_instagram(settings: Settings) -> InstagramClient:
-    if settings.instagram_provider == "fake":
-        return FakeInstagramClient()
-    if settings.instagram_configured():
-        return GraphInstagramClient(
-            access_token=settings.instagram_access_token,
-            business_account_id=settings.instagram_business_account_id,
-            graph_version=settings.instagram_graph_version,
-        )
-    return NotConfiguredInstagramClient()
+def build_instagram(settings: Settings, session: Session | None = None) -> InstagramClient:
+    """Env tokens win when both env and DB are set; otherwise use sealed DB credentials."""
+    return build_instagram_client(settings, session)

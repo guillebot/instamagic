@@ -7,7 +7,8 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+
 from instamagic.api.deps import db_dep, require_session, settings_dep
 from instamagic.auth import (
     COOKIE_NAME,
@@ -51,6 +52,7 @@ from instamagic.schemas.dto import (
     BlurCreateIn,
     BlurOut,
     BlurStrengthIn,
+    BlurSuggestIn,
     CandidateOut,
     CaptionIn,
     CaptionUpdate,
@@ -66,6 +68,7 @@ from instamagic.schemas.dto import (
     HashtagIn,
     ImageOut,
     ImagePage,
+    InstagramCredentialsIn,
     JobOut,
     LibraryIn,
     LoginIn,
@@ -105,9 +108,22 @@ from instamagic.services.images.presentation import (
     effective_state_filter_clause,
     normalize_human_rating_filter,
 )
+from instamagic.services.factory import build_instagram
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
-from instamagic.services.instagram.client import mask_access_token
+from instamagic.services.instagram.oauth import (
+    build_authorize_url,
+    exchange_code_for_credentials,
+    oauth_available,
+    oauth_redirect_uri,
+    verify_oauth_state,
+)
 from instamagic.services.instagram.publish import publish_queue_item
+from instamagic.services.instagram.store import (
+    clear_credentials,
+    connection_status_fields,
+    save_account_profile,
+    save_credentials,
+)
 from instamagic.services.pipeline import (
     clear_exposed_boxes,
     duplicate_count,
@@ -115,6 +131,7 @@ from instamagic.services.pipeline import (
     rate_image,
     recompute_model_states,
     render_blur_derivative,
+    replace_suggested_blurs,
     run_scan,
 )
 from instamagic.services.queues import snapshot_queues
@@ -238,12 +255,13 @@ def auth_session(_auth: None = Depends(require_session)) -> dict[str, bool]:
 @router.get("/api/config")
 def config(request: Request, _auth: None = Depends(require_session), settings: Settings = Depends(settings_dep)) -> dict[str, object]:
     classifier = request.app.state.classifier
+    ig = getattr(request.app.state, "instagram", None)
     return {
         "version": settings.app_version,
         "gemini_policy": settings.gemini_image_policy,
         "gemini_configured": settings.gemini_provider == "fake" or bool(settings.gemini_api_key),
         "auto_publish": settings.auto_publish,
-        "instagram_configured": settings.instagram_configured(),
+        "instagram_configured": bool(ig.configured()) if ig is not None else settings.instagram_configured(),
         "instagram_provider": settings.instagram_provider,
         "account_voice": settings.account_voice,
         "detector_available": bool(classifier.available()),
@@ -667,6 +685,8 @@ def create_blur(
     settings: Settings = Depends(settings_dep),
 ) -> BlurOut:
     image = _load_image(session, image_id)
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        raise NotAllowed("DO_NOT_POST — blur cannot override.")
     if image.width is None or image.height is None:
         raise NotAllowed("Image dimensions are unknown.")
     try:
@@ -703,6 +723,40 @@ def create_blur(
     return _blur_out(image, row)
 
 
+@router.post("/api/images/{image_id}/blurs/suggest", response_model=list[BlurOut])
+def suggest_blur_covers(
+    image_id: UUID,
+    body: BlurSuggestIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> list[BlurOut]:
+    """Opt-in: build ellipse covers from stored local-model unsafe boxes (not auto on scan)."""
+    image = _load_image(session, image_id)
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        raise NotAllowed("DO_NOT_POST — blur cannot override.")
+    if image.width is None or image.height is None:
+        raise NotAllowed("Image dimensions are unknown.")
+    library = session.get(Library, image.library_id)
+    if library is None:
+        raise NotFound("Library not found.")
+    try:
+        rgb = oriented_rgb(read_image(safe_join(Path(library.root_path), image.relative_path)))
+        rows = replace_suggested_blurs(
+            session,
+            image=image,
+            rgb=rgb,
+            derivatives_root=Path(settings.derivatives_root),
+            strength=body.strength,
+        )
+    except ValueError as exc:
+        raise NotAllowed(str(exc)) from exc
+    for crop in image.crops:
+        crop.approved = False
+    session.commit()
+    return [_blur_out(image, row) for row in rows]
+
+
 @router.post("/api/images/{image_id}/blurs/strength", response_model=list[BlurOut])
 def set_blur_strength(
     image_id: UUID,
@@ -732,6 +786,8 @@ def approve_blurs(
     session: Session = db_dep,
 ) -> list[BlurOut]:
     image = _load_image(session, image_id)
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        raise NotAllowed("DO_NOT_POST — blur cannot override.")
     if not image.blurs:
         raise NotAllowed("No blur covers are available.")
     unsafe = clear_exposed_boxes(session, image.id)
@@ -1234,24 +1290,8 @@ def send_curation_to_queue(
     return [_queue_out(session, item) for item in items]
 
 
-def _instagram_connection_status(settings: Settings, *, configured: bool) -> dict[str, object]:
-    token = settings.instagram_access_token
-    account_id = settings.instagram_business_account_id.strip()
-    return {
-        "configured": configured,
-        "provider": settings.instagram_provider,
-        "auto_publish": settings.auto_publish,
-        "public_base_url": settings.resolve_public_base_url(),
-        "graph_version": settings.instagram_graph_version,
-        "token_configured": bool(token.strip()) or settings.instagram_provider == "fake",
-        "token_masked": (
-            "fake-provider"
-            if settings.instagram_provider == "fake"
-            else mask_access_token(token)
-        ),
-        "business_account_id": account_id or None,
-        "business_account_id_configured": bool(account_id) or settings.instagram_provider == "fake",
-    }
+def _reload_instagram_client(request: Request, settings: Settings, session: Session) -> None:
+    request.app.state.instagram = build_instagram(settings, session)
 
 
 @router.get("/api/instagram/status")
@@ -1259,21 +1299,42 @@ def instagram_status(
     request: Request,
     _auth: None = Depends(require_session),
     settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
 ) -> dict[str, object]:
-    """Credential presence only — no Graph call. Never returns the raw access token."""
+    """Credential presence + cached profile — no Graph call. Never returns the raw access token."""
+    _reload_instagram_client(request, settings, session)
     client = request.app.state.instagram
-    return _instagram_connection_status(settings, configured=bool(client.configured()))
+    return connection_status_fields(settings, session, configured=bool(client.configured()))
 
 
-@router.post("/api/instagram/account")
-def instagram_account_refresh(
+@router.post("/api/instagram/credentials")
+def instagram_save_credentials(
+    body: InstagramCredentialsIn,
     request: Request,
     _auth: None = Depends(require_session),
     settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
 ) -> dict[str, object]:
-    """Test connection and fetch IG user fields via Graph (or fake provider). Does not publish."""
+    """Seal long-lived token + IG business user id in the DB, then fetch and cache account JSON."""
+    if settings.instagram_provider == "fake":
+        raise NotAllowed("Cannot save Graph credentials while INSTAGRAM_PROVIDER=fake.")
+    if settings.instagram_access_token.strip() and settings.instagram_business_account_id.strip():
+        raise NotAllowed(
+            "Host .env already sets INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_BUSINESS_ACCOUNT_ID. "
+            "Clear those env vars (and restart) to manage credentials from this page, or keep using env."
+        )
+    try:
+        save_credentials(
+            session,
+            settings,
+            access_token=body.access_token,
+            business_account_id=body.business_account_id,
+        )
+    except ValueError as exc:
+        raise NotAllowed(str(exc)) from exc
+    _reload_instagram_client(request, settings, session)
     client = request.app.state.instagram
-    status = _instagram_connection_status(settings, configured=bool(client.configured()))
+    status = connection_status_fields(settings, session, configured=bool(client.configured()))
     try:
         details = client.fetch_account_details()
     except NotConfigured as exc:
@@ -1281,14 +1342,135 @@ def instagram_account_refresh(
             **status,
             "ok": False,
             "error": exc.detail,
-            "account": None,
+            "account": status.get("account"),
         }
+    save_account_profile(session, details)
+    status = connection_status_fields(settings, session, configured=True)
     return {
         **status,
         "ok": True,
         "error": None,
         "account": details.as_dict(),
     }
+
+
+@router.delete("/api/instagram/credentials")
+def instagram_clear_credentials(
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Remove sealed DB credentials and cached profile. Env credentials are unchanged."""
+    if settings.instagram_provider == "fake":
+        raise NotAllowed("Fake provider has no database credentials to clear.")
+    clear_credentials(session)
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    status = connection_status_fields(settings, session, configured=bool(client.configured()))
+    return {**status, "ok": True, "error": None, "account": status.get("account")}
+
+
+@router.post("/api/instagram/account")
+def instagram_account_refresh(
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Test connection, fetch IG user fields, and persist the profile JSON. Does not publish."""
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    status = connection_status_fields(settings, session, configured=bool(client.configured()))
+    if not client.configured():
+        return {
+            **status,
+            "ok": False,
+            "error": (
+                "Instagram is not configured. Paste a long-lived Page access token and IG business "
+                "account id below, use Meta OAuth if available, or set INSTAGRAM_* in the host .env."
+            ),
+            "account": status.get("account"),
+        }
+    try:
+        details = client.fetch_account_details()
+    except NotConfigured as exc:
+        return {
+            **status,
+            "ok": False,
+            "error": exc.detail,
+            "account": status.get("account"),
+        }
+    save_account_profile(session, details)
+    status = connection_status_fields(settings, session, configured=True)
+    return {
+        **status,
+        "ok": True,
+        "error": None,
+        "account": details.as_dict(),
+    }
+
+
+@router.get("/api/instagram/oauth/start")
+def instagram_oauth_start(
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Return the Meta authorize URL when META_APP_ID / META_APP_SECRET are set."""
+    if not oauth_available(settings):
+        raise NotConfigured(
+            "Meta OAuth is not configured. Set META_APP_ID and META_APP_SECRET on the host, "
+            "or paste a long-lived token below."
+        )
+    url, _state = build_authorize_url(settings)
+    return {"authorize_url": url, "redirect_uri": oauth_redirect_uri(settings)}
+
+
+@router.get("/api/instagram/oauth/callback")
+def instagram_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> RedirectResponse:
+    """Meta redirects here (no session cookie required). Saves sealed credentials then sends UI home."""
+    frontend = settings.frontend_origin.rstrip("/")
+    dest_ok = f"{frontend}/instagram?oauth=ok"
+    dest_err = f"{frontend}/instagram?oauth=error"
+
+    def _fail(message: str) -> RedirectResponse:
+        # Keep message short and token-free for the query string.
+        safe = "".join(ch for ch in message if ch.isprintable())[:180]
+        from urllib.parse import quote
+
+        return RedirectResponse(url=f"{dest_err}&detail={quote(safe)}", status_code=302)
+
+    if error:
+        return _fail(error_description or error)
+    if not code or not state:
+        return _fail("Missing OAuth code or state.")
+    try:
+        verify_oauth_state(state, settings)
+        tokens = exchange_code_for_credentials(settings, code=code)
+        save_credentials(
+            session,
+            settings,
+            access_token=tokens.access_token,
+            business_account_id=tokens.business_account_id,
+        )
+        _reload_instagram_client(request, settings, session)
+        client = request.app.state.instagram
+        details = client.fetch_account_details()
+        save_account_profile(session, details)
+    except (NotConfigured, NotAllowed, ValueError) as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return _fail(detail)
+    except Exception:
+        return _fail("OAuth failed unexpectedly. Check Meta app settings and try again.")
+    return RedirectResponse(url=dest_ok, status_code=302)
 
 
 @router.get("/api/public/publish-assets/{token}")

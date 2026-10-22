@@ -40,11 +40,12 @@ async def lifespan(app: FastAPI):
     app.state.face_detector = build_face_detector(settings)
     app.state.gemini = build_gemini(settings)
     app.state.growth = build_growth(settings)
-    app.state.instagram = build_instagram(settings)
     app.state.login_failures = {}
     session = session_factory()()
     try:
         seed_tags(session)
+        app.state.instagram = build_instagram(settings, session)
+        ig_configured = bool(app.state.instagram.configured())
     finally:
         session.close()
     get_logger("api").info(
@@ -53,7 +54,7 @@ async def lifespan(app: FastAPI):
         policy=settings.gemini_image_policy,
         detector_available=bool(classifier.available()),
         cookie_secure=settings.session_cookie_secure(),
-        instagram_configured=settings.instagram_configured(),
+        instagram_configured=ig_configured,
         auto_publish=settings.auto_publish,
     )
     yield

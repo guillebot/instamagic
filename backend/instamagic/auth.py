@@ -42,6 +42,31 @@ def session_is_valid(settings: Settings, token: str | None) -> bool:
     return expires >= int(time.time())
 
 
+def sign_payload(payload: str, settings: Settings, *, ttl_seconds: int = 600) -> str:
+    """HMAC-sign an opaque payload with an absolute expiry (OAuth state, etc.)."""
+    expires = str(int(time.time()) + max(60, ttl_seconds))
+    body = f"{expires}.{payload}"
+    signature = hmac.new(settings.app_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{signature}"
+
+
+def verify_signed_payload(token: str | None, settings: Settings) -> str | None:
+    if not token or token.count(".") < 2:
+        return None
+    expires_s, payload, signature = token.split(".", 2)
+    body = f"{expires_s}.{payload}"
+    expected = hmac.new(settings.app_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        return None
+    try:
+        expires = int(expires_s)
+    except ValueError:
+        return None
+    if expires < int(time.time()):
+        return None
+    return payload
+
+
 def _is_private_or_loopback(host: str) -> bool:
     try:
         address = ipaddress.ip_address(host)

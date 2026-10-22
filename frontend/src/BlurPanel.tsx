@@ -121,6 +121,28 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     }
   }
 
+  async function suggestFromModel() {
+    if (isDoNotPost) {
+      setError("DO_NOT_POST — blur cannot override. Rate reject or leave blocked.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/api/images/${image.id}/blurs/suggest`, {
+        method: "POST",
+        body: JSON.stringify({ strength }),
+      });
+      await blurs.refetch();
+      onChanged?.(image.id);
+      onStatus?.("Suggested covers from local model — review and approve.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not suggest blur covers.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!captureKeys) return;
     function onKey(event: KeyboardEvent) {
@@ -254,7 +276,8 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           <p className="error">DO_NOT_POST — blur cannot override. Rate reject or leave blocked.</p>
         ) : (
           <p className="help">
-            Drag on the image to add a blur ellipse. Covers write to derivatives only. Enter/A approves the set.
+            Drag to add a cover, or suggest ellipses from the local safety boxes. Derivatives only.
+            Enter/A approves the set.
           </p>
         )}
         <div className="row">
@@ -262,14 +285,29 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             Strength{" "}
             <select
               value={strength}
-              disabled={busy || items.length === 0}
-              onChange={(event) => void applyStrength(event.target.value)}
+              disabled={busy || isDoNotPost}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (items.length === 0) {
+                  setStrength(next);
+                  return;
+                }
+                void applyStrength(next);
+              }}
             >
               <option value="subtle">Subtle</option>
               <option value="standard">Standard</option>
               <option value="strong">Strong</option>
             </select>
           </label>
+          <button
+            type="button"
+            className="button"
+            disabled={busy || isDoNotPost}
+            onClick={() => void suggestFromModel()}
+          >
+            Suggest from model
+          </button>
           <button
             type="button"
             className="button"
@@ -294,7 +332,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           <p className="help">
             {blurs.isLoading
               ? "Loading…"
-              : "No covers yet — drag a region, or scan an image with a detected unsafe area."}
+              : "No covers yet — drag a region, or Suggest from model when boxes exist."}
           </p>
         )}
       </div>

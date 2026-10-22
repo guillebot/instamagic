@@ -58,26 +58,8 @@ def suggest_blurs(
         raise ValueError("Strength must be subtle, standard, or strong.")
     covers: list[BlurWindow] = []
     for box in unsafe_boxes:
-        expanded = _expanded_cover(box, image_width, image_height)
-        feather = _feather_for(expanded.width, expanded.height)
-        radius = sigma_for(expanded.width, expanded.height, strength)
-        covers.append(
-            BlurWindow(
-                x=expanded.x,
-                y=expanded.y,
-                width=expanded.width,
-                height=expanded.height,
-                shape="ellipse",
-                feather=feather,
-                radius=radius,
-                reason=(
-                    "Suggested ellipse over a detected unsafe region. "
-                    "The feathered core must fully cover that region before approval."
-                ),
-                covers_unsafe=True,
-                strength=strength,
-            )
-        )
+        cover = _cover_for_unsafe(box, image_width, image_height, strength=strength)
+        covers.append(cover)
     return covers
 
 
@@ -227,11 +209,60 @@ def _feather_for(width: int, height: int) -> int:
     return max(8, min(raw, max(8, shorter // 2)))
 
 
-def _expanded_cover(box: Box, image_width: int, image_height: int) -> Box:
-    # Expand enough that a ~20% feather still leaves the unsafe box inside the opaque core.
-    shorter = max(1, min(box.width, box.height))
-    pad = max(16, int(round(0.35 * shorter)))
-    return _clamp_box(box.expanded(pad), image_width, image_height)
+def _cover_for_unsafe(
+    box: Box,
+    image_width: int,
+    image_height: int,
+    *,
+    strength: str,
+) -> BlurWindow:
+    """Build an ellipse whose opaque core contains ``box`` (AABB corners).
+
+    Same half-axes as the rectangle are not enough ((a/a)^2+(b/b)^2=2).
+    Keep the ellipse centered on the unsafe box — do not clamp the bounding
+    box to the image, or edge regions shift the center and fail containment.
+    The mask renderer already clips to the bitmap.
+    """
+    del image_width, image_height  # geometry is box-centered; mask clips at draw time
+    reason = (
+        "Suggested ellipse over a detected unsafe region. "
+        "The feathered core must fully cover that region before approval."
+    )
+    cx = box.x + box.width / 2
+    cy = box.y + box.height / 2
+    # √2 core + slack for integer pixel snapping of the bounding box.
+    slack = 3.0
+    core_rx = (box.width / 2) * math.sqrt(2) + slack
+    core_ry = (box.height / 2) * math.sqrt(2) + slack
+    candidate = None
+    for _ in range(8):
+        feather = _feather_for(int(math.ceil(2 * core_rx)), int(math.ceil(2 * core_ry)))
+        # Grow outer so core radii after feather stay ≥ target.
+        outer_w = max(2, int(math.ceil(2 * (core_rx + feather))))
+        outer_h = max(2, int(math.ceil(2 * (core_ry + feather))))
+        feather = _feather_for(outer_w, outer_h)
+        outer_w = max(2, int(math.ceil(2 * (core_rx + feather))))
+        outer_h = max(2, int(math.ceil(2 * (core_ry + feather))))
+        x = int(round(cx - outer_w / 2))
+        y = int(round(cy - outer_h / 2))
+        candidate = BlurWindow(
+            x=x,
+            y=y,
+            width=outer_w,
+            height=outer_h,
+            shape="ellipse",
+            feather=feather,
+            radius=sigma_for(outer_w, outer_h, strength),
+            reason=reason,
+            covers_unsafe=True,
+            strength=strength,
+        )
+        if _core_contains(candidate, box):
+            return candidate
+        core_rx += 4.0
+        core_ry += 4.0
+    assert candidate is not None
+    return candidate
 
 
 def _clamp_box(box: Box, image_width: int, image_height: int) -> Box:

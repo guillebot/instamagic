@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     instagram_access_token: str = ""
     instagram_business_account_id: str = ""
     instagram_graph_version: str = "v21.0"
+    # Optional Meta OAuth (Facebook Login → Page token + IG business account).
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    # Defaults to {PUBLIC_BASE_URL|FRONTEND_ORIGIN}/api/instagram/oauth/callback
+    meta_oauth_redirect_uri: str = ""
+
     account_voice: str = (
         "Quiet, craft-first photography captions. Mood, light, and composition. No engagement bait."
     )

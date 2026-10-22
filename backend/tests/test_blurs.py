@@ -54,6 +54,14 @@ def test_cover_check_passes_when_core_contains_unsafe_box() -> None:
     assert covers_unsafe_boxes(covering, [unsafe])
 
 
+def test_suggested_cover_contains_wide_unsafe_box() -> None:
+    # Fake classifier shape: wide band near the bottom — ellipse must clear corners.
+    unsafe = Box(60, 432, 240, 132)
+    covering = suggest_blurs(400, 600, [unsafe], strength="standard")
+    assert covering
+    assert covers_unsafe_boxes(covering, [unsafe])
+
+
 def test_cover_check_fails_when_blur_misses_region() -> None:
     unsafe = Box(40, 40, 30, 30)
     miss = BlurWindow(
@@ -76,3 +84,47 @@ def test_suggested_sigma_is_strong_not_beauty_soft() -> None:
     assert covers[0].radius >= 14
     strong = suggest_blurs(400, 400, [unsafe], strength="strong")
     assert strong[0].radius > covers[0].radius
+
+
+STATEMENT = "I confirm that every person depicted in this library is a consenting adult."
+
+
+def test_suggest_blur_from_stored_regions_is_opt_in(client, app_env) -> None:
+    """Scan stores boxes but does not auto-create covers; suggest builds them on demand."""
+    from tests.conftest import login, write_jpeg
+
+    library = app_env["library"]
+    write_jpeg(library / "unsafe-frame.jpg", color=(90, 40, 40))
+    write_jpeg(library / "blocked-frame.jpg", color=(80, 20, 20))
+    write_jpeg(library / "clean-frame.jpg", color=(30, 30, 30))
+    login(client)
+    library_id = client.post(
+        "/api/libraries",
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+    ).json()["id"]
+    assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
+    items = {row["filename"]: row for row in client.get("/api/images", params={"library_id": library_id}).json()["items"]}
+
+    unsafe_id = items["unsafe-frame.jpg"]["id"]
+    assert items["unsafe-frame.jpg"]["model_state"] == "SAFE_AFTER_CROP"
+    assert client.get(f"/api/images/{unsafe_id}/blurs").json() == []
+
+    suggested = client.post(f"/api/images/{unsafe_id}/blurs/suggest", json={"strength": "standard"})
+    assert suggested.status_code == 200, suggested.text
+    covers = suggested.json()
+    assert len(covers) >= 1
+    assert all(row["covers_unsafe"] for row in covers)
+    assert all(not row["approved"] for row in covers)
+
+    approved = client.post(f"/api/images/{unsafe_id}/blurs/approve")
+    assert approved.status_code == 200, approved.text
+    assert all(row["approved"] for row in approved.json())
+
+    blocked_id = items["blocked-frame.jpg"]["id"]
+    assert items["blocked-frame.jpg"]["model_state"] == "DO_NOT_POST"
+    refuse = client.post(f"/api/images/{blocked_id}/blurs/suggest", json={"strength": "standard"})
+    assert refuse.status_code == 409
+
+    clean_id = items["clean-frame.jpg"]["id"]
+    empty = client.post(f"/api/images/{clean_id}/blurs/suggest", json={"strength": "standard"})
+    assert empty.status_code == 409

@@ -568,7 +568,6 @@ def _ingest_one(
     )
     session.add(assessment)
     session.flush()
-    unsafe_boxes = []
     for region in analysis.signals.regions:
         unsafe = region.label in EXPOSED_LABELS and region.score >= CLEAR_SCORE
         session.add(
@@ -583,8 +582,6 @@ def _ingest_one(
                 unsafe=unsafe,
             )
         )
-        if unsafe:
-            unsafe_boxes.append(region.box)
     for crop in analysis.crops:
         derivative = None
         if crop.aspect_ratio != "original":
@@ -606,14 +603,8 @@ def _ingest_one(
                 derivative_path=derivative,
             )
         )
-    blur_windows = suggest_blurs(rgb.size[0], rgb.size[1], unsafe_boxes, strength="standard")
-    blur_derivative = None
-    if blur_windows:
-        blur_derivative = f"{image.id}/blurs/cover.jpg"
-        rendered_blur = apply_blur_covers(rgb, blur_windows)
-        save_derivative(rendered_blur, derivatives_root / blur_derivative, 1600, quality=84)
-    for window in blur_windows:
-        session.add(_blur_row(image.id, window, blur_derivative))
+    # Blur covers are opt-in via POST /blurs/suggest (reuse stored unsafe boxes).
+    # Scan still records SafetyRegion boxes; it does not auto-apply covers.
     stage("scoring")
     score = image.score or ImageScore(image_id=image.id, uniqueness=1)
     for key, value in analysis.scores.items():
@@ -717,6 +708,36 @@ def clear_exposed_boxes(session: Session, image_id: UUID) -> list[Box]:
         for region in assessment.regions
         if region.unsafe and region.score >= CLEAR_SCORE and region.label in EXPOSED_LABELS
     ]
+
+
+def replace_suggested_blurs(
+    session: Session,
+    *,
+    image: Image,
+    rgb: PilImage.Image,
+    derivatives_root: Path,
+    strength: str = "standard",
+) -> list[BlurCover]:
+    """Rebuild unapproved blur covers from stored clear-exposed regions (operator opt-in)."""
+    if image.width is None or image.height is None:
+        raise ValueError("Image dimensions are unknown.")
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        raise ValueError("DO_NOT_POST cannot receive blur suggestions.")
+    unsafe = clear_exposed_boxes(session, image.id)
+    if not unsafe:
+        raise ValueError("No clear exposed regions to cover.")
+    windows = suggest_blurs(image.width, image.height, unsafe, strength=strength)
+    session.execute(delete(BlurCover).where(BlurCover.image_id == image.id))
+    session.flush()
+    derivative = None
+    if windows:
+        derivative = f"{image.id}/blurs/cover.jpg"
+        save_derivative(apply_blur_covers(rgb, windows), derivatives_root / derivative, 1600, quality=84)
+    rows = [_blur_row(image.id, window, derivative) for window in windows]
+    for row in rows:
+        session.add(row)
+    session.flush()
+    return rows
 
 
 def render_blur_derivative(

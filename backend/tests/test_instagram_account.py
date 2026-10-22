@@ -44,9 +44,11 @@ def test_instagram_status_masks_and_lists_ids(client) -> None:
     status = client.get("/api/instagram/status").json()
     assert status["configured"] is True
     assert status["provider"] == "fake"
+    assert status["credential_source"] == "fake"
     assert status["token_configured"] is True
     assert status["token_masked"] == "fake-provider"
     assert status["auto_publish"] is False
+    assert status["can_edit_database_credentials"] is False
     assert "access_token" not in status
     raw = str(status)
     assert "EAAB" not in raw
@@ -67,8 +69,12 @@ def test_instagram_account_refresh_with_fake_provider(client) -> None:
     assert "access_token" not in body
     blob = str(body)
     assert "EAAB" not in blob
+    # Cached profile should round-trip on status.
+    status = client.get("/api/instagram/status").json()
+    assert status["account"]["username"] == "instamagic_fixture"
 
 
 def test_instagram_account_requires_auth(client) -> None:
     assert client.get("/api/instagram/status").status_code == 401
     assert client.post("/api/instagram/account").status_code == 401
+    assert client.post("/api/instagram/credentials", json={}).status_code == 401

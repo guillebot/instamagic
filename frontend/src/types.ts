@@ -222,18 +222,6 @@ export type AppConfig = {
   safety_classifier: string;
 };
 
-export type InstagramConnectionStatus = {
-  configured: boolean;
-  provider: string;
-  auto_publish: boolean;
-  public_base_url?: string;
-  graph_version?: string;
-  token_configured: boolean;
-  token_masked: string | null;
-  business_account_id: string | null;
-  business_account_id_configured: boolean;
-};
-
 export type InstagramAccountDetails = {
   id: string;
   username: string | null;
@@ -246,6 +234,24 @@ export type InstagramAccountDetails = {
   biography: string | null;
   website: string | null;
   linked_facebook_page_id: string | null;
+};
+
+export type InstagramConnectionStatus = {
+  configured: boolean;
+  provider: string;
+  credential_source?: string;
+  auto_publish: boolean;
+  public_base_url?: string;
+  graph_version?: string;
+  token_configured: boolean;
+  token_masked: string | null;
+  business_account_id: string | null;
+  business_account_id_configured: boolean;
+  oauth_available?: boolean;
+  account?: InstagramAccountDetails | null;
+  account_fetched_at?: string | null;
+  can_edit_database_credentials?: boolean;
+  env_overrides_database?: boolean;
 };
 
 export type InstagramRefreshResult = InstagramConnectionStatus & {
