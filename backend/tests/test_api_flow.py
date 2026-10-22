@@ -108,17 +108,7 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
     assert all(row["approved"] for row in blur_approved.json())
     after_blur = client.get(f"/api/images/{clean_id}").json()
     assert after_blur["has_approved_crop"] is False
-    # Re-approve crop for the queue path below.
-    re_approve = client.post(
-        f"/api/images/{clean_id}/crops/{review_crop['id']}/approve",
-        json={
-            "x": review_crop["x"],
-            "y": review_crop["y"],
-            "width": review_crop["width"],
-            "height": review_crop["height"],
-        },
-    )
-    assert re_approve.status_code == 200
+    assert after_blur["has_approved_blur"] is True
 
     rated = client.post(f"/api/images/{clean_id}/rating", json={"rating": "excellent"})
     assert rated.status_code == 200

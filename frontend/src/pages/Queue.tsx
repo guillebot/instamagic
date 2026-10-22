@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { lifecycleLabel } from "../lifecycle";
+import { publishConfirmPreviewUrl } from "../publishPresentation";
 import {
   captionFirstLine,
   readPublishedSectionExpanded,
@@ -309,17 +310,31 @@ function QueueCard({
             </>
           ) : null}
           {canPublish ? (
-            <button
-              className="button"
-              disabled={publish.isPending}
-              onClick={() => {
-                if (!selectedCaptionId) return;
-                if (!window.confirm("Publish this frame to Instagram now?")) return;
-                publish.mutate(selectedCaptionId);
-              }}
-            >
-              {publish.isPending ? "Publishing…" : "Publish to Instagram"}
-            </button>
+            <>
+              {publishConfirmPreviewUrl(item.image) ? (
+                <figure className="publish-confirm-preview">
+                  <img src={publishConfirmPreviewUrl(item.image) ?? ""} alt="Upload preview" />
+                  <figcaption className="muted">Exact file uploaded on publish</figcaption>
+                </figure>
+              ) : null}
+              <button
+                className="button"
+                disabled={publish.isPending}
+                onClick={() => {
+                  if (!selectedCaptionId) return;
+                  const previewUrl = publishConfirmPreviewUrl(item.image);
+                  const ok = window.confirm(
+                    previewUrl
+                      ? "Publish this exact preview to Instagram now?"
+                      : "Publish this frame to Instagram now?",
+                  );
+                  if (!ok) return;
+                  publish.mutate(selectedCaptionId);
+                }}
+              >
+                {publish.isPending ? "Publishing…" : "Publish to Instagram"}
+              </button>
+            </>
           ) : null}
           {item.state === "APPROVED" && selectedCaptionId ? (
             <button

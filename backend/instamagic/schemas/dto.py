@@ -321,8 +321,13 @@ class ImageOut(BaseModel):
     duplicate_count: int
     has_approved_crop: bool = False
     has_approved_covering_blur: bool = False
+    has_approved_blur: bool = False
+    publish_variant: str | None = None
+    publish_variant_label: str | None = None
     thumbnail_url: str | None
     preview_url: str | None
+    original_preview_url: str | None = None
+    publish_preview_url: str | None = None
     gemini_label_status: str | None = None
     gemini_label_at: datetime | None = None
     gemini_description: str | None = None

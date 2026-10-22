@@ -696,6 +696,15 @@ input, select, textarea {
   border-radius: 8px;
   background: #14181d;
 }
+.publish-confirm-preview {
+  margin: 8px 0;
+  max-width: 280px;
+}
+.publish-confirm-preview img {
+  width: 100%;
+  border-radius: 6px;
+  display: block;
+}
 .queue-published-thumb {
   width: 56px;
   height: 56px;

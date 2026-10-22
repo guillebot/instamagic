@@ -30,6 +30,39 @@ _SAFE_AFTER_REMEDIATE = frozenset(
     }
 )
 
+# Review filter: human-rated safe/excellent with at least one approved blur cover.
+BLURRED = "BLURRED"
+
+_PUBLISH_VARIANT_LABELS = {
+    "ORIGINAL": "SAFE",
+    "BLURRED": "SAFE · BLURRED",
+    "CROPPED": "SAFE · CROPPED",
+    "BLURRED_CROPPED": "SAFE · BLURRED + CROPPED",
+}
+
+
+def publish_variant(
+    human_rating: str | None,
+    *,
+    has_approved_crop: bool = False,
+    has_approved_blur: bool = False,
+) -> str | None:
+    if human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
+        return None
+    if has_approved_blur and has_approved_crop:
+        return "BLURRED_CROPPED"
+    if has_approved_blur:
+        return "BLURRED"
+    if has_approved_crop:
+        return "CROPPED"
+    return "ORIGINAL"
+
+
+def publish_variant_label(variant: str | None) -> str | None:
+    if variant is None:
+        return None
+    return _PUBLISH_VARIANT_LABELS.get(variant)
+
 
 def effective_state(
     human_rating: str | None,
@@ -116,6 +149,8 @@ def effective_state_filter_clause(image_model: Any, state: str) -> Any:
     remediated = or_(_has_approved_crop_exists(image_model), _has_approved_blur_exists(image_model))
     human_ok = human.in_([HumanRating.SAFE.value, HumanRating.EXCELLENT.value])
 
+    if state == BLURRED:
+        return and_(human_ok, _has_approved_blur_exists(image_model))
     if state == PUBLISHABLE:
         return and_(
             human_ok,

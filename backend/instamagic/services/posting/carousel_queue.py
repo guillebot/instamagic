@@ -7,6 +7,7 @@ from uuid import UUID
 from instamagic.errors import NotAllowed, NotFound
 from instamagic.models import Image, PublishingQueueItem, PublishingQueueSlide, QueueState
 from instamagic.models.enums import QueueMediaType
+from instamagic.services.instagram.publish_derivative import blur_drawn_not_approved_reason
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.gates import publishing_gate
 from sqlalchemy import select
@@ -24,8 +25,12 @@ def _gate_image(session: Session, image: Image) -> None:
         has_approved_crop=approved is not None,
         has_approved_covering_blur=covering_blur,
     )
-    if not gate.allowed:
-        raise NotAllowed(" ".join(gate.reasons))
+    blur_pending = blur_drawn_not_approved_reason(image)
+    if not gate.allowed or blur_pending:
+        reasons = list(gate.reasons)
+        if blur_pending:
+            reasons.append(blur_pending)
+        raise NotAllowed(" ".join(reasons))
 
 
 def create_carousel_queue_item(session: Session, image_ids: list[UUID]) -> PublishingQueueItem:

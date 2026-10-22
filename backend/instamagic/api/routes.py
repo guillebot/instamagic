@@ -108,10 +108,8 @@ from instamagic.services.health_status import build_health_status
 from instamagic.services.images.derivatives import (
     PREVIEW_FILENAME,
     THUMB_FILENAME,
-    crop_image,
     oriented_rgb,
     read_image,
-    save_derivative,
 )
 from instamagic.services.images.folders import escape_like, list_folders, normalize_folder
 from instamagic.services.images.paths import (
@@ -123,6 +121,8 @@ from instamagic.services.images.presentation import (
     effective_state,
     effective_state_filter_clause,
     normalize_human_rating_filter,
+    publish_variant,
+    publish_variant_label,
 )
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
 from instamagic.services.instagram.oauth import (
@@ -136,6 +136,10 @@ from instamagic.services.instagram.oauth import (
     verify_oauth_state,
 )
 from instamagic.services.instagram.publish import publish_queue_item
+from instamagic.services.instagram.publish_derivative import (
+    blur_drawn_not_approved_reason,
+    ensure_publish_derivative,
+)
 from instamagic.services.instagram.store import (
     clear_credentials,
     clear_meta_app_credentials,
@@ -255,9 +259,25 @@ def _enqueue_gemini_label_work(
 def _image_out(session: Session, image: Image) -> ImageOut:
     approved_queue = next(iter(image.queue_items), None) if image.queue_items else None
     has_approved_crop = any(crop.approved for crop in image.crops) if image.crops is not None else False
-    # Badge/filter use any approved blur; publishing_gate still verifies coverage geometry.
-    has_approved_covering_blur = (
-        any(blur.approved for blur in image.blurs) if image.blurs is not None else False
+    has_approved_blur = any(blur.approved for blur in image.blurs) if image.blurs is not None else False
+    covering_blur = _has_approved_covering_blur(session, image)
+    original_preview = (
+        f"/api/derivatives/{image.id}/preview" if image.preview_path else None
+    )
+    if has_approved_blur:
+        thumbnail_url = f"/api/derivatives/{image.id}/blurred-thumbnail"
+        preview_url = f"/api/derivatives/{image.id}/blurred-preview"
+        publish_preview_url = f"/api/images/{image.id}/publish-preview"
+    else:
+        thumbnail_url = f"/api/derivatives/{image.id}/thumbnail" if image.thumbnail_path else None
+        preview_url = original_preview
+        publish_preview_url = (
+            f"/api/images/{image.id}/publish-preview" if image.preview_path or has_approved_crop else None
+        )
+    variant = publish_variant(
+        image.human_rating,
+        has_approved_crop=has_approved_crop,
+        has_approved_blur=has_approved_blur,
     )
     return ImageOut(
         id=image.id,
@@ -282,16 +302,21 @@ def _image_out(session: Session, image: Image) -> ImageOut:
             image.human_rating,
             image.model_state,
             has_approved_crop=has_approved_crop,
-            has_approved_covering_blur=has_approved_covering_blur,
+            has_approved_covering_blur=has_approved_blur,
         ),
         aesthetic_score=image.score.aesthetic_score if image.score else None,
         queued=bool(image.queue_items),
         queue_state=approved_queue.state if approved_queue else None,
         duplicate_count=duplicate_count(session, image.id),
         has_approved_crop=has_approved_crop,
-        has_approved_covering_blur=has_approved_covering_blur,
-        thumbnail_url=f"/api/derivatives/{image.id}/thumbnail" if image.thumbnail_path else None,
-        preview_url=f"/api/derivatives/{image.id}/preview" if image.preview_path else None,
+        has_approved_covering_blur=covering_blur,
+        has_approved_blur=has_approved_blur,
+        publish_variant=variant,
+        publish_variant_label=publish_variant_label(variant),
+        thumbnail_url=thumbnail_url,
+        preview_url=preview_url,
+        original_preview_url=original_preview,
+        publish_preview_url=publish_preview_url,
         gemini_label_status=image.gemini_label_status,
         gemini_label_at=image.gemini_label_at,
         gemini_description=image.gemini_description,
@@ -974,6 +999,7 @@ def approve_blurs(
 
 _DERIVATIVE_CACHE = {"Cache-Control": "private, max-age=604800, immutable"}
 _GRID_KIND_FILES = {"thumbnail": THUMB_FILENAME, "preview": PREVIEW_FILENAME}
+_BLUR_KIND_FILES = {"blurred-preview": "blurs/cover.jpg", "blurred-thumbnail": "blurs/thumb.jpg"}
 
 
 @router.get("/api/derivatives/{image_id}/{kind}")
@@ -990,6 +1016,16 @@ def derivative(
     stampedes. Paths are fixed under ``{image_id}/`` so path-traversal via a
     poisoned DB column cannot apply here.
     """
+    blur_file = _BLUR_KIND_FILES.get(kind)
+    if blur_file is not None:
+        path = safe_join(settings.derivatives_root, f"{image_id}/{blur_file}")
+        if not path.is_file() and kind == "blurred-thumbnail":
+            cover = safe_join(settings.derivatives_root, f"{image_id}/blurs/cover.jpg")
+            if cover.is_file():
+                path = cover
+        if not path.is_file():
+            raise NotFound("Derivative was not found.")
+        return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
     filename = _GRID_KIND_FILES.get(kind)
     if filename is None:
         raise NotFound("Derivative was not found.")
@@ -997,6 +1033,24 @@ def derivative(
     if not path.is_file():
         raise NotFound("Derivative was not found.")
     return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
+
+
+@router.get("/api/images/{image_id}/publish-preview")
+def publish_preview(
+    image_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> FileResponse:
+    """Exact JPEG bytes that would be uploaded on publish (re-rendered at request time)."""
+    image = _load_image(session, image_id)
+    approved = next((crop for crop in image.crops if crop.approved), None)
+    relative = ensure_publish_derivative(session, settings, image, approved)
+    session.commit()
+    path = safe_join(settings.derivatives_root, relative)
+    if not path.is_file():
+        raise NotFound("Publish preview was not found.")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
 
 
 @router.get("/api/derivatives/{image_id}/crops/{crop_id}")
@@ -1110,8 +1164,12 @@ def enqueue(
         has_approved_crop=approved is not None,
         has_approved_covering_blur=covering_blur,
     )
-    if not gate.allowed:
-        raise NotAllowed(" ".join(gate.reasons))
+    blur_pending = blur_drawn_not_approved_reason(image)
+    if not gate.allowed or blur_pending:
+        reasons = list(gate.reasons)
+        if blur_pending:
+            reasons.append(blur_pending)
+        raise NotAllowed(" ".join(reasons))
     existing = session.scalar(
         select(PublishingQueueItem)
         .where(PublishingQueueItem.image_id == image.id)
@@ -1296,7 +1354,7 @@ def create_captions(
         ),
         account_voice=settings.account_voice,
     )
-    pixels = _preview_bytes(settings, image, approved)
+    pixels = _preview_bytes(session, settings, image, approved)
     audit = GeminiRequest(
         image_id=image.id,
         policy=settings.gemini_image_policy,
@@ -1511,7 +1569,7 @@ def create_curation(
         policy=settings.gemini_image_policy,
         covering_blur_fn=_has_approved_covering_blur,
         include_images=body.include_images,
-        preview_bytes_fn=lambda image: _curation_derivative_bytes(settings, image),
+        preview_bytes_fn=lambda image: _curation_derivative_bytes(session, settings, image),
         defer_execution=defer,
         thinking_budget=settings.gemini_curation_thinking_budget,
     )
@@ -2345,6 +2403,17 @@ def _refresh_blur_derivative(session: Session, settings: Settings, image: Image)
     )
     for blur in image.blurs:
         blur.derivative_path = relative
+    if relative:
+        from instamagic.services.images.derivatives import THUMB_LONG_EDGE, THUMB_QUALITY
+        from PIL import Image as PilImage
+
+        cover_path = settings.derivatives_root / relative
+        thumb_path = settings.derivatives_root / f"{image.id}/blurs/thumb.jpg"
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        with PilImage.open(cover_path) as cover:
+            thumb = cover.copy()
+            thumb.thumbnail((THUMB_LONG_EDGE, THUMB_LONG_EDGE), PilImage.Resampling.LANCZOS)
+            thumb.save(thumb_path, format="JPEG", quality=THUMB_QUALITY)
 
 
 def _rgb_for_image(session: Session, settings: Settings, image: Image):
@@ -2363,21 +2432,9 @@ def _rgb_for_image(session: Session, settings: Settings, image: Image):
 
 
 def _refresh_crop_derivative(session: Session, settings: Settings, image: Image, crop: CropSuggestion) -> None:
-    rgb = _rgb_for_image(session, settings, image)
-    x, y, width, height = crop.x, crop.y, crop.width, crop.height
-    if image.width and image.height and rgb.size != (image.width, image.height):
-        scale_x = rgb.size[0] / image.width
-        scale_y = rgb.size[1] / image.height
-        x = max(0, int(round(x * scale_x)))
-        y = max(0, int(round(y * scale_y)))
-        width = max(1, int(round(width * scale_x)))
-        height = max(1, int(round(height * scale_y)))
-        width = min(width, rgb.size[0] - x)
-        height = min(height, rgb.size[1] - y)
-    relative = f"{image.id}/crops/{crop.aspect_ratio.replace(':', 'x')}.jpg"
-    rendered = crop_image(rgb, x, y, width, height)
-    save_derivative(rendered, settings.derivatives_root / relative, 1600, quality=84)
-    crop.derivative_path = relative
+    from instamagic.services.instagram.publish_derivative import refresh_crop_derivative
+
+    refresh_crop_derivative(session, settings, image, crop)
 
 
 def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]:
@@ -2516,12 +2573,14 @@ def _curation_batch_out(session: Session, batch: CurationBatch) -> dict[str, obj
     return summary
 
 
-def _curation_derivative_bytes(settings: Settings, image: Image) -> bytes | None:
-    return _curation_derivative_bytes_impl(settings, image)
+def _curation_derivative_bytes(session: Session, settings: Settings, image: Image) -> bytes | None:
+    return _curation_derivative_bytes_impl(session, settings, image)
 
 
-def _preview_bytes(settings: Settings, image: Image, approved: CropSuggestion | None) -> bytes | None:
-    return derivative_bytes_for_gemini(settings, image, approved, require_policy=True)
+def _preview_bytes(session: Session, settings: Settings, image: Image, approved: CropSuggestion | None) -> bytes | None:
+    from instamagic.services.recommendations.gemini_derivatives import gemini_preview_bytes
+
+    return gemini_preview_bytes(session, settings, image, approved, require_policy=True)
 
 
 def _derivative_bytes_for_gemini(

@@ -60,7 +60,7 @@ def run_curation_job(processing_job_id: str) -> None:
             policy=settings.gemini_image_policy,
             covering_blur_fn=has_approved_covering_blur,
             include_images=params.get("include_images"),
-            preview_bytes_fn=lambda image: curation_derivative_bytes(settings, image),
+            preview_bytes_fn=lambda image: curation_derivative_bytes(session, settings, image),
             thinking_budget=settings.gemini_curation_thinking_budget,
             image_ids=image_ids or None,
         )
@@ -89,7 +89,7 @@ def run_gemini_label_job_entry(processing_job_id: str) -> None:
             UUID(processing_job_id),
             policy=settings.gemini_image_policy,
             account_voice=settings.account_voice,
-            preview_bytes_fn=lambda image: curation_derivative_bytes(settings, image),
+            preview_bytes_fn=lambda image: curation_derivative_bytes(session, settings, image),
             covering_blur_fn=has_approved_covering_blur,
             concurrency=settings.gemini_label_concurrency,
             thinking_budget=settings.gemini_label_thinking_budget,

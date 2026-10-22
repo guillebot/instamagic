@@ -20,6 +20,7 @@ export const SAFETY_FILTERS = [
   { value: "SAFE", label: "Safe" },
   { value: "SAFE_AFTER_CROP", label: "Safe after crop" },
   { value: "SAFE_AFTER_BLUR", label: "Safe after blur" },
+  { value: "BLURRED", label: "Blurred" },
   { value: "PUBLISHABLE", label: "Publishable" },
   { value: "REVIEW", label: "Review" },
   { value: "REJECTED", label: "Rejected" },
