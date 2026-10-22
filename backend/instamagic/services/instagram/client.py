@@ -70,6 +70,8 @@ class InstagramClient(Protocol):
 
     def publish_image(self, *, image_url: str, caption: str) -> PublishResult: ...
 
+    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult: ...
+
     def fetch_account_details(self) -> InstagramAccountDetails: ...
 
     def fetch_content_publishing_limit(self) -> ContentPublishingLimit: ...
@@ -93,6 +95,10 @@ class NotConfiguredInstagramClient:
         del image_url, caption
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
+    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
+        del image_urls, caption
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
     def fetch_account_details(self) -> InstagramAccountDetails:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
@@ -104,7 +110,8 @@ class FakeInstagramClient:
     """Deterministic publisher for CI. Never calls Meta."""
 
     def __init__(self) -> None:
-        self.calls: list[dict[str, str]] = []
+        self.calls: list[dict[str, str | list[str]]] = []
+        self.carousel_calls: list[dict[str, object]] = []
         self.account_fetches: int = 0
         self.content_limit_usage: int = 0
         self.content_limit_total: int = 50
@@ -120,6 +127,23 @@ class FakeInstagramClient:
         container_id = f"fake-container-{uuid.uuid4().hex[:12]}"
         media_id = f"fake-media-{uuid.uuid4().hex[:12]}"
         self.calls.append({"image_url": image_url, "caption": caption, "media_id": media_id})
+        return PublishResult(
+            container_id=container_id,
+            media_id=media_id,
+            permalink=f"https://www.instagram.com/p/{media_id}/",
+        )
+
+    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
+        if len(image_urls) < 2 or len(image_urls) > 10:
+            raise NotConfigured("Carousel requires 2–10 image URLs.")
+        for url in image_urls:
+            if not url.startswith(("http://", "https://")):
+                raise NotConfigured("Fake Instagram publisher requires http(s) image URLs.")
+        if not caption.strip():
+            raise NotConfigured("Caption is required.")
+        container_id = f"fake-carousel-{uuid.uuid4().hex[:12]}"
+        media_id = f"fake-media-{uuid.uuid4().hex[:12]}"
+        self.carousel_calls.append({"image_urls": list(image_urls), "caption": caption, "media_id": media_id})
         return PublishResult(
             container_id=container_id,
             media_id=media_id,
@@ -185,6 +209,26 @@ class GraphInstagramClient:
         permalink = self._permalink(media_id)
         return PublishResult(container_id=container_id, media_id=media_id, permalink=permalink)
 
+    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        if len(image_urls) < 2 or len(image_urls) > 10:
+            raise NotConfigured("Carousel requires 2–10 publicly reachable https image URLs.")
+        if not caption.strip():
+            raise NotConfigured("Caption is required.")
+        child_ids: list[str] = []
+        for url in image_urls:
+            if not url.startswith("https://"):
+                raise NotConfigured("Instagram requires publicly reachable https image URLs.")
+            child_id = self._create_container(image_url=url, caption="", is_carousel_item=True)
+            self._wait_for_container(child_id)
+            child_ids.append(child_id)
+        container_id = self._create_carousel_parent(child_ids=child_ids, caption=caption.strip())
+        self._wait_for_container(container_id)
+        media_id = self._publish_container(container_id)
+        permalink = self._permalink(media_id)
+        return PublishResult(container_id=container_id, media_id=media_id, permalink=permalink)
+
     def fetch_content_publishing_limit(self) -> ContentPublishingLimit:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
@@ -240,16 +284,20 @@ class GraphInstagramClient:
         """Page access tokens cannot list /me/accounts — only works with a user token."""
         return None
 
-    def _create_container(self, *, image_url: str, caption: str) -> str:
+    def _create_container(self, *, image_url: str, caption: str, is_carousel_item: bool = False) -> str:
         url = f"{self._base}/{self._ig_user_id}/media"
+        payload: dict[str, str] = {
+            "image_url": image_url,
+            "access_token": self._token,
+        }
+        if is_carousel_item:
+            payload["is_carousel_item"] = "true"
+        elif caption:
+            payload["caption"] = caption
         try:
             response = httpx.post(
                 url,
-                data={
-                    "image_url": image_url,
-                    "caption": caption,
-                    "access_token": self._token,
-                },
+                data=payload,
                 timeout=self._timeout,
             )
         except httpx.HTTPError as exc:
@@ -258,6 +306,27 @@ class GraphInstagramClient:
         creation_id = payload.get("id")
         if not creation_id:
             raise NotConfigured("Instagram did not return a media container id.")
+        return str(creation_id)
+
+    def _create_carousel_parent(self, *, child_ids: list[str], caption: str) -> str:
+        url = f"{self._base}/{self._ig_user_id}/media"
+        try:
+            response = httpx.post(
+                url,
+                data={
+                    "media_type": "CAROUSEL",
+                    "children": ",".join(child_ids),
+                    "caption": caption,
+                    "access_token": self._token,
+                },
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise NotConfigured("Instagram Graph API carousel request failed.") from exc
+        payload = _json_or_raise(response, action="create carousel container")
+        creation_id = payload.get("id")
+        if not creation_id:
+            raise NotConfigured("Instagram did not return a carousel container id.")
         return str(creation_id)
 
     def _wait_for_container(self, creation_id: str) -> None:
