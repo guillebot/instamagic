@@ -12,7 +12,8 @@ dist/
 build/
 node_modules/
 frontend/dist/
-models/
+# Host ONNX weights only (repo-root ./models). Do not ignore backend/instamagic/models/.
+/models/
 data/
 fixtures/library/
 *.onnx
