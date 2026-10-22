@@ -4,8 +4,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0014_blur_rotation"
-down_revision = "0013_blur_unlock"
+revision = "0017_blur_rotation"
+down_revision = "0016_blur_unlock"
 branch_labels = None
 depends_on = None
 

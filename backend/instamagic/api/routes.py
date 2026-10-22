@@ -53,10 +53,10 @@ from instamagic.models.enums import JobKind
 from instamagic.schemas.dto import (
     AttestIn,
     BlurCreateIn,
-    BlurUpdateIn,
     BlurOut,
     BlurStrengthIn,
     BlurSuggestIn,
+    BlurUpdateIn,
     CandidateBulkIn,
     CandidateBulkItemResult,
     CandidateBulkQueueResult,

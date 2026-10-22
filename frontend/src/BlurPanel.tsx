@@ -1,6 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api";
+import {
+  type BlurRect,
+  type BlurResizeMode,
+  moveBlur,
+  resizeBlur,
+  snapRotation,
+} from "./blurGeometry";
 import { containedLayout, cropToCss, type ContainedLayout, type CropRect } from "./cropGeometry";
 import type { BlurItem, ImageItem } from "./types";
 
@@ -18,13 +25,27 @@ function clientToImage(
   layout: ContainedLayout,
   imageW: number,
   imageH: number,
+  unbounded = false,
 ): { x: number; y: number } {
   const rect = frame.getBoundingClientRect();
   const px = (clientX - rect.left - layout.offsetX) / layout.scale;
   const py = (clientY - rect.top - layout.offsetY) / layout.scale;
+  if (unbounded) {
+    return { x: Math.round(px), y: Math.round(py) };
+  }
   return {
     x: Math.min(Math.max(0, Math.round(px)), imageW),
     y: Math.min(Math.max(0, Math.round(py)), imageH),
+  };
+}
+
+function blurToRect(blur: BlurItem): BlurRect {
+  return {
+    x: blur.x,
+    y: blur.y,
+    width: blur.width,
+    height: blur.height,
+    rotation_deg: blur.rotation_deg ?? 0,
   };
 }
 
@@ -37,6 +58,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   const [shapeMode, setShapeMode] = useState<"ellipse" | "rectangle">("ellipse");
   const [cornerRadius, setCornerRadius] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<BlurRect | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<CropRect | null>(null);
@@ -166,7 +188,8 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
         if (!item) return;
         const dx = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
         const dy = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
-        void patchBlur(item.id, { x: item.x + dx, y: item.y + dy });
+        const rect = blurToRect(item);
+        void patchBlur(item.id, moveBlur(rect, dx, dy));
       }
     }
     window.addEventListener("keydown", onKey);
@@ -174,7 +197,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [captureKeys, isDoNotPost, image.id]);
 
-  async function patchBlur(blurId: string, patch: Record<string, unknown>) {
+  async function patchBlur(blurId: string, patch: Partial<BlurRect>) {
     setBusy(true);
     setError("");
     try {
@@ -243,11 +266,85 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     }
   }
 
+  function beginBlurDrag(blur: BlurItem, mode: BlurResizeMode, event: ReactPointerEvent<HTMLElement>) {
+    if (!layout || !image.width || !image.height || busy) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const origin = blurToRect(blur);
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const scale = layout.scale;
+    setEditDraft(origin);
+    setSelectedId(blur.id);
+
+    function onMove(ev: PointerEvent) {
+      if (ev.pointerId !== pointerId) return;
+      const dx = (ev.clientX - startX) / scale;
+      const dy = (ev.clientY - startY) / scale;
+      setEditDraft(resizeBlur(origin, mode, dx, dy));
+    }
+    async function onUp(ev: PointerEvent) {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      setEditDraft((current) => {
+        if (current) void patchBlur(blur.id, current);
+        return null;
+      });
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
+  function beginRotate(blur: BlurItem, event: ReactPointerEvent<HTMLElement>) {
+    if (!layout || !image.width || !image.height || !frameRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const frame = frameRef.current;
+    const activeLayout = layout;
+    const origin = blurToRect(blur);
+    const cx = origin.x + origin.width / 2;
+    const cy = origin.y + origin.height / 2;
+    const center = clientToImage(event.clientX, event.clientY, frame, activeLayout, image.width, image.height);
+    const startAngle = Math.atan2(center.y - cy, center.x - cx);
+    const pointerId = event.pointerId;
+
+    function onMove(moveEv: PointerEvent) {
+      if (moveEv.pointerId !== pointerId) return;
+      const pt = clientToImage(moveEv.clientX, moveEv.clientY, frame, activeLayout, image.width!, image.height!);
+      let deg = origin.rotation_deg + (Math.atan2(pt.y - cy, pt.x - cx) - startAngle) * (180 / Math.PI);
+      deg = snapRotation(Math.max(-180, Math.min(180, deg)), moveEv.shiftKey);
+      setEditDraft({ ...origin, rotation_deg: deg });
+    }
+    async function onUp(moveEv: PointerEvent) {
+      if (moveEv.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setEditDraft((current) => {
+        if (current) void patchBlur(blur.id, { rotation_deg: current.rotation_deg });
+        return null;
+      });
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   function beginDraw(event: ReactPointerEvent<HTMLDivElement>) {
     if (!layout || !image.width || !image.height || !frameRef.current || busy) return;
-    if ((event.target as HTMLElement).closest(".blur-handle")) return;
+    if ((event.target as HTMLElement).closest(".blur-handle, .blur-ellipse")) return;
     event.preventDefault();
-    const origin = clientToImage(event.clientX, event.clientY, frameRef.current, layout, image.width, image.height);
+    const origin = clientToImage(
+      event.clientX,
+      event.clientY,
+      frameRef.current,
+      layout,
+      image.width,
+      image.height,
+      true,
+    );
     const pointerId = event.pointerId;
     drawRef.current = { pointerId, originX: origin.x, originY: origin.y };
     setDraft({ x: origin.x, y: origin.y, width: 1, height: 1 });
@@ -255,7 +352,15 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
 
     function onMove(ev: PointerEvent) {
       if (!drawRef.current || ev.pointerId !== pointerId || !frameRef.current || !layout) return;
-      const point = clientToImage(ev.clientX, ev.clientY, frameRef.current, layout, image.width!, image.height!);
+      const point = clientToImage(
+        ev.clientX,
+        ev.clientY,
+        frameRef.current,
+        layout,
+        image.width!,
+        image.height!,
+        true,
+      );
       const x = Math.min(drawRef.current.originX, point.x);
       const y = Math.min(drawRef.current.originY, point.y);
       const width = Math.max(1, Math.abs(point.x - drawRef.current.originX));
@@ -270,7 +375,15 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       if (!frameRef.current || !layout || !image.width || !image.height) return;
-      const point = clientToImage(ev.clientX, ev.clientY, frameRef.current, layout, image.width, image.height);
+      const point = clientToImage(
+        ev.clientX,
+        ev.clientY,
+        frameRef.current,
+        layout,
+        image.width,
+        image.height,
+        true,
+      );
       const rect = {
         x: Math.min(start.originX, point.x),
         y: Math.min(start.originY, point.y),
@@ -310,127 +423,63 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             />
           ) : null,
         )}
-        {items.map((blur) =>
-          image.width && image.height && layout ? (
+        {items.map((blur) => {
+          if (!image.width || !image.height || !layout) return null;
+          const live =
+            editDraft && selectedId === blur.id
+              ? editDraft
+              : { x: blur.x, y: blur.y, width: blur.width, height: blur.height, rotation_deg: blur.rotation_deg ?? 0 };
+          const css = cropToCss({ x: live.x, y: live.y, width: live.width, height: live.height }, layout);
+          const rot = live.rotation_deg;
+          const radiusPx =
+            blur.shape === "ellipse"
+              ? "50%"
+              : `${Math.max(0, (blur.corner_radius ?? 0) * layout.scale)}px`;
+          const selected = selectedId === blur.id;
+          const handles: BlurResizeMode[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+          return (
             <div
               key={blur.id}
               className={
-                blur.approved
-                  ? "blur-ellipse approved"
-                  : selectedId === blur.id
-                    ? "blur-ellipse selected"
-                    : "blur-ellipse"
+                blur.approved ? "blur-ellipse approved interactive" : selected ? "blur-ellipse selected interactive" : "blur-ellipse interactive"
               }
-              onPointerDown={(ev) => {
-                ev.stopPropagation();
-                setSelectedId(blur.id);
+              style={{
+                left: css.left,
+                top: css.top,
+                width: css.width,
+                height: css.height,
+                transform: `rotate(${rot}deg)`,
+                transformOrigin: "center center",
+                borderRadius: radiusPx,
+                opacity: blur.approved ? 1 : selected ? 1 : 0.92,
               }}
-              style={(() => {
-                const css = cropToCss(
-                  { x: blur.x, y: blur.y, width: blur.width, height: blur.height },
-                  layout,
-                );
-                const rot = blur.rotation_deg ?? 0;
-                const radiusPx =
-                  blur.shape === "ellipse"
-                    ? "50%"
-                    : `${Math.max(0, (blur.corner_radius ?? 0) * layout.scale)}px`;
-                return {
-                  left: css.left,
-                  top: css.top,
-                  width: css.width,
-                  height: css.height,
-                  transform: `rotate(${rot}deg)`,
-                  transformOrigin: "center center",
-                  borderRadius: radiusPx,
-                };
-              })()}
+              onPointerDown={(ev) => {
+                if ((ev.target as HTMLElement).closest(".blur-handle")) return;
+                setSelectedId(blur.id);
+                beginBlurDrag(blur, "move", ev);
+              }}
             >
-              {selectedId === blur.id ? (
+              {selected ? (
                 <>
-                <button
-                  type="button"
-                  className="blur-handle resize-handle se"
-                  aria-label="Resize blur"
-                  onPointerDown={(ev) => {
-                    ev.stopPropagation();
-                    ev.preventDefault();
-                    const frame = frameRef.current;
-                    if (!frame || !layout || !image.width || !image.height) return;
-                    const activeLayout = layout;
-                    function onMove(moveEv: PointerEvent) {
-                      const pt = clientToImage(
-                        moveEv.clientX,
-                        moveEv.clientY,
-                        frame!,
-                        activeLayout,
-                        image.width!,
-                        image.height!,
-                      );
-                      void patchBlur(blur.id, {
-                        width: Math.max(8, pt.x - blur.x),
-                        height: Math.max(8, pt.y - blur.y),
-                      });
-                    }
-                    function onUp() {
-                      window.removeEventListener("pointermove", onMove);
-                      window.removeEventListener("pointerup", onUp);
-                    }
-                    window.addEventListener("pointermove", onMove);
-                    window.addEventListener("pointerup", onUp);
-                  }}
-                />
-                <button
-                  type="button"
-                  className="blur-handle rotate-handle"
-                  aria-label="Rotate blur"
-                  onPointerDown={(ev) => {
-                    ev.stopPropagation();
-                    ev.preventDefault();
-                    const frame = frameRef.current;
-                    if (!frame || !layout || !image.width || !image.height) return;
-                    const activeLayout = layout;
-                    const center = clientToImage(
-                      ev.clientX,
-                      ev.clientY,
-                      frame,
-                      activeLayout,
-                      image.width,
-                      image.height,
-                    );
-                    const cx = blur.x + blur.width / 2;
-                    const cy = blur.y + blur.height / 2;
-                    const startAngle = Math.atan2(center.y - cy, center.x - cx);
-                    const startRot = blur.rotation_deg ?? 0;
-                    function onMove(moveEv: PointerEvent) {
-                      const pt = clientToImage(
-                        moveEv.clientX,
-                        moveEv.clientY,
-                        frame!,
-                        activeLayout,
-                        image.width!,
-                        image.height!,
-                      );
-                      let deg =
-                        startRot + (Math.atan2(pt.y - cy, pt.x - cx) - startAngle) * (180 / Math.PI);
-                      if (moveEv.shiftKey) {
-                        deg = Math.round(deg / 15) * 15;
-                      }
-                      void patchBlur(blur.id, { rotation_deg: Math.max(-180, Math.min(180, deg)) });
-                    }
-                    function onUp() {
-                      window.removeEventListener("pointermove", onMove);
-                      window.removeEventListener("pointerup", onUp);
-                    }
-                    window.addEventListener("pointermove", onMove);
-                    window.addEventListener("pointerup", onUp);
-                  }}
-                />
+                  {handles.map((corner) => (
+                    <span
+                      key={corner}
+                      className={`blur-handle resize-handle ${corner}`}
+                      aria-hidden="true"
+                      onPointerDown={(ev) => beginBlurDrag(blur, corner, ev)}
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    className="blur-handle rotate-handle"
+                    aria-label="Rotate blur"
+                    onPointerDown={(ev) => beginRotate(blur, ev)}
+                  />
                 </>
               ) : null}
             </div>
-          ) : null,
-        )}
+          );
+        })}
         {draftCss ? (
           <div
             className="blur-ellipse draft"
