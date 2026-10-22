@@ -159,7 +159,7 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
     assert len(captions.json()) >= 8
     assert all("comment yes" not in row["text"].lower() for row in captions.json())
 
-    candidates = client.get("/api/candidates").json()
+    candidates = client.get("/api/candidates").json()["items"]
     candidate_ids = {row["image"]["id"] for row in candidates}
     assert clean_id in candidate_ids
     assert unsafe_id in candidate_ids
