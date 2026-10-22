@@ -40,7 +40,11 @@ def test_enqueue_gemini_label_job(client, app_env) -> None:
 
 
 def test_label_job_continues_after_apply_failure(client, app_env, monkeypatch) -> None:
+    from instamagic.config import get_settings
     from instamagic.services.recommendations import label_job as label_job_module
+
+    monkeypatch.setenv("GEMINI_LABEL_CONCURRENCY", "1")
+    get_settings.cache_clear()
 
     def inline_enqueue(_session, settings, *, existing_job=None, **_kwargs):
         from instamagic.workers.tasks import run_gemini_label_job_entry
@@ -67,14 +71,15 @@ def test_label_job_continues_after_apply_failure(client, app_env, monkeypatch) -
     library_id = created.json()["id"]
     client.post(f"/api/libraries/{library_id}/scan")
     items = client.get("/api/images", params={"library_id": library_id}).json()["items"]
+    by_name = {item["filename"]: item for item in items}
     for item in items:
         client.post(f"/api/images/{item['id']}/rating", json={"rating": "safe"})
 
+    fail_image_id = by_name["a.jpg"]["id"]
     original_apply = label_job_module._apply_label_result
 
     def flaky_apply(session, image, result):
-        # Deterministic under parallel label workers (order of completion is not stable).
-        if image.relative_path.endswith("a.jpg"):
+        if str(image.id) == fail_image_id:
             raise RuntimeError("simulated persistence failure")
         return original_apply(session, image, result)
 
