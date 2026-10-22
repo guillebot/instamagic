@@ -250,6 +250,9 @@ export type InstagramConnectionStatus = {
   business_account_id: string | null;
   business_account_id_configured: boolean;
   oauth_available?: boolean;
+  oauth_redirect_uri?: string;
+  oauth_scopes?: string;
+  meta_docs_url?: string;
   account?: InstagramAccountDetails | null;
   account_fetched_at?: string | null;
   can_edit_database_credentials?: boolean;

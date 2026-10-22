@@ -17,6 +17,7 @@ from instamagic.services.instagram.client import (
     NotConfiguredInstagramClient,
     mask_access_token,
 )
+from instamagic.services.instagram.oauth import META_APP_DOCS_URL, OAUTH_SCOPES, oauth_redirect_uri
 from instamagic.services.secret_box import open_sealed, seal
 from sqlalchemy.orm import Session
 
@@ -180,6 +181,9 @@ def connection_status_fields(
         "business_account_id": business_id,
         "business_account_id_configured": bool(business_id) or settings.instagram_provider == "fake",
         "oauth_available": oauth_ready,
+        "oauth_redirect_uri": oauth_redirect_uri(settings),
+        "oauth_scopes": OAUTH_SCOPES,
+        "meta_docs_url": META_APP_DOCS_URL,
         "account": cached,
         "account_fetched_at": row.account_fetched_at.isoformat() if row and row.account_fetched_at else None,
         "can_edit_database_credentials": settings.instagram_provider != "fake"

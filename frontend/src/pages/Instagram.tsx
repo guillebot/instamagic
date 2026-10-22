@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api";
 import type { InstagramAccountDetails, InstagramConnectionStatus, InstagramRefreshResult } from "../types";
 
+const DEFAULT_META_DOCS =
+  "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login";
+
 export function InstagramPage() {
   const queryClient = useQueryClient();
   const [tokenInput, setTokenInput] = useState("");
@@ -22,7 +25,7 @@ export function InstagramPage() {
     if (!oauth) return;
     if (oauth === "ok") {
       setBannerKind("ok");
-      setBanner("Meta OAuth succeeded — credentials saved and account fetched.");
+      setBanner("Connected via Meta — credentials sealed and account fetched.");
       void queryClient.invalidateQueries({ queryKey: ["instagram-status"] });
     } else {
       setBannerKind("error");
@@ -44,6 +47,9 @@ export function InstagramPage() {
       business_account_id: body.business_account_id,
       business_account_id_configured: body.business_account_id_configured,
       oauth_available: body.oauth_available,
+      oauth_redirect_uri: body.oauth_redirect_uri,
+      oauth_scopes: body.oauth_scopes,
+      meta_docs_url: body.meta_docs_url,
       account: body.account,
       account_fetched_at: body.account_fetched_at,
       can_edit_database_credentials: body.can_edit_database_credentials,
@@ -128,6 +134,14 @@ export function InstagramPage() {
         ? "Could not load Instagram status."
         : null;
 
+  const redirectUri =
+    connection?.oauth_redirect_uri ||
+    `${window.location.origin}/api/instagram/oauth/callback`;
+  const scopes =
+    connection?.oauth_scopes ||
+    "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement";
+  const metaDocs = connection?.meta_docs_url || DEFAULT_META_DOCS;
+
   const onSave = (event: FormEvent) => {
     event.preventDefault();
     if (!tokenInput.trim() || !accountIdInput.trim()) {
@@ -142,13 +156,43 @@ export function InstagramPage() {
     <main className="page">
       <h1>Instagram connection</h1>
       <p>
-        Connect a Professional Instagram account (Business/Creator linked to a Facebook Page). Credentials are
-        sealed in the database (or read from host <code>.env</code>). This page never shows the full access
-        token and never publishes.
+        Connect a Professional Instagram account (Business/Creator linked to a Facebook Page) via Meta login.
+        Credentials are sealed in the database. This page never shows the full access token and never publishes.
       </p>
 
       {banner ? <p className={bannerKind === "ok" ? "ok" : "error"}>{banner}</p> : null}
       {statusError ? <p className="error">{statusError}</p> : null}
+
+      <section className="panel ig-connect-panel">
+        <h2>Connect with Instagram / Meta</h2>
+        {connection?.oauth_available ? (
+          <>
+            <p className="muted">
+              Sign in with Facebook, grant Page + Instagram permissions, and Instamagic exchanges the code for a
+              long-lived Page token, discovers the IG business account id, and seals both in Postgres.
+            </p>
+            <button
+              type="button"
+              className="button button-lg ig-connect-btn"
+              disabled={startOauth.isPending || connection.env_overrides_database}
+              onClick={() => startOauth.mutate()}
+            >
+              {startOauth.isPending ? "Opening Meta…" : "Connect with Instagram / Meta"}
+            </button>
+            {connection.env_overrides_database ? (
+              <p className="muted">
+                Host <code>.env</code> already sets Instagram tokens — those win until cleared and the API is
+                restarted. OAuth save would be ignored while env is set.
+              </p>
+            ) : null}
+            <p className="muted ig-redirect-hint">
+              Redirect URI registered in Meta: <code className="break-all">{redirectUri}</code>
+            </p>
+          </>
+        ) : (
+          <MetaSetupChecklist redirectUri={redirectUri} scopes={scopes} metaDocs={metaDocs} />
+        )}
+      </section>
 
       <section className="panel">
         <h2>Status</h2>
@@ -157,7 +201,7 @@ export function InstagramPage() {
           <dl className="detail-list">
             <div>
               <dt>Configured</dt>
-              <dd>{connection.configured ? "Yes" : "No — add credentials below"}</dd>
+              <dd>{connection.configured ? "Yes" : "No — connect with Meta above"}</dd>
             </div>
             <div>
               <dt>Credential source</dt>
@@ -184,6 +228,10 @@ export function InstagramPage() {
               </dd>
             </div>
             <div>
+              <dt>Meta OAuth on host</dt>
+              <dd>{connection.oauth_available ? "Ready (META_APP_ID / SECRET set)" : "Not configured"}</dd>
+            </div>
+            <div>
               <dt>Graph version</dt>
               <dd>{connection.graph_version ?? "—"}</dd>
             </div>
@@ -204,8 +252,8 @@ export function InstagramPage() {
 
         {!connection?.configured ? (
           <p className="error">
-            Instagram is not configured. Paste a long-lived Page token and IG business user id below
-            {connection?.oauth_available ? ", or connect with Meta OAuth" : ""}, then use Test connection.
+            Instagram is not configured yet. Use Connect with Meta once the host has{" "}
+            <code>META_APP_ID</code> / <code>META_APP_SECRET</code>, or expand Advanced below to paste a token.
           </p>
         ) : null}
 
@@ -218,16 +266,6 @@ export function InstagramPage() {
           >
             {refresh.isPending ? "Checking…" : "Test connection / Refresh account details"}
           </button>
-          {connection?.oauth_available ? (
-            <button
-              type="button"
-              className="ghost"
-              disabled={startOauth.isPending}
-              onClick={() => startOauth.mutate()}
-            >
-              {startOauth.isPending ? "Opening Meta…" : "Connect with Meta OAuth"}
-            </button>
-          ) : null}
           {connection?.credential_source === "database" ? (
             <button
               type="button"
@@ -245,9 +283,11 @@ export function InstagramPage() {
         </div>
       </section>
 
+      {account ? <AccountPanel account={account} /> : null}
+
       {connection?.can_edit_database_credentials !== false ? (
-        <section className="panel">
-          <h2>Save credentials</h2>
+        <details className="panel ig-advanced">
+          <summary>Advanced — paste long-lived token manually</summary>
           {connection?.env_overrides_database ? (
             <p className="muted">
               Host <code>.env</code> already sets Instagram tokens — those win until cleared and the API is
@@ -256,7 +296,8 @@ export function InstagramPage() {
           ) : (
             <>
               <p className="muted">
-                Paste a <strong>long-lived Page access token</strong> and the{" "}
+                Prefer <strong>Connect with Instagram / Meta</strong> above. Paste only if you already have a{" "}
+                <strong>long-lived Page access token</strong> and the{" "}
                 <strong>Instagram business user id</strong> (not the Page id). The token is encrypted at rest
                 with <code>APP_SECRET</code> and never returned to the UI in full.
               </p>
@@ -290,37 +331,70 @@ export function InstagramPage() {
               </form>
             </>
           )}
-        </section>
+        </details>
       ) : null}
-
-      {account ? <AccountPanel account={account} /> : null}
-
-      <section className="panel">
-        <h2>How to configure</h2>
-        <ol className="howto">
-          <li>Convert the Instagram account to Professional (Business or Creator) and link a Facebook Page.</li>
-          <li>
-            In a Meta app, generate a long-lived Page access token with Instagram Graph publish permissions —
-            or set <code>META_APP_ID</code> / <code>META_APP_SECRET</code> on the host and use{" "}
-            <strong>Connect with Meta OAuth</strong> (redirect URI must match Traefik HTTPS).
-          </li>
-          <li>
-            Prefer saving credentials here (encrypted in Postgres). Alternatively put{" "}
-            <code>INSTAGRAM_PROVIDER=graph</code>, <code>INSTAGRAM_ACCESS_TOKEN</code>, and{" "}
-            <code>INSTAGRAM_BUSINESS_ACCOUNT_ID</code> in the host <code>.env</code> (chmod 600) and restart.
-            Never commit secrets.
-          </li>
-          <li>
-            Use <strong>Test connection / Refresh account details</strong> to pull username, counts, and linked
-            Page id into the saved profile.
-          </li>
-          <li>
-            Real publish also needs a public https <code>PUBLIC_BASE_URL</code> Meta can fetch. This page only
-            inspects the account — it does not post.
-          </li>
-        </ol>
-      </section>
     </main>
+  );
+}
+
+function MetaSetupChecklist({
+  redirectUri,
+  scopes,
+  metaDocs,
+}: {
+  redirectUri: string;
+  scopes: string;
+  metaDocs: string;
+}) {
+  return (
+    <div className="ig-setup">
+      <p className="error">
+        Meta OAuth is not enabled on this host yet. The Connect button stays off until{" "}
+        <code>META_APP_ID</code> and <code>META_APP_SECRET</code> are set in the host <code>.env</code> and the
+        API is restarted. You do not need to paste Instagram tokens — create a free Meta app (~5 minutes), then
+        come back here.
+      </p>
+      <ol className="howto">
+        <li>
+          Create an app at{" "}
+          <a href="https://developers.facebook.com/apps/" target="_blank" rel="noreferrer">
+            developers.facebook.com/apps
+          </a>{" "}
+          (type that supports Instagram Graph / Facebook Login).
+        </li>
+        <li>
+          Add the <strong>Facebook Login</strong> product. Under Valid OAuth Redirect URIs, paste exactly:
+          <br />
+          <code className="break-all">{redirectUri}</code>
+        </li>
+        <li>
+          Request (or use in Development mode with your admin/tester account) permissions:{" "}
+          <code>{scopes}</code>. Confirm names against{" "}
+          <a href={metaDocs} target="_blank" rel="noreferrer">
+            Meta Instagram API docs
+          </a>
+          .
+        </li>
+        <li>
+          Convert the Instagram account to Professional and link it to a Facebook Page you admin.
+        </li>
+        <li>
+          On the Instamagic host <code>.env</code> (chmod 600), set:
+          <pre className="ig-env-snippet">{`META_APP_ID=<app id>
+META_APP_SECRET=<app secret>
+FRONTEND_ORIGIN=https://instamagic.schimmel.homes
+# optional explicit override:
+# META_OAUTH_REDIRECT_URI=${redirectUri}`}</pre>
+          Restart the API containers, reload this page, then use{" "}
+          <strong>Connect with Instagram / Meta</strong>.
+        </li>
+      </ol>
+      <p className="muted">
+        LAN Traefik already proxies <code>/api/*</code> on the same host — Meta redirects the browser back here;
+        no public tunnel is required for login (only for later publish image fetch via{" "}
+        <code>PUBLIC_BASE_URL</code>).
+      </p>
+    </div>
   );
 }
 

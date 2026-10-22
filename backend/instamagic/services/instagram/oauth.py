@@ -12,8 +12,12 @@ from instamagic.config import Settings
 from instamagic.errors import NotAllowed, NotConfigured
 
 # Scopes needed to list Pages + publish via IG Content Publishing API.
-OAUTH_SCOPES = (
-    "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement"
+# Confirm current names in Meta's Instagram Graph docs when the app is created.
+# Must be a plain comma-separated string (not a tuple) for urlencode.
+OAUTH_SCOPES = "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement"
+
+META_APP_DOCS_URL = (
+    "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login"
 )
 
 
@@ -25,10 +29,16 @@ class OAuthTokens:
 
 
 def oauth_redirect_uri(settings: Settings) -> str:
+    """Callback URL registered in the Meta app.
+
+    Prefer ``META_OAUTH_REDIRECT_URI``, else ``FRONTEND_ORIGIN`` (the Traefik /
+    browser host). Do **not** use ``PUBLIC_BASE_URL`` here — that is for Meta's
+    crawler to fetch publish JPEGs and may be a tunnel distinct from login.
+    """
     explicit = settings.meta_oauth_redirect_uri.strip()
     if explicit:
         return explicit.rstrip("/")
-    base = settings.resolve_public_base_url().rstrip("/")
+    base = settings.frontend_origin.strip().rstrip("/")
     return f"{base}/api/instagram/oauth/callback"
 
 

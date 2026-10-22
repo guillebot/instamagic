@@ -38,11 +38,13 @@ scp -o BatchMode=yes \
   "$ROOT/deploy/stage.env.example" \
   "$HOST:$REMOTE/stage.env.example"
 
-# Pass pin via argv (validated above); keep heredoc quoted so host secrets stay local.
-ssh -o BatchMode=yes "$HOST" bash -s -- "$PIN_PREFIX" "$PIN_TAG" <<'REMOTE'
+# Pass pin via argv (validated above). Use "-" for empty so SSH does not drop blank args.
+ssh -o BatchMode=yes "$HOST" bash -s -- "${PIN_PREFIX:--}" "${PIN_TAG:--}" <<'REMOTE'
 set -euo pipefail
 PIN_PREFIX="${1:-}"
 PIN_TAG="${2:-}"
+[[ "$PIN_PREFIX" == "-" ]] && PIN_PREFIX=""
+[[ "$PIN_TAG" == "-" ]] && PIN_TAG=""
 cd /opt/docker/instamagic
 mkdir -p data/stage-library models
 

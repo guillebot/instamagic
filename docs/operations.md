@@ -119,9 +119,20 @@ Frontend nginx proxies `/api`, `/health`, and `/ready` to the Compose service na
 |---|---|
 | `GEMINI_API_KEY` | Live captions / drafts. Empty → clear 503 on generate. |
 | `GEMINI_IMAGE_POLICY` | Default `preview` (Curate toggle may send derivative JPEGs). `text_only` opts out; `manual_only` blocks batch Gemini. |
-| `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_BUSINESS_ACCOUNT_ID` | Graph publish. Never log. |
-| `PUBLIC_BASE_URL` | Public https Meta can fetch. LAN-only Traefik is insufficient for publish. |
+| `META_APP_ID` / `META_APP_SECRET` | Preferred. Enables **Connect with Instagram / Meta** on `/instagram`. Callback: `{FRONTEND_ORIGIN}/api/instagram/oauth/callback` (stage: `https://instamagic.schimmel.homes/api/instagram/oauth/callback`). Add that exact URI under Facebook Login → Valid OAuth Redirect URIs. Never log secrets. |
+| `META_OAUTH_REDIRECT_URI` | Optional override of the callback URL. Defaults from `FRONTEND_ORIGIN`, not `PUBLIC_BASE_URL`. |
+| `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_BUSINESS_ACCOUNT_ID` | Optional env override (wins over sealed DB). Prefer OAuth or in-app paste. Never log. |
+| `PUBLIC_BASE_URL` | Public https Meta can fetch for **publish** JPEGs. LAN-only Traefik is enough for OAuth (browser redirect) but insufficient for publish crawl. |
 | `AUTO_PUBLISH` | Keep `false` on stage. |
+
+### Meta Developer Console checklist (OAuth)
+
+1. Create app → add **Facebook Login**.
+2. Valid OAuth Redirect URI: `https://instamagic.schimmel.homes/api/instagram/oauth/callback` (same host as Traefik; `/api` is already proxied).
+3. Permissions used by Instamagic: `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`.
+4. IG account must be Professional and linked to a Page you admin.
+5. Put App ID + App Secret in host `.env` as `META_APP_ID` / `META_APP_SECRET`, restart API, open `/instagram` → Connect.
+6. CSRF: authorize URL carries a signed `state` (10 min TTL). Callback exchanges code server-side; tokens are sealed and never returned or logged in full.
 
 Logs are JSON. The logger redacts fields whose names contain password, token, secret, authorization, or api_key. Do not log image bodies.
 

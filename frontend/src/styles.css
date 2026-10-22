@@ -432,6 +432,43 @@ input, select, textarea {
 .ig-handle { margin: 0; font-weight: 650; font-size: 1.15rem; }
 .howto { margin: 0; padding-left: 1.2rem; display: grid; gap: 8px; color: #cfc8be; font-size: 14px; }
 .howto code { font-size: 0.92em; }
+.howto a { color: #e2c08a; }
+.button-lg {
+  font-size: 1.05rem;
+  padding: 12px 18px;
+  font-weight: 650;
+}
+.ig-connect-panel .ig-connect-btn { width: fit-content; max-width: 100%; }
+.ig-redirect-hint { margin: 0; }
+.ig-setup { display: grid; gap: 12px; }
+.ig-env-snippet {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: #101216;
+  border: 1px solid #343b45;
+  border-radius: 8px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: #d7d0c6;
+}
+.ig-advanced {
+  cursor: default;
+}
+.ig-advanced > summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: #f0e6d8;
+  list-style: none;
+}
+.ig-advanced > summary::-webkit-details-marker { display: none; }
+.ig-advanced > summary::before {
+  content: "▸ ";
+  color: #9a948a;
+}
+.ig-advanced[open] > summary::before { content: "▾ "; }
+.ig-advanced[open] { gap: 12px; }
+.ig-advanced > :not(summary) { margin-top: 12px; }
 .banner { background: #3a3120; border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; }
 .form-grid {
   display: grid;

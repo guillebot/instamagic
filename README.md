@@ -46,14 +46,16 @@ Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on
 ### Instagram Graph publish (human-gated)
 
 1. Convert the Instagram account to **Professional** (Business or Creator) and link it to a **Facebook Page**.
-2. Create a Meta app with Instagram Graph permissions (typically `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` — confirm current Meta docs).
-3. Open **Instagram** (`/instagram`) and connect:
-   - **Paste** a long-lived Page access token + IG business user id → **Save & fetch account** (token sealed in Postgres with `APP_SECRET`; profile JSON cached), or
-   - **Connect with Meta OAuth** when `META_APP_ID` / `META_APP_SECRET` are set (Valid OAuth Redirect URI = `{origin}/api/instagram/oauth/callback`), or
-   - Set `INSTAGRAM_PROVIDER=graph`, `INSTAGRAM_ACCESS_TOKEN`, and `INSTAGRAM_BUSINESS_ACCOUNT_ID` in host `.env` and restart (env overrides DB when both are set).
-4. **Test connection / Refresh account details** always shows a clear error if not configured (never a silent disabled click). Token stays masked in the UI.
-5. **Public image URL:** Meta’s servers must `GET` the JPEG. Set `PUBLIC_BASE_URL` to an **https** origin reachable from the public internet that fronts this API (or a tunnel). LAN-only stage (`instamagic.schimmel.homes` behind `lan-only`) is **not** enough for Meta. Publish mints a short-lived HMAC URL at `/api/public/publish-assets/{token}`.
-6. Flow: Queue → Approve → Generate/edit caption → **Publish to Instagram**. Gates re-run at publish time. The Instagram helper only inspects — it does not publish.
+2. Create a Meta app ([developers.facebook.com/apps](https://developers.facebook.com/apps/)):
+   - Add **Facebook Login**.
+   - Valid OAuth Redirect URI (stage): `https://instamagic.schimmel.homes/api/instagram/oauth/callback` (must match Traefik host; defaults from `FRONTEND_ORIGIN`, not `PUBLIC_BASE_URL`).
+   - Permissions: `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` (confirm current [Meta docs](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login)).
+   - In Development mode, use an app admin/tester; Live mode needs App Review for other users.
+3. On the host `.env` (chmod 600): set `META_APP_ID`, `META_APP_SECRET`, and `FRONTEND_ORIGIN` (stage already has the origin). Restart API. Do **not** paste tokens into chat.
+4. Open **Instagram** (`/instagram`) → **Connect with Instagram / Meta** (primary). Flow: Meta login → CSRF `state` → code exchange → long-lived user token → Page token + IG business account id → sealed in Postgres → account profile cached. Advanced collapse still allows paste; host `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_BUSINESS_ACCOUNT_ID` override DB when set.
+5. **Test connection / Refresh account details** shows a clear error if not configured. Token stays masked; never logged.
+6. **Public image URL (publish only):** Meta’s servers must `GET` the JPEG. Set `PUBLIC_BASE_URL` to a public **https** origin (or tunnel). LAN-only Traefik is enough for **OAuth login** (browser redirect) but **not** for Meta’s publish crawler. Publish mints `/api/public/publish-assets/{token}`.
+7. Flow: Queue → Approve → Generate/edit caption → **Publish to Instagram**. Gates re-run at publish time. The Instagram helper only inspects — it does not post.
 
 `AUTO_PUBLISH` defaults to `false`. Enabling it requires the exact ack `AUTO_PUBLISH_ACK=I_UNDERSTAND_AUTO_PUBLISH_RISKS`. Phase 2 still expects a human Publish click; auto-fire is reserved and not the default path. Compose hardcodes `AUTO_PUBLISH=false` on services.
 
@@ -63,7 +65,7 @@ Never commit tokens. For CI / local gate tests: `INSTAGRAM_PROVIDER=fake` and `G
 
 On `10.1.1.8` at `/opt/docker/instamagic`, behind Traefik as **https://instamagic.schimmel.homes** (LAN-only). Stage **pulls** images built by GitHub Actions (no `build:` on the host). From this repo: `scripts/deploy-stage.sh` (copies compose + env example only). Details and required `DOCKERHUB_*` settings in `docs/operations.md`.
 
-Put `GEMINI_API_KEY` (and optional Meta app / Instagram env tokens) only in the host `.env` (chmod 600). Prefer connecting Instagram via the in-app form on stage so tokens stay sealed in Postgres. Do not copy local Mac secrets to stage. For real Instagram publish from stage, also set a public `PUBLIC_BASE_URL` Meta can reach.
+Put `GEMINI_API_KEY` and `META_APP_ID` / `META_APP_SECRET` only in the host `.env` (chmod 600). Prefer **Connect with Instagram / Meta** on `/instagram` so tokens stay sealed in Postgres. Do not copy local Mac secrets to stage. For real Instagram publish from stage, also set a public `PUBLIC_BASE_URL` Meta can reach (OAuth itself works on LAN Traefik).
 
 Stop the stack when you are done:
 

@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # Optional Meta OAuth (Facebook Login → Page token + IG business account).
     meta_app_id: str = ""
     meta_app_secret: str = ""
-    # Defaults to {PUBLIC_BASE_URL|FRONTEND_ORIGIN}/api/instagram/oauth/callback
+    # Defaults to {FRONTEND_ORIGIN}/api/instagram/oauth/callback (not PUBLIC_BASE_URL).
     meta_oauth_redirect_uri: str = ""
 
     account_voice: str = (
