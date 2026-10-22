@@ -474,6 +474,41 @@ input, select, textarea {
 }
 .card { display: grid; grid-template-columns: 120px 1fr; gap: 12px; background: #1b1f25; border-radius: 12px; padding: 10px; }
 .card img { width: 120px; height: 120px; object-fit: cover; border-radius: 8px; }
+.candidates-page { padding-bottom: 96px; }
+.candidate-card {
+  grid-template-columns: auto 168px 1fr;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.candidate-card.candidate-selected { border-color: #7eb8d4; }
+.candidate-check { display: flex; align-items: flex-start; padding-top: 4px; }
+.candidate-thumb img,
+.candidate-thumb-empty {
+  width: 168px;
+  height: 168px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+  background: #0d0f12;
+}
+.candidate-thumb-empty { min-height: 168px; }
+.candidate-badges { font-size: 12px; color: #9a948a; margin: 4px 0; }
+.candidates-action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 18px;
+  background: #181b20ee;
+  border-top: 1px solid #2a2f36;
+  backdrop-filter: blur(8px);
+}
+.candidates-action-count { font-weight: 650; margin-right: 8px; }
 .login {
   min-height: 100vh;
   display: grid;

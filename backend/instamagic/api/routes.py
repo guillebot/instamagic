@@ -53,7 +53,11 @@ from instamagic.schemas.dto import (
     BlurOut,
     BlurStrengthIn,
     BlurSuggestIn,
+    CandidateBulkIn,
+    CandidateBulkItemResult,
+    CandidateBulkQueueResult,
     CandidateOut,
+    CandidatePage,
     CaptionIn,
     CaptionUpdate,
     CommentDraftIn,
@@ -154,6 +158,7 @@ from instamagic.services.posting.queue_schedule import (
 )
 from instamagic.services.posting.schedule_config import config_as_dict, config_view, update_config
 from instamagic.services.queues import snapshot_queues
+from instamagic.services.recommendations.candidates_bulk import bulk_enqueue, bulk_reject
 from instamagic.services.recommendations.curate import queue_picks, run_curation
 from instamagic.services.recommendations.gates import publishing_gate
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
@@ -1200,12 +1205,7 @@ def update_caption(
     return _caption_out(row)
 
 
-@router.get("/api/candidates", response_model=list[CandidateOut])
-def candidates(
-    limit: int = Query(default=20, ge=1, le=50),
-    _auth: None = Depends(require_session),
-    session: Session = db_dep,
-) -> list[CandidateOut]:
+def _candidate_inputs(session: Session) -> tuple[list[CandidateInput], dict[str, Image], dict[str, str | None]]:
     rows = session.scalars(
         select(Image)
         .where(Image.skip_reason.is_(None))
@@ -1217,6 +1217,8 @@ def candidates(
             selectinload(Image.crops),
             selectinload(Image.blurs),
             selectinload(Image.queue_items),
+            selectinload(Image.tags),
+            selectinload(Image.captions),
         )
     ).all()
     attested: dict[UUID, bool] = {}
@@ -1250,18 +1252,79 @@ def candidates(
         )
         images[str(image.id)] = image
         aspects[str(image.id)] = approved.aspect_ratio if approved else None
-    ranked = rank_candidates(inputs, limit=limit)
-    return [
-        CandidateOut(
-            image=_image_out(session, images[item.image_id]),
-            score=item.score,
-            reasons=item.reasons,
-            held_back=item.held_back,
-            crop_aspect=aspects.get(item.image_id),
-            model_state=images[item.image_id].model_state,
-        )
-        for item in ranked
+    return inputs, images, aspects
+
+
+def _candidate_out(session: Session, item, images: dict[str, Image], aspects: dict[str, str | None]) -> CandidateOut:
+    image = images[item.image_id]
+    queue_item = next(iter(image.queue_items), None) if image.queue_items else None
+    published = bool(queue_item and queue_item.state == QueueState.PUBLISHED.value)
+    gemini_status = getattr(image, "gemini_label_status", None)
+    return CandidateOut(
+        image=_image_out(session, image),
+        score=item.score,
+        reasons=item.reasons,
+        held_back=item.held_back,
+        crop_aspect=aspects.get(item.image_id),
+        model_state=image.model_state,
+        has_tags=bool(image.tags),
+        has_caption=bool(image.captions),
+        published=published,
+        gemini_label_status=str(gemini_status) if gemini_status else None,
+    )
+
+
+@router.get("/api/candidates", response_model=CandidatePage)
+def candidates(
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=5000),
+    exclude_queued: bool = Query(default=False),
+    exclude_published: bool = Query(default=False),
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> CandidatePage:
+    inputs, images, aspects = _candidate_inputs(session)
+    ranked = rank_candidates(inputs, limit=max(len(inputs), 1), offset=0)
+    filtered = []
+    for item in ranked:
+        image = images[item.image_id]
+        if exclude_queued and image.queue_items:
+            continue
+        if exclude_published:
+            queue_item = next(iter(image.queue_items), None) if image.queue_items else None
+            if queue_item and queue_item.state == QueueState.PUBLISHED.value:
+                continue
+        filtered.append(item)
+    page_items = filtered[offset : offset + limit]
+    next_offset = offset + limit if len(filtered) > offset + limit else None
+    return CandidatePage(
+        items=[_candidate_out(session, item, images, aspects) for item in page_items],
+        next_offset=next_offset,
+    )
+
+
+@router.post("/api/candidates/queue", response_model=CandidateBulkQueueResult)
+def candidates_bulk_queue(
+    body: CandidateBulkIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> CandidateBulkQueueResult:
+    raw = bulk_enqueue(session, body.image_ids, covering_blur_fn=_has_approved_covering_blur)
+    results = [
+        CandidateBulkItemResult(image_id=image_id, ok=ok, error=error) for image_id, ok, error in raw
     ]
+    queued_count = sum(1 for row in results if row.ok)
+    return CandidateBulkQueueResult(results=results, queued_count=queued_count)
+
+
+@router.post("/api/candidates/reject", response_model=list[CandidateBulkItemResult])
+def candidates_bulk_reject(
+    body: CandidateBulkIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> list[CandidateBulkItemResult]:
+    raw = bulk_reject(session, body.image_ids)
+    return [CandidateBulkItemResult(image_id=image_id, ok=ok, error=error) for image_id, ok, error in raw]
 
 
 @router.post("/api/curation", status_code=201)
