@@ -4,8 +4,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0013_blur_unlock"
-down_revision = "0012_carousel_posts"
+revision = "0016_blur_unlock"
+down_revision = "0015_comment_inbox"
 branch_labels = None
 depends_on = None
 
