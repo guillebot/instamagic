@@ -9,6 +9,13 @@ from collections.abc import Mapping
 from starlette.requests import Request
 
 from instamagic.config import Settings
+from instamagic.security.signing import (
+    PURPOSE_SESSION,
+    PURPOSE_SIGNED_PAYLOAD,
+    derive_signing_key,
+    hmac_sha256_hex,
+    verify_hmac_sha256_hex,
+)
 
 COOKIE_NAME = "instamagic_session"
 OAUTH_NONCE_COOKIE = "instamagic_ig_oauth_nonce"
@@ -23,9 +30,17 @@ def check_password(settings: Settings, password: str) -> bool:
     return hmac.compare_digest(expected, provided)
 
 
+def _session_key(settings: Settings) -> bytes:
+    return derive_signing_key(settings.app_secret, PURPOSE_SESSION)
+
+
+def _legacy_session_key(settings: Settings) -> bytes:
+    return settings.app_secret.encode("utf-8")
+
+
 def sign_session(settings: Settings) -> str:
     payload = str(int(time.time()) + settings.session_ttl_seconds)
-    signature = hmac.new(settings.app_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    signature = hmac_sha256_hex(_session_key(settings), payload)
     return f"{payload}.{signature}"
 
 
@@ -33,8 +48,10 @@ def session_is_valid(settings: Settings, token: str | None) -> bool:
     if not token or "." not in token:
         return False
     payload, signature = token.rsplit(".", 1)
-    expected = hmac.new(settings.app_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, signature):
+    if not (
+        verify_hmac_sha256_hex(_session_key(settings), payload, signature)
+        or verify_hmac_sha256_hex(_legacy_session_key(settings), payload, signature)
+    ):
         return False
     try:
         expires = int(payload)
@@ -43,11 +60,19 @@ def session_is_valid(settings: Settings, token: str | None) -> bool:
     return expires >= int(time.time())
 
 
+def _signed_payload_key(settings: Settings) -> bytes:
+    return derive_signing_key(settings.app_secret, PURPOSE_SIGNED_PAYLOAD)
+
+
+def _legacy_signed_payload_key(settings: Settings) -> bytes:
+    return settings.app_secret.encode("utf-8")
+
+
 def sign_payload(payload: str, settings: Settings, *, ttl_seconds: int = 600) -> str:
     """HMAC-sign an opaque payload with an absolute expiry (OAuth state, etc.)."""
     expires = str(int(time.time()) + max(60, ttl_seconds))
     body = f"{expires}.{payload}"
-    signature = hmac.new(settings.app_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+    signature = hmac_sha256_hex(_signed_payload_key(settings), body)
     return f"{body}.{signature}"
 
 
@@ -56,8 +81,10 @@ def verify_signed_payload(token: str | None, settings: Settings) -> str | None:
         return None
     expires_s, payload, signature = token.split(".", 2)
     body = f"{expires_s}.{payload}"
-    expected = hmac.new(settings.app_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, signature):
+    if not (
+        verify_hmac_sha256_hex(_signed_payload_key(settings), body, signature)
+        or verify_hmac_sha256_hex(_legacy_signed_payload_key(settings), body, signature)
+    ):
         return None
     try:
         expires = int(expires_s)
