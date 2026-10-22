@@ -36,7 +36,7 @@ def test_not_configured_fetch_raises() -> None:
         client.fetch_account_details()
         raise AssertionError("expected InstagramNotConfigured")
     except InstagramNotConfigured as exc:
-        assert "INSTAGRAM_ACCESS_TOKEN" in exc.detail
+        assert "Connect via Meta OAuth" in exc.detail
 
 
 def test_instagram_status_masks_and_lists_ids(client) -> None:

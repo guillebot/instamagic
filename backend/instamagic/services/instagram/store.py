@@ -17,11 +17,11 @@ from instamagic.services.instagram.client import (
     NotConfiguredInstagramClient,
     mask_access_token,
 )
+from instamagic.services.instagram.graph_constants import OAUTH_SCOPES
 from instamagic.services.instagram.oauth import (
     META_APP_DOCS_URL,
     META_APPS_DASHBOARD_URL,
     META_CREATE_APP_DOCS_URL,
-    OAUTH_SCOPES,
     MetaAppCredentials,
     oauth_available,
     oauth_redirect_uri,
@@ -37,6 +37,7 @@ class ResolvedCredentials:
     access_token: str
     business_account_id: str
     source: str  # env | database | fake
+    facebook_page_id: str | None = None
 
 
 def get_connection(session: Session) -> InstagramConnection | None:
@@ -73,10 +74,12 @@ def resolve_credentials(settings: Settings, session: Session | None) -> Resolved
         return None
     if not token:
         return None
+    page_id = (row.facebook_page_id or "").strip() or None
     return ResolvedCredentials(
         access_token=token,
         business_account_id=row.business_account_id.strip(),
         source="database",
+        facebook_page_id=page_id,
     )
 
 
@@ -114,6 +117,7 @@ def build_instagram_client(settings: Settings, session: Session | None = None) -
         access_token=creds.access_token,
         business_account_id=creds.business_account_id,
         graph_version=settings.instagram_graph_version,
+        facebook_page_id=creds.facebook_page_id,
     )
 
 
@@ -123,6 +127,7 @@ def save_credentials(
     *,
     access_token: str,
     business_account_id: str,
+    facebook_page_id: str | None = None,
 ) -> InstagramConnection:
     token = access_token.strip()
     account_id = business_account_id.strip()
@@ -135,6 +140,8 @@ def save_credentials(
     row = _ensure_row(session)
     row.access_token_ciphertext = seal(token, app_secret=settings.app_secret)
     row.business_account_id = account_id
+    page = (facebook_page_id or "").strip()
+    row.facebook_page_id = page if page else ""
     row.updated_at = datetime.now(UTC)
     session.commit()
     session.refresh(row)
@@ -265,7 +272,10 @@ def connection_status_fields(
         "credential_source": source,
         "auto_publish": settings.auto_publish,
         "public_base_url": settings.resolve_public_base_url(),
+        "publish_public_base_warning": settings.publish_public_base_warning(),
         "graph_version": settings.instagram_graph_version,
+        "meta_oauth_config_id_configured": bool(settings.meta_oauth_config_id.strip()),
+        "instagram_expected_username": settings.instagram_expected_username.strip() or None,
         "token_configured": bool(creds) and source != "none",
         "token_masked": token_masked,
         "business_account_id": business_id,

@@ -47,14 +47,17 @@ Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on
 
 1. Convert the Instagram account to **Professional** (Business or Creator) and link it to a **Facebook Page**.
 2. Create a Meta app ([developers.facebook.com/apps](https://developers.facebook.com/apps/)):
-   - Use case **Other** → type **Business** → add **Facebook Login**.
-   - Valid OAuth Redirect URI (stage): `https://instamagic.schimmel.homes/api/instagram/oauth/callback` (must match Traefik host; defaults from `FRONTEND_ORIGIN`, not `PUBLIC_BASE_URL`).
-   - Permissions: `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` (confirm current [Meta docs](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login)).
-   - In Development mode, use an app admin/tester; Live mode needs App Review for other users.
+   - App type **Business** → add **Facebook Login for Business** (Page-linked IG).
+   - **App Domains:** `schimmel.homes`
+   - **Valid OAuth Redirect URI:** `https://instamagic.schimmel.homes/api/instagram/oauth/callback` (defaults from `FRONTEND_ORIGIN`, not `PUBLIC_BASE_URL`).
+   - Permissions (when `META_OAUTH_CONFIG_ID` is unset): `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`, `business_management` — or set `META_OAUTH_CONFIG_ID` from the Login configuration in the App Dashboard.
+   - **Development** mode: app admins/testers only. **Live** + App Review for other users.
+   - Set `INSTAGRAM_GRAPH_VERSION=v25.0` (or newer supported version; default in repo).
+   - If you manage multiple Pages, set `INSTAGRAM_EXPECTED_USERNAME=foto.sch` (no `@`) so OAuth picks the right IG account.
 3. Open **Instagram** (`/instagram`) → paste **App ID** + **App Secret** from Settings → Basic → Save (sealed in Postgres; no `META_*` in `.env` required). Optional host env remains a fallback. Do **not** paste secrets into chat.
 4. Click **Connect with Instagram / Meta**. Flow: Meta login → CSRF `state` → code exchange → long-lived user token → Page token + IG business account id → sealed in Postgres → account profile cached. Advanced collapse still allows paste; host `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_BUSINESS_ACCOUNT_ID` override DB when set.
 5. **Test connection / Refresh account details** shows a clear error if not configured. Token stays masked; never logged.
-6. **Public image URL (publish only):** Meta’s servers must `GET` the JPEG. Set `PUBLIC_BASE_URL` to a public **https** origin (or tunnel). LAN-only Traefik is enough for **OAuth login** (browser redirect) but **not** for Meta’s publish crawler. Publish mints `/api/public/publish-assets/{token}`.
+6. **Public image URL (publish only):** Meta’s servers must `GET` the JPEG. On stage/production, set `PUBLIC_BASE_URL` to a public **https** origin (e.g. Cloudflare Tunnel) that forwards **only** `/api/public/publish-assets/*` to Instamagic. LAN-only Traefik (`FRONTEND_ORIGIN`) works for **OAuth login** but not for Meta’s publish crawler. The `/instagram` page warns when `PUBLIC_BASE_URL` is missing or equals the LAN UI host.
 7. Flow: Queue → Approve → Generate/edit caption → **Publish to Instagram**. Gates re-run at publish time. The Instagram helper only inspects — it does not post.
 
 `AUTO_PUBLISH` defaults to `false`. Enabling it requires the exact ack `AUTO_PUBLISH_ACK=I_UNDERSTAND_AUTO_PUBLISH_RISKS`. Phase 2 still expects a human Publish click; auto-fire is reserved and not the default path. Compose hardcodes `AUTO_PUBLISH=false` on services.

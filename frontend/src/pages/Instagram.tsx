@@ -26,9 +26,21 @@ export function InstagramPage() {
     queryFn: () => api<InstagramConnectionStatus>("/api/instagram/status"),
   });
 
+  const pendingToken = oauthParams.get("pending");
+  const oauthChoose = oauthParams.get("oauth") === "choose" && pendingToken;
+
+  const pendingPages = useQuery({
+    queryKey: ["instagram-oauth-pending", pendingToken],
+    enabled: Boolean(oauthChoose && pendingToken),
+    queryFn: () =>
+      api<{ options: { page_id: string; page_name: string; ig_username: string | null }[] }>(
+        `/api/instagram/oauth/pending?pending=${encodeURIComponent(pendingToken ?? "")}`,
+      ),
+  });
+
   useEffect(() => {
     const oauth = oauthParams.get("oauth");
-    if (!oauth) return;
+    if (!oauth || oauth === "choose") return;
     if (oauth === "ok") {
       setBannerKind("ok");
       setBanner("Connected via Meta — credentials sealed and account fetched.");
@@ -47,7 +59,10 @@ export function InstagramPage() {
       credential_source: body.credential_source,
       auto_publish: body.auto_publish,
       public_base_url: body.public_base_url,
+      publish_public_base_warning: body.publish_public_base_warning,
       graph_version: body.graph_version,
+      instagram_expected_username: body.instagram_expected_username,
+      meta_oauth_config_id_configured: body.meta_oauth_config_id_configured,
       token_configured: body.token_configured,
       token_masked: body.token_masked,
       business_account_id: body.business_account_id,
@@ -68,6 +83,25 @@ export function InstagramPage() {
       env_overrides_database: body.env_overrides_database,
     } satisfies InstagramConnectionStatus);
   };
+
+  const selectPage = useMutation({
+    mutationFn: (pageId: string) =>
+      api<InstagramRefreshResult>("/api/instagram/oauth/select-page", {
+        method: "POST",
+        body: JSON.stringify({ pending_token: pendingToken, page_id: pageId }),
+      }),
+    onSuccess: async (body) => {
+      await applyStatus(body);
+      setBannerKind("ok");
+      const user = body.account?.username ? `@${body.account.username}` : "Instagram account";
+      setBanner(`Connected ${user} via Meta — credentials sealed.`);
+      window.history.replaceState({}, "", "/instagram");
+    },
+    onError: (err) => {
+      setBannerKind("error");
+      setBanner(err instanceof ApiError ? err.message : "Could not finish Meta OAuth.");
+    },
+  });
 
   const refresh = useMutation({
     mutationFn: () => api<InstagramRefreshResult>("/api/instagram/account", { method: "POST" }),
@@ -221,7 +255,33 @@ export function InstagramPage() {
       </p>
 
       {banner ? <p className={bannerKind === "ok" ? "ok" : "error"}>{banner}</p> : null}
+      {status.data?.publish_public_base_warning ? (
+        <p className="error">{status.data.publish_public_base_warning}</p>
+      ) : null}
       {statusError ? <p className="error">{statusError}</p> : null}
+
+      {oauthChoose ? (
+        <section className="panel ig-connect-panel">
+          <h2>Choose Facebook Page</h2>
+          <p className="muted">
+            Multiple Pages with Instagram accounts were found. Pick the Page linked to your professional
+            account.
+          </p>
+          {pendingPages.isLoading ? <p className="muted">Loading choices…</p> : null}
+          {pendingPages.data?.options.map((option) => (
+            <button
+              key={option.page_id}
+              type="button"
+              className="button"
+              disabled={selectPage.isPending}
+              onClick={() => selectPage.mutate(option.page_id)}
+            >
+              {option.page_name}
+              {option.ig_username ? ` (@${option.ig_username})` : ""}
+            </button>
+          ))}
+        </section>
+      ) : null}
 
       <section className="panel ig-connect-panel">
         <h2>1. Meta Developer App</h2>

@@ -11,8 +11,8 @@ from instamagic.config import Settings, get_settings
 from instamagic.db import get_engine, reset_engine
 from instamagic.main import create_app
 from instamagic.models import Base
+from instamagic.services.instagram.graph_constants import OAUTH_SCOPES
 from instamagic.services.instagram.oauth import (
-    OAUTH_SCOPES,
     MetaAppCredentials,
     OAuthTokens,
     build_authorize_url,
@@ -83,7 +83,7 @@ def _settings(**overrides: str) -> Settings:
         "public_base_url": "https://tunnel.example.invalid",
         "meta_app_id": "app-id-123",
         "meta_app_secret": "app-secret-456",
-        "instagram_graph_version": "v21.0",
+        "instagram_graph_version": "v25.0",
     }
     base.update(overrides)
     return Settings(**base)
@@ -107,7 +107,7 @@ def _meta() -> MetaAppCredentials:
 
 def test_build_authorize_url_includes_signed_state_and_scopes() -> None:
     settings = _settings()
-    url, state = build_authorize_url(settings, _meta())
+    url, state, nonce = build_authorize_url(settings, _meta())
     parsed = urlparse(url)
     assert parsed.netloc == "www.facebook.com"
     qs = parse_qs(parsed.query)
@@ -118,7 +118,7 @@ def test_build_authorize_url_includes_signed_state_and_scopes() -> None:
     assert qs["scope"] == [OAUTH_SCOPES]
     assert qs["response_type"] == ["code"]
     assert qs["state"] == [state]
-    verify_oauth_state(state, settings)
+    verify_oauth_state(state, settings, nonce_cookie=nonce)
     assert "app-secret" not in url.lower()
 
 
@@ -150,7 +150,9 @@ def test_status_exposes_oauth_setup_fields_without_secrets(graph_client) -> None
 
 def test_oauth_callback_seals_credentials(meta_client, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = get_settings()
-    state = sign_payload("ig-oauth|nonce", settings)
+    nonce = "oauth-test-nonce-value"
+    state = sign_payload(f"ig-oauth|{nonce}", settings)
+    meta_client.cookies.set("instamagic_ig_oauth_nonce", nonce)
 
     def fake_exchange(settings_arg, meta=None, *, code: str) -> OAuthTokens:
         assert code == "meta-code"
@@ -184,9 +186,12 @@ def test_oauth_callback_seals_credentials(meta_client, monkeypatch: pytest.Monke
         def publish_image(self, **kwargs):
             raise AssertionError("publish must not run")
 
+    def fake_exchange_pages(settings_arg, meta=None, *, code: str):
+        return fake_exchange(settings_arg, meta, code=code), None, None
+
     monkeypatch.setattr(
-        "instamagic.api.routes.exchange_code_for_credentials",
-        fake_exchange,
+        "instamagic.api.routes.exchange_code_for_credentials_with_pages",
+        fake_exchange_pages,
     )
     monkeypatch.setattr(
         "instamagic.services.instagram.store.GraphInstagramClient",
@@ -218,7 +223,7 @@ def test_oauth_callback_rejects_bad_state(meta_client, monkeypatch: pytest.Monke
     def boom(*args, **kwargs):
         raise AssertionError("exchange must not run with bad state")
 
-    monkeypatch.setattr("instamagic.api.routes.exchange_code_for_credentials", boom)
+    monkeypatch.setattr("instamagic.api.routes.exchange_code_for_credentials_with_pages", boom)
     response = meta_client.get(
         "/api/instagram/oauth/callback",
         params={"code": "meta-code", "state": "not-a-valid-state"},
