@@ -24,6 +24,8 @@ from instamagic.models import (
     BlurCover,
     Caption,
     CaptionStatus,
+    CommentDraft,
+    CommentDraftStatus,
     ContentTag,
     CropSuggestion,
     GeminiRequest,
@@ -36,6 +38,7 @@ from instamagic.models import (
     ProcessingJob,
     PublishingQueueItem,
     QueueState,
+    RelatedAccount,
     SafetyState,
     TagSource,
 )
@@ -47,17 +50,22 @@ from instamagic.schemas.dto import (
     CandidateOut,
     CaptionIn,
     CaptionUpdate,
+    CommentDraftIn,
+    CommentDraftUpdate,
     CropApproveIn,
     CropOut,
     FolderListing,
+    HashtagIn,
     ImageOut,
     ImagePage,
     JobOut,
     LibraryIn,
     LoginIn,
+    PublishIn,
     QueueIn,
     QueuesOut,
     RatingIn,
+    RelatedAccountIn,
     TagIn,
 )
 from instamagic.services.blurs.generator import (
@@ -68,6 +76,7 @@ from instamagic.services.blurs.generator import (
 )
 from instamagic.services.crops.generator import validate_crop_window, window_excludes_unsafe
 from instamagic.services.gemini.context import build_context
+from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.geometry import Box
 from instamagic.services.images.derivatives import (
     crop_image,
@@ -82,6 +91,8 @@ from instamagic.services.images.paths import (
     safe_join,
 )
 from instamagic.services.images.presentation import effective_state
+from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
+from instamagic.services.instagram.publish import publish_queue_item
 from instamagic.services.pipeline import (
     clear_exposed_boxes,
     duplicate_count,
@@ -204,7 +215,10 @@ def config(request: Request, _auth: None = Depends(require_session), settings: S
     return {
         "gemini_policy": settings.gemini_image_policy,
         "gemini_configured": settings.gemini_provider == "fake" or bool(settings.gemini_api_key),
-        "auto_publish": False,
+        "auto_publish": settings.auto_publish,
+        "instagram_configured": settings.instagram_configured(),
+        "instagram_provider": settings.instagram_provider,
+        "account_voice": settings.account_voice,
         "detector_available": bool(classifier.available()),
         "suggested_library_root": settings.suggested_library_root,
         "attestation_statement": ATTESTATION_STATEMENT,
@@ -841,6 +855,32 @@ def approve_queue_item(item_id: UUID, _auth: None = Depends(require_session), se
     return _queue_out(session, item)
 
 
+@router.post("/api/queue/{item_id}/publish")
+def publish_queue(
+    item_id: UUID,
+    body: PublishIn,
+    request: Request,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Human-gated Instagram publish. Re-checks attestation / DO_NOT_POST / crop gates."""
+    outcome = publish_queue_item(
+        session,
+        settings,
+        request.app.state.instagram,
+        item_id=item_id,
+        caption_id=body.caption_id,
+    )
+    item = session.get(PublishingQueueItem, outcome.queue_item_id)
+    assert item is not None
+    payload = _queue_out(session, item)
+    payload["ig_media_id"] = outcome.ig_media_id
+    payload["permalink"] = outcome.permalink
+    payload["published_caption"] = outcome.caption
+    return payload
+
+
 @router.post("/api/images/{image_id}/captions", status_code=201)
 def create_captions(
     image_id: UUID,
@@ -875,20 +915,23 @@ def create_captions(
         description = f"Approved {approved.aspect_ratio} crop of a {composition} photograph."
     elif covering_blur and image.model_state == SafetyState.SAFE_AFTER_CROP.value:
         description = f"A {composition} photograph with approved covering blur."
-    context = build_context(
-        attested=is_attested(session, image.library_id),
-        human_rating=image.human_rating,
-        model_state=image.model_state,
-        needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-        has_approved_crop=approved is not None,
-        has_approved_covering_blur=covering_blur,
-        policy=settings.gemini_image_policy,
-        operator_confirmed=body.confirmed,
-        content_tags=tags,
-        composition=composition,
-        mood=", ".join(mood_names) if mood_names else "unspecified",
-        safe_description=description,
-        crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
+    context = append_voice_to_context(
+        build_context(
+            attested=is_attested(session, image.library_id),
+            human_rating=image.human_rating,
+            model_state=image.model_state,
+            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
+            has_approved_crop=approved is not None,
+            has_approved_covering_blur=covering_blur,
+            policy=settings.gemini_image_policy,
+            operator_confirmed=body.confirmed,
+            content_tags=tags,
+            composition=composition,
+            mood=", ".join(mood_names) if mood_names else "unspecified",
+            safe_description=description,
+            crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
+        ),
+        account_voice=settings.account_voice,
     )
     pixels = _preview_bytes(settings, image, approved)
     audit = GeminiRequest(
@@ -1021,11 +1064,261 @@ def candidates(
 
 
 @router.get("/api/instagram/status")
-def instagram_status(_auth: None = Depends(require_session)) -> dict[str, object]:
-    from instamagic.services.instagram.client import InstagramClient
+def instagram_status(
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    client = request.app.state.instagram
+    return {
+        "configured": bool(client.configured()),
+        "provider": settings.instagram_provider,
+        "auto_publish": settings.auto_publish,
+        "public_base_url": settings.resolve_public_base_url(),
+    }
 
-    client = InstagramClient()
-    return {"configured": client.configured(), "auto_publish": False}
+
+@router.get("/api/public/publish-assets/{token}")
+def public_publish_asset(token: str, settings: Settings = Depends(settings_dep)) -> FileResponse:
+    """Unauthenticated short-lived JPEG for Meta's crawler. HMAC-gated; no session cookie."""
+    asset = parse_publish_token(token, secret=settings.app_secret)
+    path = resolve_publish_file(settings.derivatives_root, asset)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
+
+
+@router.get("/api/related-accounts")
+def list_related_accounts(_auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
+    rows = session.scalars(select(RelatedAccount).order_by(RelatedAccount.handle.asc())).all()
+    return [_related_out(row) for row in rows]
+
+
+@router.post("/api/related-accounts", status_code=201)
+def create_related_account(
+    body: RelatedAccountIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    existing = session.scalar(select(RelatedAccount).where(RelatedAccount.handle == body.handle))
+    if existing is not None:
+        raise NotAllowed("That handle is already on the research list.")
+    row = RelatedAccount(
+        handle=body.handle,
+        display_name=(body.display_name or "").strip() or None,
+        profile_url=(body.profile_url or "").strip() or None,
+        notes=(body.notes or "").strip() or None,
+        why_relevant=(body.why_relevant or "").strip() or None,
+    )
+    session.add(row)
+    session.commit()
+    return _related_out(row)
+
+
+@router.patch("/api/related-accounts/{account_id}")
+def update_related_account(
+    account_id: UUID,
+    body: RelatedAccountIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    row = session.get(RelatedAccount, account_id)
+    if row is None:
+        raise NotFound("Related account was not found.")
+    clash = session.scalar(
+        select(RelatedAccount).where(RelatedAccount.handle == body.handle, RelatedAccount.id != account_id)
+    )
+    if clash is not None:
+        raise NotAllowed("That handle is already on the research list.")
+    row.handle = body.handle
+    row.display_name = (body.display_name or "").strip() or None
+    row.profile_url = (body.profile_url or "").strip() or None
+    row.notes = (body.notes or "").strip() or None
+    row.why_relevant = (body.why_relevant or "").strip() or None
+    session.commit()
+    return _related_out(row)
+
+
+@router.delete("/api/related-accounts/{account_id}", status_code=204)
+def delete_related_account(
+    account_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> Response:
+    row = session.get(RelatedAccount, account_id)
+    if row is None:
+        raise NotFound("Related account was not found.")
+    session.delete(row)
+    session.commit()
+    return Response(status_code=204)
+
+
+@router.post("/api/comment-drafts", status_code=201)
+def create_comment_drafts(
+    body: CommentDraftIn,
+    request: Request,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> list[dict[str, object]]:
+    """Assisted reply drafts only — never posted to Instagram by the API."""
+    image = None
+    research = ""
+    if body.image_id is not None:
+        image = _load_image(session, body.image_id)
+    related = None
+    if body.related_account_id is not None:
+        related = session.get(RelatedAccount, body.related_account_id)
+        if related is None:
+            raise NotFound("Related account was not found.")
+        research = " ".join(part for part in [related.why_relevant, related.notes] if part)
+    if image is None:
+        # Synthetic minimal context when drafting against a related account only.
+        context = append_voice_to_context(
+            build_context(
+                attested=True,
+                human_rating=HumanRating.SAFE.value,
+                model_state=SafetyState.SAFE.value,
+                needs_crop=False,
+                has_approved_crop=False,
+                policy="text_only",
+                operator_confirmed=True,
+                content_tags=[],
+                composition="unspecified",
+                mood="unspecified",
+                safe_description="Operator research drafting; no photo attached.",
+                crop=None,
+            ),
+            account_voice=settings.account_voice,
+            research_notes=research,
+        )
+    else:
+        approved = next((crop for crop in image.crops if crop.approved), None)
+        covering_blur = _has_approved_covering_blur(session, image)
+        tags = list(
+            session.scalars(
+                select(ContentTag.name).join(ImageTag, ImageTag.tag_id == ContentTag.id).where(ImageTag.image_id == image.id)
+            ).all()
+        )
+        mood_names = [tag for tag in tags if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}]
+        composition = image.orientation or "unknown orientation"
+        context = append_voice_to_context(
+            build_context(
+                attested=is_attested(session, image.library_id),
+                human_rating=image.human_rating,
+                model_state=image.model_state,
+                needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
+                has_approved_crop=approved is not None,
+                has_approved_covering_blur=covering_blur,
+                policy="text_only",
+                operator_confirmed=body.confirmed or settings.gemini_image_policy != "manual_only",
+                content_tags=tags,
+                composition=composition,
+                mood=", ".join(mood_names) if mood_names else "unspecified",
+                safe_description=f"A {composition} photograph.",
+                crop=None,
+            ),
+            account_voice=settings.account_voice,
+            research_notes=research,
+        )
+    target = body.target_context.strip()
+    if related is not None and not target:
+        target = f"Reply in conversation with @{related.handle}"
+    if not target:
+        target = "General thoughtful reply about photographic craft."
+    try:
+        batch = request.app.state.growth.generate_comment_drafts(
+            context,
+            target_context=target,
+            account_voice=settings.account_voice,
+        )
+    except (GeminiBlocked, NotConfigured):
+        raise
+    except Exception:
+        raise NotConfigured("Gemini request failed.") from None
+    created = []
+    for draft in batch.drafts:
+        row = CommentDraft(
+            image_id=image.id if image else None,
+            related_account_id=related.id if related else None,
+            target_context=target,
+            text=draft.text,
+            status=CommentDraftStatus.DRAFT.value,
+        )
+        session.add(row)
+        created.append(row)
+    session.commit()
+    return [_comment_draft_out(row) for row in created]
+
+
+@router.get("/api/comment-drafts")
+def list_comment_drafts(_auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
+    rows = session.scalars(select(CommentDraft).order_by(CommentDraft.created_at.desc()).limit(100)).all()
+    return [_comment_draft_out(row) for row in rows]
+
+
+@router.patch("/api/comment-drafts/{draft_id}")
+def update_comment_draft(
+    draft_id: UUID,
+    body: CommentDraftUpdate,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    allowed = {CommentDraftStatus.DRAFT.value, CommentDraftStatus.COPIED.value, CommentDraftStatus.DISCARDED.value}
+    if body.status not in allowed:
+        raise HTTPException(status_code=400, detail="Status must be draft, copied, or discarded.")
+    row = session.get(CommentDraft, draft_id)
+    if row is None:
+        raise NotFound("Comment draft was not found.")
+    row.status = body.status
+    if body.text is not None and body.text.strip():
+        row.text = body.text.strip()
+    session.commit()
+    return _comment_draft_out(row)
+
+
+@router.post("/api/images/{image_id}/hashtags")
+def suggest_hashtags(
+    image_id: UUID,
+    body: HashtagIn,
+    request: Request,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    _ = body.confirmed
+    image = _load_image(session, image_id)
+    approved = next((crop for crop in image.crops if crop.approved), None)
+    covering_blur = _has_approved_covering_blur(session, image)
+    tags = list(
+        session.scalars(
+            select(ContentTag.name).join(ImageTag, ImageTag.tag_id == ContentTag.id).where(ImageTag.image_id == image.id)
+        ).all()
+    )
+    composition = image.orientation or "unknown orientation"
+    context = append_voice_to_context(
+        build_context(
+            attested=is_attested(session, image.library_id),
+            human_rating=image.human_rating,
+            model_state=image.model_state,
+            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
+            has_approved_crop=approved is not None,
+            has_approved_covering_blur=covering_blur,
+            policy="text_only",
+            operator_confirmed=True,
+            content_tags=tags,
+            composition=composition,
+            mood="unspecified",
+            safe_description=f"A {composition} photograph.",
+            crop=None,
+        ),
+        account_voice=settings.account_voice,
+    )
+    try:
+        suggestion = request.app.state.growth.suggest_hashtags(context, account_voice=settings.account_voice)
+    except (GeminiBlocked, NotConfigured):
+        raise
+    except Exception:
+        raise NotConfigured("Gemini request failed.") from None
+    return {"tags": suggestion.tags}
 
 
 def _crop_out(image: Image, crop: CropSuggestion) -> CropOut:
@@ -1152,8 +1445,11 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "id": item.id,
         "state": item.state,
         "crop_id": item.crop_id,
+        "caption_id": item.caption_id,
         "created_at": item.created_at,
         "approved_at": item.approved_at,
+        "published_at": item.published_at,
+        "last_error": item.last_error,
         "image": _image_out(session, image).model_dump(mode="json"),
     }
 
@@ -1164,6 +1460,31 @@ def _caption_out(row: Caption) -> dict[str, object]:
         "image_id": row.image_id,
         "style": row.style,
         "language": row.language,
+        "text": row.text,
+        "status": row.status,
+        "created_at": row.created_at,
+    }
+
+
+def _related_out(row: RelatedAccount) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "handle": row.handle,
+        "display_name": row.display_name,
+        "profile_url": row.profile_url,
+        "notes": row.notes,
+        "why_relevant": row.why_relevant,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _comment_draft_out(row: CommentDraft) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "image_id": row.image_id,
+        "related_account_id": row.related_account_id,
+        "target_context": row.target_context,
         "text": row.text,
         "status": row.status,
         "created_at": row.created_at,

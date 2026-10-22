@@ -126,9 +126,11 @@ def test_path_like_tags_rejected(client) -> None:
     assert bad.status_code == 422
 
 
-def test_auto_publish_always_false_in_config(client) -> None:
+def test_auto_publish_defaults_false_in_config(client) -> None:
     login(client)
     config = client.get("/api/config").json()
     assert config["auto_publish"] is False
+    assert config["instagram_configured"] is True  # fake provider in tests
     status = client.get("/api/instagram/status").json()
     assert status["auto_publish"] is False
+    assert status["configured"] is True

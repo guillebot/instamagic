@@ -13,6 +13,7 @@ def _base(**overrides: object) -> dict[str, object]:
         "app_secret": "test-secret-value-123456",
         "safety_classifier": "fake",
         "gemini_provider": "fake",
+        "instagram_provider": "fake",
         "auto_publish": False,
         "environment": "local",
         "bind_host": "127.0.0.1",
@@ -22,9 +23,13 @@ def _base(**overrides: object) -> dict[str, object]:
     return data
 
 
-def test_auto_publish_cannot_be_enabled() -> None:
+def test_auto_publish_requires_ack() -> None:
     with pytest.raises(ValidationError, match="AUTO_PUBLISH"):
-        Settings(**_base(auto_publish=True))
+        Settings(**_base(auto_publish=True, auto_publish_ack=""))
+    from instamagic.config import AUTO_PUBLISH_ACK_PHRASE
+
+    enabled = Settings(**_base(auto_publish=True, auto_publish_ack=AUTO_PUBLISH_ACK_PHRASE, instagram_provider="fake"))
+    assert enabled.auto_publish is True
 
 
 def test_fake_classifier_refused_in_stage_and_production() -> None:

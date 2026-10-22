@@ -59,6 +59,44 @@ class QueueIn(BaseModel):
     image_id: UUID
 
 
+class PublishIn(BaseModel):
+    caption_id: UUID
+
+
+class RelatedAccountIn(BaseModel):
+    handle: str = Field(min_length=1, max_length=64)
+    display_name: str | None = Field(default=None, max_length=200)
+    profile_url: str | None = Field(default=None, max_length=512)
+    notes: str | None = Field(default=None, max_length=4000)
+    why_relevant: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("handle")
+    @classmethod
+    def clean_handle(cls, value: str) -> str:
+        text = value.strip().lstrip("@").lower()
+        if not text or any(ch in text for ch in "/\\\x00\n\r\t "):
+            raise ValueError("Handle is not valid.")
+        if ".." in text:
+            raise ValueError("Handle is not valid.")
+        return text[:64]
+
+
+class CommentDraftIn(BaseModel):
+    image_id: UUID | None = None
+    related_account_id: UUID | None = None
+    target_context: str = Field(default="", max_length=2000)
+    confirmed: bool = False
+
+
+class CommentDraftUpdate(BaseModel):
+    status: str
+    text: str | None = None
+
+
+class HashtagIn(BaseModel):
+    confirmed: bool = False
+
+
 class CropOut(BaseModel):
     id: UUID
     x: int

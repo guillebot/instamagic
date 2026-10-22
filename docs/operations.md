@@ -35,7 +35,7 @@ Platform: `linux/amd64` only (stage host is amd64; Apple Silicon local builds mu
 
 Compose publishes frontend `127.0.0.1:5173`, API `127.0.0.1:8000`, Postgres `127.0.0.1:5432`, and Redis `127.0.0.1:6379`. Container processes set `ALLOW_CONTAINER_BIND=true` so they can listen on `0.0.0.0` inside the bridge network. Do not publish those ports on `0.0.0.0`.
 
-`AUTO_PUBLISH=false` is set again on the services. Startup exits if the value is true.
+`AUTO_PUBLISH=false` is hardcoded on Compose services. Startup refuses `AUTO_PUBLISH=true` unless `AUTO_PUBLISH_ACK=I_UNDERSTAND_AUTO_PUBLISH_RISKS`. Prefer human Publish in the Queue UI.
 
 ## Stage (LAN host)
 
@@ -96,7 +96,17 @@ Frontend nginx proxies `/api`, `/health`, and `/ready` to the Compose service na
 | Derivatives | Docker volume `derivatives` | Writable by `APP_UID`. Safe to delete; scan again to rebuild |
 | Postgres | Volume `postgres_data` | `scripts/backup-db.sh` writes `data/backups/` |
 | Weights | `./models` on host → `/models` | Not baked into the image; checksum via `SAFETY_MODEL_SHA256` |
-| Secrets | `.env`, gitignored | Password, app secret, Postgres password, optional Gemini key |
+| Secrets | `.env`, gitignored | Password, app secret, Postgres password, optional Gemini key, Instagram Graph token |
+
+## Phase 2 env (stage host `.env`)
+
+| Variable | Notes |
+|---|---|
+| `GEMINI_API_KEY` | Live captions / drafts. Empty → clear 503 on generate. |
+| `GEMINI_IMAGE_POLICY` | Default `text_only`. |
+| `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_BUSINESS_ACCOUNT_ID` | Graph publish. Never log. |
+| `PUBLIC_BASE_URL` | Public https Meta can fetch. LAN-only Traefik is insufficient for publish. |
+| `AUTO_PUBLISH` | Keep `false` on stage. |
 
 Logs are JSON. The logger redacts fields whose names contain password, token, secret, authorization, or api_key. Do not log image bodies.
 

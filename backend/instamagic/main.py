@@ -11,7 +11,13 @@ from instamagic.config import get_settings
 from instamagic.db import get_engine, session_factory
 from instamagic.errors import AppError
 from instamagic.logging_config import configure_logging, get_logger
-from instamagic.services.factory import build_classifier, build_face_detector, build_gemini
+from instamagic.services.factory import (
+    build_classifier,
+    build_face_detector,
+    build_gemini,
+    build_growth,
+    build_instagram,
+)
 from instamagic.services.pipeline import seed_tags
 
 
@@ -33,6 +39,8 @@ async def lifespan(app: FastAPI):
     app.state.classifier = classifier
     app.state.face_detector = build_face_detector(settings)
     app.state.gemini = build_gemini(settings)
+    app.state.growth = build_growth(settings)
+    app.state.instagram = build_instagram(settings)
     app.state.login_failures = {}
     session = session_factory()()
     try:
@@ -45,6 +53,8 @@ async def lifespan(app: FastAPI):
         policy=settings.gemini_image_policy,
         detector_available=bool(classifier.available()),
         cookie_secure=settings.session_cookie_secure(),
+        instagram_configured=settings.instagram_configured(),
+        auto_publish=settings.auto_publish,
     )
     yield
     get_engine().dispose()
@@ -57,7 +67,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
     app.include_router(router)

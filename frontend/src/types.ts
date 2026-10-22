@@ -143,13 +143,38 @@ export type CandidateItem = {
 export type QueueItem = {
   id: string;
   state: string;
+  crop_id?: string | null;
+  caption_id?: string | null;
+  published_at?: string | null;
+  last_error?: string | null;
   image: ImageItem;
+};
+
+export type RelatedAccountItem = {
+  id: string;
+  handle: string;
+  display_name: string | null;
+  profile_url: string | null;
+  notes: string | null;
+  why_relevant: string | null;
+};
+
+export type CommentDraftItem = {
+  id: string;
+  image_id: string | null;
+  related_account_id: string | null;
+  target_context: string;
+  text: string;
+  status: string;
 };
 
 export type AppConfig = {
   gemini_policy: string;
   gemini_configured: boolean;
   auto_publish: boolean;
+  instagram_configured?: boolean;
+  instagram_provider?: string;
+  account_voice?: string;
   detector_available: boolean;
   suggested_library_root: string;
   attestation_statement: string;

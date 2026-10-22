@@ -24,7 +24,9 @@ Uvicorn loads `instamagic.main:create_app` with `--factory`. Importing the packa
 - Originals are mounted read-only. The browser and Gemini receive EXIF-stripped derivatives only. GPS is `has_gps`, never coordinates. Default `GEMINI_IMAGE_POLICY` is `text_only`.
 - RQ with queues `io` and `ml`, not Celery. `PIPELINE_MODE=inline` runs the scan in the API process for tests and the fixture demo. `queue` enqueues it.
 - One password, HMAC session cookie, bind `127.0.0.1` unless `ALLOW_CONTAINER_BIND=true` inside Compose. Published ports stay on `127.0.0.1`.
-- Instagram Graph API, calendar drag-and-drop, Reels, Stories, comment inbox, experiments, and dashboards are not in this build. `services/instagram/client.py` always raises `InstagramNotConfigured`.
+- Instagram publish uses the official Graph Content Publishing API only (`services/instagram/client.py`). Human-gated by default (`AUTO_PUBLISH=false`). Fake provider for CI.
+- Related accounts and comment drafts are research / assisted copy-paste. No follow, like, or comment automation.
+- Calendar drag-and-drop, Reels, Stories, comment inbox sync, experiments, and dashboards are still later.
 
 This is one local operator, not a multi-replica platform service. There is no SSO, no second replica, and no shared secret store beyond `.env` on this machine.
 
@@ -52,7 +54,7 @@ Tests use SQLite and the fake classifier. They do not download weights and they 
 
 ## Still later
 
-CSV or JSON metric import is the first follow-up, so ranking can use real performance without a Meta app review. After that: official publishing for a Professional account with human approval, comment inbox, experiments, reference accounts, calendar scheduling, embedding clusters, and dashboard charts. `ImageEmbedding`, `InstagramPost`, and `InstagramMetrics` exist so those can land without a new identity model. They have no product UI.
+CSV or JSON metric import so ranking can use real performance without waiting on insights scopes. Then: comment inbox sync (read-only), experiments, calendar scheduling (Meta schedule is limited for organic IG feed), Reels/Stories, embedding clusters, and dashboard charts. `ImageEmbedding` and `InstagramMetrics` remain mostly unused by product UI.
 
 ## Review before real photos
 

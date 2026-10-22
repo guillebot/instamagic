@@ -3,7 +3,6 @@ from uuid import UUID
 
 from instamagic.db import session_factory
 from instamagic.models import Image as ImageRow
-from instamagic.services.instagram.client import InstagramClient
 from PIL import Image, ImageDraw
 from tests.conftest import login
 
@@ -149,10 +148,13 @@ def _marked(path: Path, color: tuple[int, int, int], box: tuple[int, int, int, i
     image.save(path, format="JPEG", quality=90)
 
 
-def test_instagram_client_is_not_configured() -> None:
-    client = InstagramClient()
+def test_instagram_not_configured_client_refuses_publish() -> None:
+    from instamagic.services.instagram.client import NotConfiguredInstagramClient
+
+    client = NotConfiguredInstagramClient()
+    assert client.configured() is False
     try:
-        client.fetch_media()
+        client.publish_image(image_url="https://example.test/a.jpg", caption="x")
         raise AssertionError("expected not configured")
     except Exception as exc:
-        assert "not wired" in str(exc).lower() or exc.__class__.__name__ == "InstagramNotConfigured"
+        assert exc.__class__.__name__ == "InstagramNotConfigured"

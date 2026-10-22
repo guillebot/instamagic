@@ -4,6 +4,7 @@ import { api } from "./api";
 import { LoginPage } from "./pages/Login";
 import { CandidatesPage } from "./pages/Candidates";
 import { QueuePage } from "./pages/Queue";
+import { RelatedAccountsPage } from "./pages/RelatedAccounts";
 import { ReviewPage } from "./pages/Review";
 import { Route, Routes } from "react-router-dom";
 
@@ -32,6 +33,7 @@ function Shell() {
           </NavLink>
           <NavLink to="/queue">Queue</NavLink>
           <NavLink to="/candidates">Next</NavLink>
+          <NavLink to="/related">Related</NavLink>
           <button
             className="ghost"
             onClick={() => {
@@ -55,6 +57,7 @@ export function App() {
         <Route path="/" element={<ReviewPage />} />
         <Route path="/queue" element={<QueuePage />} />
         <Route path="/candidates" element={<CandidatesPage />} />
+        <Route path="/related" element={<RelatedAccountsPage />} />
       </Route>
     </Routes>
   );

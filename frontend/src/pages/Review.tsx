@@ -1,6 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FormEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
 import {
@@ -53,6 +62,13 @@ const EMPTY_FILTERS: Filters = {
 };
 
 const RATINGS: Record<string, string> = { "1": "reject", "2": "review", "3": "safe", "4": "excellent" };
+const RATING_KEYS = [
+  { key: "1", rating: "reject", label: "Reject" },
+  { key: "2", rating: "review", label: "Review" },
+  { key: "3", rating: "safe", label: "Safe" },
+  { key: "4", rating: "excellent", label: "Excellent" },
+] as const;
+const GRID_GAP = 8;
 
 export function ReviewPage() {
   const queryClient = useQueryClient();
@@ -63,7 +79,9 @@ export function ReviewPage() {
   const [items, setItems] = useState<ImageItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
+  const [multiIds, setMultiIds] = useState<Set<string>>(() => new Set());
   const [preview, setPreview] = useState(false);
+  const [ratingBusy, setRatingBusy] = useState(false);
   const [cropsOpen, setCropsOpen] = useState(false);
   const [blurOpen, setBlurOpen] = useState(false);
   const [captionsOpen, setCaptionsOpen] = useState(false);
@@ -73,6 +91,7 @@ export function ReviewPage() {
   const folder = searchParams.get("folder") ?? "";
   const recursive = searchParams.get("recursive") === "1";
   const parentRef = useRef<HTMLDivElement>(null);
+  const classifyDialogRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(960);
 
   function openFolder(next: string) {
@@ -126,7 +145,10 @@ export function ReviewPage() {
     const page = await api<Page>(`/api/images?${params.toString()}`);
     setItems((current) => (reset ? page.items : [...current, ...page.items]));
     setCursor(page.next_cursor);
-    if (reset && !keepSelection) setSelected(0);
+    if (reset && !keepSelection) {
+      setSelected(0);
+      setMultiIds(new Set());
+    }
   }
 
   useEffect(() => {
@@ -145,22 +167,131 @@ export function ReviewPage() {
   }, [items.length]);
 
   const columns = Math.max(2, Math.floor(width / 190));
+  const cellSize = Math.max(96, Math.floor((width - GRID_GAP * Math.max(0, columns - 1)) / columns));
+  const rowSize = cellSize + GRID_GAP;
   const rowCount = Math.ceil(items.length / columns);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 230,
+    estimateSize: () => rowSize,
     overscan: 4,
   });
-  const current = items[selected];
 
-  async function rate(rating: string) {
-    if (!current) return;
-    const updated = await api<ImageItem>(`/api/images/${current.id}/rating`, {
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rowSize, virtualizer]);
+
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (selected >= items.length) setSelected(items.length - 1);
+  }, [items.length, selected]);
+
+  useEffect(() => {
+    if (!items.length) return;
+    const rowIndex = Math.floor(selected / columns);
+    virtualizer.scrollToIndex(rowIndex, { align: "auto" });
+  }, [selected, columns, items.length, virtualizer]);
+
+  const current = items[selected];
+  const multiActive = multiIds.size > 0;
+
+  const classifyIndices = useMemo(() => {
+    if (!multiActive) return items.map((_, index) => index);
+    return items.reduce<number[]>((acc, item, index) => {
+      if (multiIds.has(item.id)) acc.push(index);
+      return acc;
+    }, []);
+  }, [items, multiActive, multiIds]);
+
+  const applyRating = useCallback(async (imageId: string, rating: string) => {
+    const updated = await api<ImageItem>(`/api/images/${imageId}/rating`, {
       method: "POST",
       body: JSON.stringify({ rating }),
     });
     setItems((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
+    return updated;
+  }, []);
+
+  async function rate(rating: string) {
+    if (!current || ratingBusy) return;
+    setRatingBusy(true);
+    try {
+      await applyRating(current.id, rating);
+    } finally {
+      setRatingBusy(false);
+    }
+  }
+
+  function advanceInClassifySet() {
+    const pos = classifyIndices.indexOf(selected);
+    if (pos < 0) return;
+    if (pos < classifyIndices.length - 1) {
+      setSelected(classifyIndices[pos + 1]);
+      setMessage("");
+      return;
+    }
+    setMessage(
+      multiActive
+        ? "Last selected image rated — Esc to close."
+        : "Last image in the list rated — Esc to close.",
+    );
+  }
+
+  async function rateAndAdvance(rating: string) {
+    if (!current || ratingBusy) return;
+    setRatingBusy(true);
+    try {
+      await applyRating(current.id, rating);
+      advanceInClassifySet();
+    } finally {
+      setRatingBusy(false);
+    }
+  }
+
+  function moveInClassifySet(delta: number) {
+    const pos = classifyIndices.indexOf(selected);
+    if (pos < 0) return;
+    const next = classifyIndices[pos + delta];
+    if (next !== undefined) setSelected(next);
+  }
+
+  function openClassify(atIndex?: number) {
+    const index = atIndex ?? selected;
+    if (atIndex !== undefined) setSelected(atIndex);
+    if (multiIds.size > 0) {
+      const image = items[index];
+      if (!image || !multiIds.has(image.id)) {
+        const first = items.findIndex((item) => multiIds.has(item.id));
+        if (first >= 0) setSelected(first);
+      }
+    }
+    setMessage("");
+    setPreview(true);
+  }
+
+  function selectTile(index: number, event: ReactMouseEvent) {
+    const image = items[index];
+    if (!image) return;
+    if (event.metaKey || event.ctrlKey) {
+      setSelected(index);
+      setMultiIds((currentIds) => {
+        const next = new Set(currentIds);
+        if (next.has(image.id)) next.delete(image.id);
+        else next.add(image.id);
+        return next;
+      });
+      return;
+    }
+    if (event.shiftKey) {
+      const from = selected;
+      const lo = Math.min(from, index);
+      const hi = Math.max(from, index);
+      setMultiIds(new Set(items.slice(lo, hi + 1).map((item) => item.id)));
+      setSelected(index);
+      return;
+    }
+    setSelected(index);
+    setMultiIds(new Set());
   }
 
   async function queueCurrent() {
@@ -175,6 +306,49 @@ export function ReviewPage() {
   }
 
   useEffect(() => {
+    if (!preview || !classifyDialogRef.current) return;
+    const dialog = classifyDialogRef.current;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    dialog.focus();
+
+    function onFocusIn(event: FocusEvent) {
+      if (!dialog.contains(event.target as Node)) {
+        event.preventDefault();
+        dialog.focus();
+      }
+    }
+
+    function onTab(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const focusable = dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("focusin", onFocusIn);
+    dialog.addEventListener("keydown", onTab);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      dialog.removeEventListener("keydown", onTab);
+      previouslyFocused?.focus?.();
+    };
+  }, [preview, current?.id]);
+
+  useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
@@ -185,7 +359,23 @@ export function ReviewPage() {
         setCaptionsOpen(false);
         return;
       }
-      if (preview || cropsOpen || blurOpen || captionsOpen) return;
+      if (preview) {
+        if (RATINGS[event.key]) {
+          event.preventDefault();
+          void rateAndAdvance(RATINGS[event.key]);
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          moveInClassifySet(1);
+        }
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          moveInClassifySet(-1);
+        }
+        return;
+      }
+      if (cropsOpen || blurOpen || captionsOpen) return;
       if (RATINGS[event.key]) {
         event.preventDefault();
         void rate(RATINGS[event.key]);
@@ -193,9 +383,11 @@ export function ReviewPage() {
       }
       if (event.key === "ArrowRight") setSelected((index) => Math.min(items.length - 1, index + 1));
       if (event.key === "ArrowLeft") setSelected((index) => Math.max(0, index - 1));
+      if (event.key === "ArrowDown") setSelected((index) => Math.min(items.length - 1, index + columns));
+      if (event.key === "ArrowUp") setSelected((index) => Math.max(0, index - columns));
       if (event.key === " ") {
         event.preventDefault();
-        setPreview(true);
+        openClassify();
       }
       if (event.key.toLowerCase() === "c") setCropsOpen(true);
       if (event.key.toLowerCase() === "b") setBlurOpen(true);
@@ -332,36 +524,45 @@ export function ReviewPage() {
                   top: 0,
                   left: 0,
                   width: "100%",
+                  height: `${cellSize}px`,
                   transform: `translateY(${virtualRow.start}px)`,
                   gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
                 }}
               >
                 {rowItems.map((image, offset) => {
                   const index = start + offset;
+                  const isSelected = index === selected;
+                  const isMulti = multiIds.has(image.id);
+                  const tileClass = [
+                    "tile",
+                    isSelected ? "selected" : "",
+                    isMulti ? "multi" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
                   return (
                     <button
                       key={image.id}
-                      className={index === selected ? "tile selected" : "tile"}
-                      onClick={() => setSelected(index)}
-                      onDoubleClick={() => {
-                        setSelected(index);
-                        setPreview(true);
-                      }}
+                      type="button"
+                      className={tileClass}
+                      aria-pressed={isSelected || isMulti}
+                      aria-label={`${image.relative_path}, ${image.human_rating ?? "unrated"}`}
+                      onClick={(event) => selectTile(index, event)}
+                      onDoubleClick={() => openClassify(index)}
                     >
-                      {image.thumbnail_url ? <img src={image.thumbnail_url} alt="" /> : <span>No preview</span>}
-                      <div className="meta">
+                      {image.thumbnail_url ? (
+                        <img src={image.thumbnail_url} alt="" draggable={false} />
+                      ) : (
+                        <span className="tile-empty">No preview</span>
+                      )}
+                      <div className="meta meta-top">
                         <span className={`badge ${image.effective_state}`}>{image.effective_state}</span>
-                        <span>{image.human_rating ?? "unrated"}</span>
+                        {image.has_approved_crop ? <span className="badge crop-approved">crop</span> : <span />}
                       </div>
                       <div className="meta">
-                        <span>model {image.model_state ?? "—"}</span>
+                        <span>{image.human_rating ?? "unrated"}</span>
                         <span>{image.aesthetic_score ?? "—"}</span>
                       </div>
-                      {image.has_approved_crop ? (
-                        <div className="meta">
-                          <span className="badge crop-approved">crop approved</span>
-                        </div>
-                      ) : null}
                     </button>
                   );
                 })}
@@ -376,16 +577,65 @@ export function ReviewPage() {
         </button>
       ) : null}
       <p className="help">
-        Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move, space preview, C crops, B blur, P queue, G captions.
+        Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move, space classify, C crops, B blur, P queue, G
+        captions. ⌘/Ctrl-click multi-select, Shift-click range. In classify: 1–4 rate and advance, Esc close.
+        {multiActive ? ` · ${multiIds.size} selected for classify` : ""}
       </p>
       {preview && current ? (
-        <div className="overlay" onClick={() => setPreview(false)}>
-          <div className="dialog" onClick={(event) => event.stopPropagation()}>
-            {current.preview_url ? <img src={current.preview_url} alt="" /> : null}
-            <p>
-              {current.relative_path} · model {current.model_state ?? "unreviewed"} · rating {current.human_rating ?? "none"}
-              {current.has_gps ? " · GPS present on original only" : ""}
-            </p>
+        <div
+          className="overlay"
+          role="presentation"
+          onClick={() => setPreview(false)}
+        >
+          <div
+            ref={classifyDialogRef}
+            className="dialog dialog-classify"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Classify image"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="classify-toolbar">
+              <p className="classify-meta" title={current.relative_path}>
+                {current.relative_path}
+                {multiActive
+                  ? ` · ${classifyIndices.indexOf(selected) + 1}/${classifyIndices.length} selected`
+                  : ` · ${selected + 1}/${items.length}`}
+                {ratingBusy ? " · saving…" : ""}
+              </p>
+              <button type="button" className="ghost" onClick={() => setPreview(false)}>
+                Close
+              </button>
+            </div>
+            <div className="classify-stage">
+              {current.preview_url ? (
+                <img key={current.id} src={current.preview_url} alt="" />
+              ) : current.thumbnail_url ? (
+                <img key={current.id} src={current.thumbnail_url} alt="" />
+              ) : (
+                <span className="tile-empty">No preview</span>
+              )}
+            </div>
+            <div className="classify-toolbar">
+              <div className="classify-ratings">
+                {RATING_KEYS.map(({ key, rating, label }) => (
+                  <button
+                    key={rating}
+                    type="button"
+                    className={current.human_rating === rating ? "button active-rating" : "ghost"}
+                    disabled={ratingBusy}
+                    onClick={() => void rateAndAdvance(rating)}
+                  >
+                    {key} {label}
+                  </button>
+                ))}
+              </div>
+              <p className="classify-meta">
+                model {current.model_state ?? "unreviewed"} · rating {current.human_rating ?? "none"}
+                {current.has_gps ? " · GPS on original only" : ""}
+              </p>
+            </div>
           </div>
         </div>
       ) : null}

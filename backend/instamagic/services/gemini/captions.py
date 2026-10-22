@@ -52,15 +52,19 @@ def system_instruction() -> str:
         "Return only JSON matching the schema. Write distinct options for each requested style. "
         "Do not use engagement bait, including requests to comment YES, tag friends, or follow for follow. "
         "Do not claim anything about the person's body. Stay with mood, light, and photographic craft. "
+        "Prefer insightful observations about craft that help grow an organic photography audience. "
         "Spanish captions are in Spanish. Bilingual captions use both English and Spanish."
     )
 
 
 def caption_request_text(context: GeminiContext) -> str:
     styles = ", ".join(f"{style}/{language}" for style, language in CAPTION_SPECS)
+    voice = ""
+    if isinstance(context.account_context, dict) and context.account_context.get("voice"):
+        voice = f" Honor this account voice: {context.account_context['voice']}."
     return (
         "Write one caption for each of these style/language pairs: "
-        f"{styles}. Context follows.\n{context.canonical_json()}"
+        f"{styles}.{voice} Context follows.\n{context.canonical_json()}"
     )
 
 

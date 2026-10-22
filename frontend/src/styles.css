@@ -45,14 +45,59 @@ input, select, textarea {
 .grid-scroll { height: calc(100vh - 150px); overflow: auto; }
 .grid-row { display: grid; gap: 8px; margin-bottom: 8px; }
 .tile {
-  border: 1px solid transparent;
-  background: #1b1f25;
-  border-radius: 10px;
-  padding: 6px;
+  position: relative;
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  background: #0d0f12;
+  border-radius: 8px;
+  padding: 0;
+  overflow: hidden;
   text-align: left;
 }
+.tile:hover { border-color: #4a5260; }
+.tile:focus-visible { outline: 2px solid #d7a15f; outline-offset: 2px; }
 .tile.selected { border-color: #d7a15f; }
-.tile img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: #0d0f12; display: block; }
+.tile.multi { box-shadow: inset 0 0 0 2px #7eb8d4; }
+.tile.selected.multi { border-color: #d7a15f; box-shadow: inset 0 0 0 2px #7eb8d4; }
+.tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  background: #0d0f12;
+}
+.tile .tile-empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: #5d636c;
+  font-size: 12px;
+}
+.tile .meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 0;
+  padding: 18px 8px 6px;
+  font-size: 11px;
+  color: #ece7df;
+  background: linear-gradient(transparent, rgba(8, 10, 12, 0.82));
+  pointer-events: none;
+}
+.tile .meta-top {
+  top: 0;
+  bottom: auto;
+  align-items: flex-start;
+  padding: 6px 8px 18px;
+  background: linear-gradient(rgba(8, 10, 12, 0.75), transparent);
+}
 .meta { display: flex; justify-content: space-between; gap: 6px; margin-top: 6px; font-size: 12px; color: #b7b1a8; }
 .badge { border-radius: 999px; padding: 2px 7px; font-size: 11px; }
 .badge.SAFE, .badge.safe { background: #245c45; }
@@ -125,19 +170,95 @@ input, select, textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 16px;
   z-index: 5;
 }
 .dialog {
   width: min(960px, 100%);
-  max-height: 90vh;
-  overflow: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   background: #1b1f25;
   border-radius: 16px;
   padding: 16px;
+  box-sizing: border-box;
 }
-.preview-frame { position: relative; }
-.preview-frame img { width: 100%; max-height: 70vh; object-fit: contain; background: #0d0f12; display: block; }
+.dialog > h2,
+.dialog > p,
+.dialog > .row,
+.dialog > .help,
+.dialog > .error,
+.dialog > .button,
+.dialog > button,
+.dialog > ul {
+  flex-shrink: 0;
+}
+.dialog-classify {
+  width: min(1100px, 100%);
+  height: calc(100vh - 32px);
+  max-height: calc(100vh - 32px);
+}
+.classify-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d0f12;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.classify-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.classify-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.classify-ratings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.classify-ratings .button.active-rating {
+  outline: 2px solid #ece7df;
+  outline-offset: 1px;
+}
+.classify-meta {
+  margin: 0;
+  font-size: 13px;
+  color: #b7b1a8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(55vh, calc(100vh - 280px));
+  overflow: hidden;
+  background: #0d0f12;
+  border-radius: 10px;
+}
+.preview-frame img {
+  width: 100%;
+  max-height: min(55vh, calc(100vh - 280px));
+  object-fit: contain;
+  background: #0d0f12;
+  display: block;
+}
 .crop-stage { touch-action: none; user-select: none; }
 .crop-box {
   position: absolute;
@@ -173,9 +294,24 @@ input, select, textarea {
   box-shadow: inset 0 0 24px rgba(126, 184, 212, 0.18);
 }
 .blur-ellipse.approved { border-color: #8fd4a4; box-shadow: inset 0 0 24px rgba(143, 212, 164, 0.22); }
-.blur-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.blur-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 .blur-list li { font-size: 13px; color: #cfc8be; }
-.card-list { display: grid; gap: 12px; }
+.card-list {
+  display: grid;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 .card { display: grid; grid-template-columns: 120px 1fr; gap: 12px; background: #1b1f25; border-radius: 12px; padding: 10px; }
 .card img { width: 120px; height: 120px; object-fit: cover; border-radius: 8px; }
 .login {
@@ -184,10 +320,33 @@ input, select, textarea {
   place-items: center;
   padding: 24px;
 }
-.panel { width: min(420px, 100%); display: grid; gap: 12px; background: #1b1f25; padding: 20px; border-radius: 16px; }
+.panel { width: min(720px, 100%); display: grid; gap: 12px; background: #1b1f25; padding: 20px; border-radius: 16px; margin-bottom: 16px; }
 .error { color: #f0a3a3; }
+.muted { color: #9a948a; font-size: 13px; }
 .banner { background: #3a3120; border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.form-grid label { display: grid; gap: 4px; font-size: 13px; color: #cfc8be; }
+.form-grid .span-2 { grid-column: 1 / -1; }
+.form-grid textarea { resize: vertical; width: 100%; }
+.queue-card .queue-body { display: grid; gap: 8px; }
+.caption-pick { display: grid; gap: 8px; }
+.caption-pick label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+  border: 1px solid #2a2f36;
+  border-radius: 8px;
+  padding: 8px;
+}
+.caption-pick label.picked { border-color: #d7a15f; }
+.caption-pick textarea { width: 100%; }
 @media (max-width: 720px) {
   .card { grid-template-columns: 1fr; }
   .grid-scroll { height: calc(100vh - 220px); }
+  .form-grid { grid-template-columns: 1fr; }
 }

@@ -16,6 +16,12 @@ Crops are rows (`x`, `y`, `width`, `height`, `aspect_ratio`, `reason`) for origi
 
 Next best posts uses human rating, Laplacian sharpness, thirds and face placement, and dHash uniqueness. Near-duplicates collapse to the stronger frame. With no imported Instagram metrics the reason text says the rank is local only.
 
+## Phase 2 publishing
+
+Queue states: `CANDIDATE` → `APPROVED` → (`PUBLISHING`) → `PUBLISHED` or `FAILED`. Publish re-runs `publishing_gate` (attestation, human safe/excellent, not `DO_NOT_POST`, crop/blur when required), mints a short-lived public derivative URL, then Graph `/{ig-user-id}/media` → `media_publish`. Tokens stay in env. `INSTAGRAM_PROVIDER=fake` records calls for CI.
+
+Growth helpers: `related_accounts` CRUD, Gemini comment drafts and hashtag suggestions. Drafts are never posted by the API.
+
 ## Interfaces left empty
 
-`AestheticScorer`, `CompositionAnalyzer`, and the embedding table can be replaced later (OpenCLIP is the intended swap) without changing the queue gates. `InstagramClient.configured()` is false and every method raises `InstagramNotConfigured`.
+`AestheticScorer`, `CompositionAnalyzer`, and the embedding table can be replaced later (OpenCLIP is the intended swap) without changing the queue gates. Metrics import and Insights dashboards are not wired yet.
