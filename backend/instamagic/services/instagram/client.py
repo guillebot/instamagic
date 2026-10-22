@@ -39,6 +39,15 @@ class PublishResult:
 
 
 @dataclass(frozen=True)
+class ContentPublishingLimit:
+    """Instagram content publishing quota (typically 50 posts / 24h rolling)."""
+
+    quota_total: int
+    quota_duration_seconds: int
+    usage: int
+
+
+@dataclass(frozen=True)
 class InstagramAccountDetails:
     id: str
     username: str | None = None
@@ -63,6 +72,8 @@ class InstagramClient(Protocol):
 
     def fetch_account_details(self) -> InstagramAccountDetails: ...
 
+    def fetch_content_publishing_limit(self) -> ContentPublishingLimit: ...
+
 
 def mask_access_token(token: str) -> str | None:
     """Never return the full token. Empty → None; short → opaque; else last 4 only."""
@@ -85,6 +96,9 @@ class NotConfiguredInstagramClient:
     def fetch_account_details(self) -> InstagramAccountDetails:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
+    def fetch_content_publishing_limit(self) -> ContentPublishingLimit:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
 
 class FakeInstagramClient:
     """Deterministic publisher for CI. Never calls Meta."""
@@ -92,6 +106,8 @@ class FakeInstagramClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
         self.account_fetches: int = 0
+        self.content_limit_usage: int = 0
+        self.content_limit_total: int = 50
 
     def configured(self) -> bool:
         return True
@@ -108,6 +124,13 @@ class FakeInstagramClient:
             container_id=container_id,
             media_id=media_id,
             permalink=f"https://www.instagram.com/p/{media_id}/",
+        )
+
+    def fetch_content_publishing_limit(self) -> ContentPublishingLimit:
+        return ContentPublishingLimit(
+            quota_total=self.content_limit_total,
+            quota_duration_seconds=86400,
+            usage=self.content_limit_usage,
         )
 
     def fetch_account_details(self) -> InstagramAccountDetails:
@@ -161,6 +184,29 @@ class GraphInstagramClient:
         media_id = self._publish_container(container_id)
         permalink = self._permalink(media_id)
         return PublishResult(container_id=container_id, media_id=media_id, permalink=permalink)
+
+    def fetch_content_publishing_limit(self) -> ContentPublishingLimit:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        url = f"{self._base}/{self._ig_user_id}/content_publishing_limit"
+        try:
+            response = httpx.get(
+                url,
+                params={"fields": "config,quota_usage", "access_token": self._token},
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise NotConfigured("Instagram content publishing limit check failed.") from exc
+        payload = _json_or_raise(response, action="fetch content publishing limit")
+        config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        quota_total = _optional_int(config.get("quota_total")) or 50
+        quota_duration = _optional_int(config.get("quota_duration")) or 86400
+        usage = _optional_int(payload.get("quota_usage")) or 0
+        return ContentPublishingLimit(
+            quota_total=quota_total,
+            quota_duration_seconds=quota_duration,
+            usage=usage,
+        )
 
     def fetch_account_details(self) -> InstagramAccountDetails:
         if not self.configured():

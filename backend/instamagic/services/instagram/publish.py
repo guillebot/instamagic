@@ -16,10 +16,12 @@ from instamagic.models import (
     Image,
     InstagramPost,
     Library,
+    PublishAttempt,
     PublishingQueueItem,
     QueueState,
     SafetyState,
 )
+from instamagic.models.enums import PublishTrigger
 from instamagic.services.images.derivatives import crop_image, oriented_rgb, read_image
 from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
@@ -29,7 +31,12 @@ from instamagic.services.instagram.feed_image import (
     write_instagram_publish_jpeg,
 )
 from instamagic.services.pipeline import is_attested, render_blur_derivative
+from instamagic.services.posting.publish_errors import (
+    is_permanent_publish_error,
+    is_transient_publish_error,
+)
 from instamagic.services.recommendations.gates import publishing_gate
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 
@@ -48,7 +55,8 @@ def publish_queue_item(
     client: InstagramClient,
     *,
     item_id: UUID,
-    caption_id: UUID,
+    caption_id: UUID | None = None,
+    trigger: str = PublishTrigger.MANUAL.value,
 ) -> PublishOutcome:
     if not client.configured():
         raise InstagramNotConfigured(
@@ -58,8 +66,24 @@ def publish_queue_item(
     item = session.get(PublishingQueueItem, item_id)
     if item is None:
         raise NotFound("Queue item was not found.")
-    if item.state not in {QueueState.APPROVED.value, QueueState.FAILED.value}:
+    if item.state not in {QueueState.APPROVED.value, QueueState.FAILED.value, QueueState.PUBLISHING.value}:
         raise NotAllowed("Only an approved (or previously failed) queue item can be published.")
+    if item.state == QueueState.PUBLISHING.value and trigger != PublishTrigger.SCHEDULER.value:
+        raise NotAllowed("This queue item is already publishing.")
+    resolved_caption_id = caption_id or item.caption_id
+    if resolved_caption_id is None:
+        raise NotAllowed("A caption must be selected before publishing.")
+    prior_attempts = session.scalar(
+        select(func.count()).select_from(PublishAttempt).where(PublishAttempt.queue_item_id == item.id)
+    )
+    attempt_number = int(prior_attempts or 0) + 1
+    attempt = PublishAttempt(
+        queue_item_id=item.id,
+        attempt_number=attempt_number,
+        trigger=trigger,
+    )
+    session.add(attempt)
+    session.flush()
     image = session.get(
         Image,
         item.image_id,
@@ -71,7 +95,7 @@ def publish_queue_item(
     )
     if image is None:
         raise NotFound("Image was not found.")
-    caption = session.get(Caption, caption_id)
+    caption = session.get(Caption, resolved_caption_id)
     if caption is None or caption.image_id != image.id:
         raise NotFound("Caption was not found for this image.")
     if not caption.text.strip():
@@ -88,7 +112,12 @@ def publish_queue_item(
         has_approved_covering_blur=covering_blur,
     )
     if not gate.allowed:
-        raise NotAllowed(" ".join(gate.reasons))
+        msg = " ".join(gate.reasons)
+        attempt.finished_at = datetime.now(UTC)
+        attempt.success = False
+        attempt.error = msg
+        session.commit()
+        raise NotAllowed(msg)
 
     relative = ensure_publish_derivative(session, settings, image, approved)
     try:
@@ -110,20 +139,45 @@ def publish_queue_item(
     item.last_error = None
     session.commit()
 
+    def _fail_publish(exc: BaseException, message: str) -> None:
+        attempt.finished_at = datetime.now(UTC)
+        attempt.success = False
+        attempt.error = message
+        if trigger == PublishTrigger.SCHEDULER.value and is_transient_publish_error(exc):
+            item.state = QueueState.APPROVED.value
+            item.last_error = message
+            from datetime import timedelta
+
+            item.publish_retry_after = datetime.now(UTC) + timedelta(minutes=15)
+        else:
+            item.state = QueueState.FAILED.value
+            item.last_error = message
+            if is_permanent_publish_error(exc) or trigger != PublishTrigger.SCHEDULER.value:
+                item.schedule_mode = None
+                item.scheduled_at = None
+
     try:
         result = client.publish_image(image_url=image_url, caption=caption.text.strip())
     except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
-        item.state = QueueState.FAILED.value
-        item.last_error = str(exc.detail if hasattr(exc, "detail") else exc)
+        err = str(exc.detail if hasattr(exc, "detail") else exc)
+        _fail_publish(exc, err)
         session.commit()
         raise
-    except Exception:
-        item.state = QueueState.FAILED.value
-        item.last_error = "Instagram publish failed."
+    except Exception as exc:
+        err = "Instagram publish failed."
+        wrapped = NotConfigured(err)
+        _fail_publish(wrapped if not is_transient_publish_error(exc) else exc, err)
         session.commit()
-        raise NotConfigured("Instagram publish failed.") from None
+        raise NotConfigured(err) from None
 
-    return _record_success(session, item, image, caption, result)
+    outcome = _record_success(session, item, image, caption, result)
+    attempt.finished_at = datetime.now(UTC)
+    attempt.success = True
+    item.schedule_mode = None
+    item.scheduled_at = None
+    item.publish_retry_after = None
+    session.commit()
+    return outcome
 
 
 def _record_success(

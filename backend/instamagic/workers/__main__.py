@@ -22,6 +22,7 @@ def main() -> None:
     log.info("worker_start", queue=queue_name)
     if queue_name == "io":
         from instamagic.workers.resume import requeue_interrupted_scans
+        from instamagic.workers.scheduler_loop import start_scheduler_thread
 
         try:
             count = requeue_interrupted_scans(settings.redis_url)
@@ -30,6 +31,7 @@ def main() -> None:
         except Exception:
             log.info("interrupted_scan_requeue_failed")
             raise
+        start_scheduler_thread()
     connection = Redis.from_url(settings.redis_url)
     worker = Worker([Queue(queue_name, connection=connection)], connection=connection)
     worker.work(with_scheduler=False)

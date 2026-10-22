@@ -48,5 +48,6 @@ Other badges: **Safe after crop** / **Safe after blur** (still needs alter; same
 | Alter | Review → Crop (`C`) / Blur (`B`) | crop/blur approve endpoints |
 | Curate | **Curate** | `POST /api/curation`, reorder / accept / reject picks |
 | Queue / publish | **Queue** | `POST /api/curation/queue` or `POST /api/queue` → Approve → Publish |
+| Schedule | **Schedule** (`/queue/schedule`) | `POST /api/queue/{id}/schedule` → worker tick publishes when due (gates re-run) |
 
 Gates (`publishing_gate` / `gemini_gate`) still require library attestation, human safe/excellent, not `DO_NOT_POST`, and crop/blur when `SAFE_AFTER_CROP`.

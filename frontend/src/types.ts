@@ -187,7 +187,19 @@ export type QueueItem = {
   caption_id?: string | null;
   published_at?: string | null;
   last_error?: string | null;
+  schedule_mode?: string | null;
+  scheduled_at?: string | null;
+  publish_retry_after?: string | null;
   image: ImageItem;
+};
+
+export type PostingScheduleConfig = {
+  timezone: string;
+  weekday_slots: Record<string, string[]>;
+  max_posts_per_day: number;
+  min_gap_hours: number;
+  paused: boolean;
+  updated_at?: string | null;
 };
 
 export type RelatedAccountItem = {

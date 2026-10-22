@@ -25,6 +25,16 @@ class QueueState(enum.StrEnum):
     FAILED = "FAILED"
 
 
+class ScheduleMode(enum.StrEnum):
+    EXPLICIT = "explicit"
+    AUTO_SLOT = "auto_slot"
+
+
+class PublishTrigger(enum.StrEnum):
+    MANUAL = "manual"
+    SCHEDULER = "scheduler"
+
+
 class JobKind(enum.StrEnum):
     SCAN = "scan"
     DERIVATIVE = "derivative"

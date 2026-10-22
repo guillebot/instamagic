@@ -93,6 +93,19 @@ function QueueCard({
     onError: (err) => setError(err instanceof ApiError ? err.message : "Hashtag request failed."),
   });
 
+  const scheduleAuto = useMutation({
+    mutationFn: () =>
+      api(`/api/queue/${item.id}/schedule`, {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "auto_slot",
+          caption_id: selectedCaptionId,
+        }),
+      }),
+    onSuccess: () => onChanged(),
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Schedule failed."),
+  });
+
   const publish = useMutation({
     mutationFn: (captionId: string) =>
       api(`/api/queue/${item.id}/publish`, {
@@ -125,6 +138,7 @@ function QueueCard({
         <strong>{item.image.filename}</strong>
         <p>
           {item.state}
+          {item.scheduled_at ? ` · scheduled ${new Date(item.scheduled_at).toLocaleString()}` : ""}
           {item.last_error ? ` · ${item.last_error}` : ""} · {lifecycleLabel(item.image.effective_state)} ·
           model {item.image.model_state}
         </p>
@@ -156,6 +170,21 @@ function QueueCard({
             >
               {publish.isPending ? "Publishing…" : "Publish to Instagram"}
             </button>
+          ) : null}
+          {item.state === "APPROVED" && selectedCaptionId ? (
+            <button
+              className="ghost"
+              type="button"
+              disabled={scheduleAuto.isPending}
+              onClick={() => scheduleAuto.mutate()}
+            >
+              Add to auto-slot schedule
+            </button>
+          ) : null}
+          {item.scheduled_at ? (
+            <Link className="ghost" to="/queue/schedule">
+              Edit on schedule
+            </Link>
           ) : null}
         </div>
         {policy === "manual_only" ? (
