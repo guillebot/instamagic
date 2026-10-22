@@ -584,16 +584,28 @@ export function ReviewPage() {
             }}
             onLibraryRefresh={() => void queryClient.invalidateQueries({ queryKey: ["libraries"] })}
           />
-          <select value={filters.model_state} onChange={(event) => setFilters({ ...filters, model_state: event.target.value })}>
-            <option value="">Any model state</option>
+          <select
+            aria-label="Safety badge filter"
+            value={filters.model_state}
+            onChange={(event) => setFilters({ ...filters, model_state: event.target.value })}
+          >
+            <option value="">Any safety</option>
             {["SAFE", "SAFE_AFTER_CROP", "REVIEW", "DO_NOT_POST"].map((state) => (
-              <option key={state}>{state}</option>
+              <option key={state} value={state}>
+                {state}
+              </option>
             ))}
           </select>
-          <select value={filters.human_rating} onChange={(event) => setFilters({ ...filters, human_rating: event.target.value })}>
+          <select
+            aria-label="Human rating filter"
+            value={filters.human_rating}
+            onChange={(event) => setFilters({ ...filters, human_rating: event.target.value })}
+          >
             <option value="">Any rating</option>
-            {["reject", "review", "safe", "excellent"].map((rating) => (
-              <option key={rating}>{rating}</option>
+            {RATING_KEYS.map(({ rating, label }) => (
+              <option key={rating} value={rating}>
+                {label}
+              </option>
             ))}
           </select>
           <label>
