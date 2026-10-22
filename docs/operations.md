@@ -144,7 +144,7 @@ After login, the top header shows a compact health strip (refreshed about every 
 |---|---|
 | Library | Registered library path readable; derivatives dir writable; free space on the library volume |
 | Instagram | Sealed credentials present; cached `@username` vs `INSTAGRAM_EXPECTED_USERNAME` when set |
-| Publish URL | `PUBLIC_BASE_URL` is HTTPS and distinct from the LAN UI origin; optional cached `/health` probe |
+| Publish URL | `PUBLIC_BASE_URL` is HTTPS and distinct from the LAN UI origin; optional cached HEAD probe on `/api/public/publish-assets/` (409 = route OK) |
 | Database | Postgres reachable; Alembic at head |
 | Queue | Redis reachable; `worker-io` / `worker-ml` via RQ or Redis heartbeats (`PIPELINE_MODE=queue`) |
 | Gemini / Data disk | API key configured (never shown); free space under `DERIVATIVES_ROOT` |

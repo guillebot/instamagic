@@ -7,7 +7,13 @@ import re
 
 from instamagic.config import ATTESTATION_STATEMENT, get_settings
 from instamagic.db import session_factory
-from instamagic.services.health_status import build_health_status, reset_health_cache
+from instamagic.services.health_status import (
+    _queue_worker_alive,
+    build_health_status,
+    classify_publish_probe_status,
+    publish_assets_probe_path,
+    reset_health_cache,
+)
 from instamagic.services.instagram.client import InstagramAccountDetails
 from instamagic.services.instagram.store import save_account_profile
 from tests.conftest import login
@@ -15,6 +21,45 @@ from tests.conftest import login
 
 def test_health_status_requires_session(client) -> None:
     assert client.get("/api/health/status").status_code == 401
+
+
+def test_publish_probe_path_uses_valid_bogus_token() -> None:
+    path = publish_assets_probe_path()
+    assert path.startswith("/api/public/publish-assets/")
+    token = path.rsplit("/", 1)[-1]
+    assert len(token) == 60
+    assert all(ch.isalnum() or ch in "-_" for ch in token)
+
+
+def test_classify_publish_probe_status() -> None:
+    assert classify_publish_probe_status(409) == (
+        "ok",
+        "publish-assets route reachable (token rejected)",
+    )
+    assert classify_publish_probe_status(404) == ("warning", "public route not reaching the app")
+    assert classify_publish_probe_status(503)[0] == "down"
+    assert classify_publish_probe_status(502)[0] == "down"
+
+
+def test_queue_worker_ignores_stale_rq_without_heartbeat(monkeypatch) -> None:
+    class FakeConn:
+        pass
+
+    monkeypatch.setattr("instamagic.services.health_status.heartbeat_fresh", lambda _c, _n: False)
+    monkeypatch.setattr(
+        "instamagic.services.health_status.Worker",
+        type("W", (), {"all": staticmethod(lambda **_kwargs: [object(), object()])}),
+    )
+    alive, note = _queue_worker_alive(FakeConn(), "io")
+    assert alive is False
+    assert "stale" in note
+
+
+def test_queue_worker_ok_when_heartbeat_fresh(monkeypatch) -> None:
+    monkeypatch.setattr("instamagic.services.health_status.heartbeat_fresh", lambda _c, _n: True)
+    alive, note = _queue_worker_alive(object(), "ml")
+    assert alive is True
+    assert "heartbeat" in note
 
 
 def test_health_status_shape_and_no_secrets(client, app_env, monkeypatch) -> None:
