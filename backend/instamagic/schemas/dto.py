@@ -273,6 +273,7 @@ class ImageOut(BaseModel):
     height: int | None
     orientation: str | None
     captured_at: datetime | None
+    ingested_at: datetime | None = None
     camera: str | None
     lens: str | None
     focal_length_mm: float | None
