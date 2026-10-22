@@ -75,11 +75,13 @@ from instamagic.schemas.dto import (
     LibraryIn,
     LoginIn,
     MetaAppCredentialsIn,
+    PostingScheduleConfigIn,
     PublishIn,
     QueueIn,
     QueuesOut,
     RatingIn,
     RelatedAccountIn,
+    ScheduleIn,
     TagIn,
 )
 from instamagic.services.blurs.generator import (
@@ -144,6 +146,13 @@ from instamagic.services.pipeline import (
     replace_suggested_blurs,
     run_scan,
 )
+from instamagic.services.posting.queue_schedule import (
+    fill_slots_from_approved,
+    list_upcoming,
+    schedule_queue_item,
+    unschedule_queue_item,
+)
+from instamagic.services.posting.schedule_config import config_as_dict, config_view, update_config
 from instamagic.services.queues import snapshot_queues
 from instamagic.services.recommendations.curate import queue_picks, run_curation
 from instamagic.services.recommendations.gates import publishing_gate
@@ -1001,6 +1010,76 @@ def publish_queue(
     payload["permalink"] = outcome.permalink
     payload["published_caption"] = outcome.caption
     return payload
+
+
+@router.get("/api/posting-schedule/config")
+def get_posting_schedule_config(_auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, object]:
+    return config_as_dict(config_view(session))
+
+
+@router.put("/api/posting-schedule/config")
+def put_posting_schedule_config(
+    body: PostingScheduleConfigIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    view = update_config(
+        session,
+        timezone=body.timezone,
+        weekday_slots=body.weekday_slots,
+        max_posts_per_day=body.max_posts_per_day,
+        min_gap_hours=body.min_gap_hours,
+        paused=body.paused,
+    )
+    return config_as_dict(view)
+
+
+@router.get("/api/posting-schedule/upcoming")
+def get_upcoming_scheduled(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[dict[str, object]]:
+    return [_queue_out(session, item) for item in list_upcoming(session, limit=limit)]
+
+
+@router.post("/api/posting-schedule/fill-slots")
+def fill_posting_slots(_auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, int]:
+    assigned = fill_slots_from_approved(session)
+    return {"assigned": assigned}
+
+
+@router.post("/api/queue/{item_id}/schedule")
+def schedule_item(
+    item_id: UUID,
+    body: ScheduleIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    item = schedule_queue_item(
+        session,
+        item_id,
+        scheduled_at=body.scheduled_at,
+        mode=body.mode.strip().lower(),
+    )
+    if body.caption_id is not None:
+        caption = session.get(Caption, body.caption_id)
+        if caption is None or caption.image_id != item.image_id:
+            raise NotFound("Caption was not found for this image.")
+        item.caption_id = body.caption_id
+        session.commit()
+        session.refresh(item)
+    return _queue_out(session, item)
+
+
+@router.post("/api/queue/{item_id}/unschedule")
+def unschedule_item(
+    item_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    item = unschedule_queue_item(session, item_id)
+    return _queue_out(session, item)
 
 
 @router.post("/api/images/{image_id}/captions", status_code=201)
@@ -2030,6 +2109,9 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "approved_at": item.approved_at,
         "published_at": item.published_at,
         "last_error": item.last_error,
+        "schedule_mode": item.schedule_mode,
+        "scheduled_at": item.scheduled_at,
+        "publish_retry_after": item.publish_retry_after,
         "image": _image_out(session, image).model_dump(mode="json"),
     }
 

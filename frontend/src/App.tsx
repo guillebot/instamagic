@@ -8,6 +8,7 @@ import { CandidatesPage } from "./pages/Candidates";
 import { CuratePage } from "./pages/Curate";
 import { InstagramPage } from "./pages/Instagram";
 import { QueuePage } from "./pages/Queue";
+import { SchedulePage } from "./pages/Schedule";
 import { RelatedAccountsPage } from "./pages/RelatedAccounts";
 import { ReviewPage } from "./pages/Review";
 import { Route, Routes } from "react-router-dom";
@@ -41,6 +42,7 @@ function Shell() {
           </NavLink>
           <NavLink to="/curate">Curate</NavLink>
           <NavLink to="/queue">Queue</NavLink>
+          <NavLink to="/queue/schedule">Schedule</NavLink>
           <NavLink to="/candidates">Next</NavLink>
           <NavLink to="/related">Related</NavLink>
           <NavLink to="/instagram">Instagram</NavLink>
@@ -68,6 +70,7 @@ export function App() {
       <Route element={<Shell />}>
         <Route path="/" element={<ReviewPage />} />
         <Route path="/queue" element={<QueuePage />} />
+        <Route path="/queue/schedule" element={<SchedulePage />} />
         <Route path="/curate" element={<CuratePage />} />
         <Route path="/candidates" element={<CandidatesPage />} />
         <Route path="/related" element={<RelatedAccountsPage />} />

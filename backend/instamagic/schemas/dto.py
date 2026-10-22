@@ -63,6 +63,20 @@ class PublishIn(BaseModel):
     caption_id: UUID
 
 
+class ScheduleIn(BaseModel):
+    mode: str = Field(description="explicit or auto_slot")
+    scheduled_at: datetime | None = None
+    caption_id: UUID | None = None
+
+
+class PostingScheduleConfigIn(BaseModel):
+    timezone: str | None = Field(default=None, max_length=64)
+    weekday_slots: dict[str, list[str]] | None = None
+    max_posts_per_day: int | None = Field(default=None, ge=1, le=24)
+    min_gap_hours: float | None = Field(default=None, ge=0.5, le=48)
+    paused: bool | None = None
+
+
 class RelatedAccountIn(BaseModel):
     handle: str = Field(min_length=1, max_length=64)
     display_name: str | None = Field(default=None, max_length=200)

@@ -294,12 +294,49 @@ class PublishingQueueItem(Base):
         ForeignKey("captions.id", ondelete="SET NULL"), nullable=True
     )
     state: Mapped[str] = mapped_column(String(16), default=QueueState.CANDIDATE.value, index=True)
+    schedule_mode: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    publish_retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     image: Mapped[Image] = relationship(back_populates="queue_items")
+    publish_attempts: Mapped[list[PublishAttempt]] = relationship(back_populates="queue_item")
+
+
+class PostingScheduleConfig(Base):
+    """Singleton posting calendar — operator-editable in the UI."""
+
+    __tablename__ = "posting_schedule_configs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    timezone: Mapped[str] = mapped_column(String(64), default="America/Buenos_Aires")
+    weekday_slots_json: Mapped[str] = mapped_column(Text, default="{}")
+    max_posts_per_day: Mapped[int] = mapped_column(Integer, default=2)
+    min_gap_hours: Mapped[float] = mapped_column(Float, default=4.0)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
+    )
+
+
+class PublishAttempt(Base):
+    __tablename__ = "publish_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    queue_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("publishing_queue_items.id", ondelete="CASCADE"), index=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
+    trigger: Mapped[str] = mapped_column(String(16), default="manual")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    queue_item: Mapped[PublishingQueueItem] = relationship(back_populates="publish_attempts")
 
 
 class GeminiRequest(Base):

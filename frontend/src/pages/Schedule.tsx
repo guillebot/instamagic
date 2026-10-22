@@ -1,0 +1,184 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../api";
+import type { PostingScheduleConfig, QueueItem } from "../types";
+
+export function SchedulePage() {
+  const queryClient = useQueryClient();
+  const config = useQuery({
+    queryKey: ["posting-schedule-config"],
+    queryFn: () => api<PostingScheduleConfig>("/api/posting-schedule/config"),
+  });
+  const upcoming = useQuery({
+    queryKey: ["posting-schedule-upcoming"],
+    queryFn: () => api<QueueItem[]>("/api/posting-schedule/upcoming"),
+    refetchInterval: 30_000,
+  });
+  const [timezone, setTimezone] = useState("");
+  const [maxPosts, setMaxPosts] = useState(2);
+  const [minGap, setMinGap] = useState(4);
+
+  const saveConfig = useMutation({
+    mutationFn: () =>
+      api<PostingScheduleConfig>("/api/posting-schedule/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          timezone: timezone || config.data?.timezone,
+          max_posts_per_day: maxPosts,
+          min_gap_hours: minGap,
+          weekday_slots: config.data?.weekday_slots,
+          paused: config.data?.paused,
+        }),
+      }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["posting-schedule-config"] }),
+  });
+
+  const togglePause = useMutation({
+    mutationFn: (paused: boolean) =>
+      api<PostingScheduleConfig>("/api/posting-schedule/config", {
+        method: "PUT",
+        body: JSON.stringify({ paused }),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["posting-schedule-config"] });
+      void queryClient.invalidateQueries({ queryKey: ["posting-schedule-upcoming"] });
+    },
+  });
+
+  const fillSlots = useMutation({
+    mutationFn: () => api<{ assigned: number }>("/api/posting-schedule/fill-slots", { method: "POST" }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["posting-schedule-upcoming"] }),
+  });
+
+  useEffect(() => {
+    if (!config.data) return;
+    setTimezone(config.data.timezone);
+    setMaxPosts(config.data.max_posts_per_day);
+    setMinGap(config.data.min_gap_hours);
+  }, [config.data]);
+
+  const paused = config.data?.paused ?? false;
+
+  return (
+    <main className="page">
+      <h1>Posting schedule</h1>
+      <p>
+        Human-approved queue items only. Scheduling does not bypass safety gates — publish re-validates attestation,
+        rating, and DO_NOT_POST. <Link to="/queue">Queue</Link>
+      </p>
+      {paused ? (
+        <p className="error banner-pause">
+          <strong>Schedule paused</strong> — no automatic publishes until you resume.
+        </p>
+      ) : null}
+      <section className="card schedule-config">
+        <h2>Calendar settings</h2>
+        <div className="row">
+          <label>
+            Timezone
+            <input value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+          </label>
+          <label>
+            Max posts / day
+            <input
+              type="number"
+              min={1}
+              max={24}
+              value={maxPosts}
+              onChange={(e) => setMaxPosts(Number(e.target.value))}
+            />
+          </label>
+          <label>
+            Min gap (hours)
+            <input
+              type="number"
+              min={0.5}
+              step={0.5}
+              value={minGap}
+              onChange={(e) => setMinGap(Number(e.target.value))}
+            />
+          </label>
+        </div>
+        <div className="row">
+          <button className="button" type="button" onClick={() => saveConfig.mutate()} disabled={saveConfig.isPending}>
+            Save settings
+          </button>
+          <button
+            className={paused ? "button" : "ghost"}
+            type="button"
+            onClick={() => togglePause.mutate(!paused)}
+            disabled={togglePause.isPending}
+          >
+            {paused ? "Resume schedule" : "Pause all scheduled posts"}
+          </button>
+          <button className="ghost" type="button" onClick={() => fillSlots.mutate()} disabled={fillSlots.isPending}>
+            Fill slots from approved queue
+          </button>
+        </div>
+      </section>
+      <section>
+        <h2>Upcoming</h2>
+        <ul className="schedule-list">
+          {upcoming.data?.map((item) => (
+            <ScheduleRow key={item.id} item={item} onChanged={() => void upcoming.refetch()} />
+          ))}
+          {upcoming.data?.length === 0 ? <p className="muted">No scheduled posts.</p> : null}
+        </ul>
+      </section>
+    </main>
+  );
+}
+
+function ScheduleRow({ item, onChanged }: { item: QueueItem; onChanged: () => void }) {
+  const [when, setWhen] = useState(item.scheduled_at?.slice(0, 16) ?? "");
+
+  async function reschedule() {
+    if (!when) return;
+    await api(`/api/queue/${item.id}/schedule`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "explicit", scheduled_at: new Date(when).toISOString() }),
+    });
+    onChanged();
+  }
+
+  async function unschedule() {
+    await api(`/api/queue/${item.id}/unschedule`, { method: "POST" });
+    onChanged();
+  }
+
+  async function publishNow() {
+    if (!item.caption_id) {
+      window.alert("Select a caption on the Queue page first.");
+      return;
+    }
+    if (!window.confirm("Publish now (bypass schedule time)?")) return;
+    await api(`/api/queue/${item.id}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ caption_id: item.caption_id }),
+    });
+    onChanged();
+  }
+
+  return (
+    <li className="card schedule-row">
+      {item.image.thumbnail_url ? <img src={item.image.thumbnail_url} alt="" /> : <span />}
+      <div>
+        <strong>{item.image.filename}</strong>
+        <p className="muted">{item.scheduled_at ? new Date(item.scheduled_at).toLocaleString() : "—"}</p>
+        <div className="row">
+          <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+          <button className="ghost" type="button" onClick={() => void reschedule()}>
+            Set time
+          </button>
+          <button className="ghost" type="button" onClick={() => void unschedule()}>
+            Unschedule
+          </button>
+          <button className="button" type="button" onClick={() => void publishNow()}>
+            Publish now
+          </button>
+        </div>
+      </div>
+    </li>
+  );
+}
