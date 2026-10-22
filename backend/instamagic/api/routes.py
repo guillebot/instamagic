@@ -511,6 +511,18 @@ def list_jobs(
     return [_job_out(session, job) for job in jobs]
 
 
+@router.get("/api/jobs/{job_id}", response_model=JobOut)
+def get_job(
+    job_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> JobOut:
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise NotFound("Job was not found.")
+    return _job_out(session, job)
+
+
 @router.get("/api/queues", response_model=QueuesOut)
 def list_queues(_auth: None = Depends(require_session), settings: Settings = Depends(settings_dep)) -> QueuesOut:
     return snapshot_queues(settings.redis_url)

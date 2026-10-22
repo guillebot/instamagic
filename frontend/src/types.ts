@@ -169,14 +169,6 @@ export type CandidateBulkQueueResult = {
   queued_count: number;
 };
 
-export type GeminiLabelJob = {
-  job_id: string;
-  status: string;
-  processed?: number;
-  total?: number;
-  results?: { image_id: string; status: string }[];
-};
-
 export type CurationPick = {
   id: string;
   batch_id: string;
