@@ -24,11 +24,14 @@ class PublishAsset:
     expires_at: int
 
 
+_DIGEST_LEN = hashlib.sha256().digest_size  # 32; never use a separator — digests may contain b"|"
+
+
 def mint_publish_token(*, relative_path: str, secret: str, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> str:
     expires_at = int(time.time()) + max(60, ttl_seconds)
     payload = f"{expires_at}:{relative_path}".encode()
     digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).digest()
-    raw = base64.urlsafe_b64encode(payload + b"|" + digest).decode("ascii").rstrip("=")
+    raw = base64.urlsafe_b64encode(payload + digest).decode("ascii").rstrip("=")
     return raw
 
 
@@ -36,9 +39,11 @@ def parse_publish_token(token: str, *, secret: str) -> PublishAsset:
     padded = token + "=" * (-len(token) % 4)
     try:
         raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-        payload, digest = raw.rsplit(b"|", 1)
     except (ValueError, UnicodeError) as exc:
         raise NotAllowed("Publish asset token is invalid.") from exc
+    if len(raw) <= _DIGEST_LEN:
+        raise NotAllowed("Publish asset token is invalid.")
+    payload, digest = raw[:-_DIGEST_LEN], raw[-_DIGEST_LEN:]
     expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).digest()
     if not hmac.compare_digest(digest, expected):
         raise NotAllowed("Publish asset token is invalid.")
