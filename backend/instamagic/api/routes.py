@@ -79,6 +79,8 @@ from instamagic.services.gemini.context import build_context
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.geometry import Box
 from instamagic.services.images.derivatives import (
+    PREVIEW_FILENAME,
+    THUMB_FILENAME,
     crop_image,
     oriented_rgb,
     read_image,
@@ -708,24 +710,31 @@ def approve_blurs(
     return [_blur_out(image, blur) for blur in image.blurs]
 
 
+_DERIVATIVE_CACHE = {"Cache-Control": "private, max-age=604800, immutable"}
+_GRID_KIND_FILES = {"thumbnail": THUMB_FILENAME, "preview": PREVIEW_FILENAME}
+
+
 @router.get("/api/derivatives/{image_id}/{kind}")
 def derivative(
     image_id: UUID,
     kind: str,
     _auth: None = Depends(require_session),
-    session: Session = db_dep,
     settings: Settings = Depends(settings_dep),
 ) -> FileResponse:
-    image = session.get(Image, image_id)
-    if image is None:
-        raise NotFound("Image was not found.")
-    relative = image.thumbnail_path if kind == "thumbnail" else image.preview_path if kind == "preview" else None
-    if relative is None:
+    """Serve grid thumbs/previews from the stable on-disk layout.
+
+    Contact-sheet loads fire dozens of these in parallel. Skipping the DB
+    avoids saturating the SQLAlchemy pool (default size 5) under thumbnail
+    stampedes. Paths are fixed under ``{image_id}/`` so path-traversal via a
+    poisoned DB column cannot apply here.
+    """
+    filename = _GRID_KIND_FILES.get(kind)
+    if filename is None:
         raise NotFound("Derivative was not found.")
-    path = safe_join(settings.derivatives_root, relative)
+    path = safe_join(settings.derivatives_root, f"{image_id}/{filename}")
     if not path.is_file():
         raise NotFound("Derivative was not found.")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+    return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
 
 
 @router.get("/api/derivatives/{image_id}/crops/{crop_id}")
@@ -742,7 +751,7 @@ def crop_derivative(
     path = safe_join(settings.derivatives_root, crop.derivative_path)
     if not path.is_file():
         raise NotFound("Derivative was not found.")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+    return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
 
 
 @router.get("/api/derivatives/{image_id}/blurs/{blur_id}")
@@ -759,7 +768,7 @@ def blur_derivative(
     path = safe_join(settings.derivatives_root, blur.derivative_path)
     if not path.is_file():
         raise NotFound("Derivative was not found.")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+    return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
 
 
 @router.get("/api/tags")

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from instamagic.services.images.derivatives import (
+    THUMB_LONG_EDGE,
     classify_extension,
     derivative_has_gps,
     metadata_from_image,
@@ -35,7 +36,9 @@ def test_derivative_strips_gps_and_applies_orientation(tmp_path: Path) -> None:
         oriented = oriented_rgb(saved)
     assert oriented.size == (40, 80)
     dest = tmp_path / "out" / "thumb.jpg"
-    save_derivative(oriented, dest, 384)
+    save_derivative(oriented, dest, THUMB_LONG_EDGE, progressive=True)
     assert not derivative_has_gps(dest)
+    with Image.open(dest) as thumb:
+        assert max(thumb.size) <= THUMB_LONG_EDGE
     before = file_sha256(source)
     assert file_sha256(source) == before

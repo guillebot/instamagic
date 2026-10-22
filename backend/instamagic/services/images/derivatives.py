@@ -10,6 +10,15 @@ from PIL.ExifTags import IFD
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 RAW_EXTENSIONS = {".cr2", ".cr3", ".nef", ".arw", ".dng"}
 
+# Contact-sheet thumbs stay small; previews are for classify/crop UI.
+THUMB_LONG_EDGE = 256
+PREVIEW_LONG_EDGE = 1600
+THUMB_QUALITY = 68
+PREVIEW_QUALITY = 82
+# Stable on-disk names under {image_id}/ — derivative GET serves these without a DB hit.
+THUMB_FILENAME = "thumb.jpg"
+PREVIEW_FILENAME = "preview.jpg"
+
 Image.MAX_IMAGE_PIXELS = 80_000_000
 
 
@@ -134,12 +143,27 @@ def oriented_rgb(image: Image.Image) -> Image.Image:
     return transposed
 
 
-def save_derivative(image: Image.Image, dest: Path, long_edge: int, quality: int = 82) -> None:
+def save_derivative(
+    image: Image.Image,
+    dest: Path,
+    long_edge: int,
+    quality: int = 82,
+    *,
+    progressive: bool = False,
+    optimize: bool = False,
+) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     working = image.copy()
     working.thumbnail((long_edge, long_edge), Image.Resampling.LANCZOS)
     # Drop every metadata block, including GPS, by saving a fresh JPEG.
-    working.save(dest, format="JPEG", quality=quality, optimize=True)
+    # Skip optimize=True on thumbs — Huffman multipass is slow and gains little at 256px.
+    working.save(
+        dest,
+        format="JPEG",
+        quality=quality,
+        optimize=optimize,
+        progressive=progressive,
+    )
 
 
 def crop_image(image: Image.Image, x: int, y: int, width: int, height: int) -> Image.Image:

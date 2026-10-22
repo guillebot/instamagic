@@ -29,6 +29,12 @@ from instamagic.models import (
 from instamagic.services.blurs.generator import BlurWindow, apply_blur_covers, suggest_blurs
 from instamagic.services.geometry import Box
 from instamagic.services.images.derivatives import (
+    PREVIEW_FILENAME,
+    PREVIEW_LONG_EDGE,
+    PREVIEW_QUALITY,
+    THUMB_FILENAME,
+    THUMB_LONG_EDGE,
+    THUMB_QUALITY,
     classify_extension,
     crop_image,
     metadata_from_image,
@@ -507,10 +513,22 @@ def _ingest_one(
     image.has_gps = meta.has_gps
     image.phash = dhash(rgb)
     stage("derivatives")
-    thumb_rel = f"{image.id}/thumb.jpg"
-    preview_rel = f"{image.id}/preview.jpg"
-    save_derivative(rgb, derivatives_root / thumb_rel, 384, quality=75)
-    save_derivative(rgb, derivatives_root / preview_rel, 1600, quality=82)
+    thumb_rel = f"{image.id}/{THUMB_FILENAME}"
+    preview_rel = f"{image.id}/{PREVIEW_FILENAME}"
+    save_derivative(
+        rgb,
+        derivatives_root / thumb_rel,
+        THUMB_LONG_EDGE,
+        quality=THUMB_QUALITY,
+        progressive=True,
+    )
+    save_derivative(
+        rgb,
+        derivatives_root / preview_rel,
+        PREVIEW_LONG_EDGE,
+        quality=PREVIEW_QUALITY,
+        optimize=True,
+    )
     image.thumbnail_path = thumb_rel
     image.preview_path = preview_rel
     stage("classify")

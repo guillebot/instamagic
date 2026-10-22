@@ -91,9 +91,13 @@ def test_derivative_escape_via_db_path_is_404(client, app_env) -> None:
     db = session_factory()()
     image = db.get(ImageRow, UUID(image_id))
     assert image is not None
+    # Poisoned DB path must not matter: grid thumbs are served from the fixed
+    # {image_id}/thumb.jpg layout, never from Image.thumbnail_path.
     image.thumbnail_path = "../../../etc/passwd"
     db.commit()
     db.close()
 
-    escaped = client.get(f"/api/derivatives/{image_id}/thumbnail")
-    assert escaped.status_code == 404
+    ok = client.get(f"/api/derivatives/{image_id}/thumbnail")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"].startswith("image/jpeg")
+    assert "max-age=" in ok.headers.get("cache-control", "")

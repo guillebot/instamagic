@@ -87,6 +87,8 @@ input, select, textarea {
   display: block;
   background: #0d0f12;
 }
+.tile img.thumb-loading { opacity: 0; }
+.tile img.thumb-loaded { opacity: 1; transition: opacity 0.12s ease-out; }
 .tile .tile-empty {
   display: grid;
   place-items: center;
@@ -94,6 +96,15 @@ input, select, textarea {
   height: 100%;
   color: #5d636c;
   font-size: 12px;
+}
+.tile .tile-pending {
+  background: linear-gradient(90deg, #12151a 0%, #1a1f27 50%, #12151a 100%);
+  background-size: 200% 100%;
+  animation: tile-shimmer 1.1s ease-in-out infinite;
+}
+@keyframes tile-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 .tile .meta {
   position: absolute;

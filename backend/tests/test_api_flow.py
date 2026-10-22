@@ -144,8 +144,9 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
     image.thumbnail_path = "../../etc/passwd"
     db.commit()
     db.close()
-    escaped = client.get(f"/api/derivatives/{clean_id}/thumbnail")
-    assert escaped.status_code == 404
+    # Grid derivatives ignore DB path and serve {id}/thumb.jpg when present.
+    still_ok = client.get(f"/api/derivatives/{clean_id}/thumbnail")
+    assert still_ok.status_code == 200
 
 
 def _marked(path: Path, color: tuple[int, int, int], box: tuple[int, int, int, int]) -> None:

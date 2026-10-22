@@ -22,6 +22,7 @@ import {
   type ContainedLayout,
   type CropRect,
 } from "../cropGeometry";
+import { acquireThumbSlot } from "../thumbQueue";
 import type {
   AppConfig,
   BlurItem,
@@ -33,6 +34,55 @@ import type {
   LibraryItem,
   QueuesStatus,
 } from "../types";
+
+/** Contact-sheet thumb: gated concurrency + lazy decode; aspect comes from DB, not naturalWidth. */
+function GridThumb({ src }: { src: string }) {
+  const [activeSrc, setActiveSrc] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const releaseRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setActiveSrc(null);
+    releaseRef.current?.();
+    releaseRef.current = null;
+    void acquireThumbSlot().then((done) => {
+      if (cancelled) {
+        done();
+        return;
+      }
+      releaseRef.current = done;
+      setActiveSrc(src);
+    });
+    return () => {
+      cancelled = true;
+      releaseRef.current?.();
+      releaseRef.current = null;
+    };
+  }, [src]);
+
+  function finish() {
+    setLoaded(true);
+    releaseRef.current?.();
+    releaseRef.current = null;
+  }
+
+  if (!activeSrc) {
+    return <span className="tile-empty tile-pending" aria-hidden />;
+  }
+  return (
+    <img
+      src={activeSrc}
+      alt=""
+      draggable={false}
+      decoding="async"
+      className={loaded ? "thumb-loaded" : "thumb-loading"}
+      onLoad={finish}
+      onError={finish}
+    />
+  );
+}
 
 type Page = { items: ImageItem[]; next_cursor: string | null };
 type Filters = {
@@ -239,7 +289,7 @@ export function ReviewPage() {
     count: justifiedRows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => (justifiedRows[index]?.height ?? TARGET_ROW_HEIGHT) + GRID_GAP,
-    overscan: 4,
+    overscan: 2,
   });
 
   useEffect(() => {
@@ -258,9 +308,30 @@ export function ReviewPage() {
     const rowIndex = rowIndexForItem(justifiedRows, selected);
     if (rowIndex < 0) return;
     virtualizer.scrollToIndex(rowIndex, { align: "auto" });
-    // Scroll only when selection moves (or row packing changes), never while classify is open.
+    // Scroll only when keyboard/click selection moves — not when row packing recomputes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, justifiedRows, preview]);
+  }, [selected, preview]);
+
+  const loadingMore = useRef(false);
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el || !cursor) return;
+    function onScroll() {
+      if (!el || !cursor || loadingMore.current) return;
+      const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (remaining > 600) return;
+      loadingMore.current = true;
+      void load(false)
+        .catch((err: unknown) => setMessage(err instanceof Error ? err.message : "Could not load more."))
+        .finally(() => {
+          loadingMore.current = false;
+        });
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursor, items.length]);
 
   const current = items[selected];
   const multiActive = multiIds.size > 0;
@@ -631,7 +702,7 @@ export function ReviewPage() {
                       onDoubleClick={() => openClassify(index)}
                     >
                       {image.thumbnail_url ? (
-                        <img src={image.thumbnail_url} alt="" draggable={false} />
+                        <GridThumb src={image.thumbnail_url} />
                       ) : (
                         <span className="tile-empty">No preview</span>
                       )}
@@ -1117,7 +1188,11 @@ function FolderBrowser({
         <div className="folder-grid">
           {listing.folders.map((entry) => (
             <button key={entry.path} className="folder-tile" onClick={() => onOpen(entry.path)} title={entry.path}>
-              {entry.thumbnail_url ? <img src={entry.thumbnail_url} alt="" /> : <span className="folder-empty">▢</span>}
+              {entry.thumbnail_url ? (
+                <img src={entry.thumbnail_url} alt="" loading="lazy" decoding="async" />
+              ) : (
+                <span className="folder-empty">▢</span>
+              )}
               <span className="folder-name">{entry.name}</span>
               <span className="folder-count">{entry.image_count}</span>
             </button>
