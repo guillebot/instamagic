@@ -51,6 +51,7 @@ Open http://127.0.0.1:5173. The API is on 127.0.0.1:8000 and is not published on
    - **App Domains:** `schimmel.homes`
    - **Valid OAuth Redirect URI:** `https://instamagic.schimmel.homes/api/instagram/oauth/callback` (defaults from `FRONTEND_ORIGIN`, not `PUBLIC_BASE_URL`).
    - Permissions (when `META_OAUTH_CONFIG_ID` is unset): `instagram_basic`, `instagram_content_publish`, `instagram_manage_insights`, `pages_show_list`, `pages_read_engagement`, `business_management` — or set `META_OAUTH_CONFIG_ID` from the Login configuration in the App Dashboard. **Login for Business** must list the same permissions; reconnect after adding `instagram_manage_insights` so Insights sync works.
+   - **Hashtag research** (`ig_hashtag_search`) needs the [Instagram Public Content Access](https://developers.facebook.com/docs/instagram-api/overview#instagram-public-content-access) feature on the Meta app; without it the UI shows a clear error. Meta limits you to **30 unique hashtags per 7 days** — the app tracks remaining budget.
    - **Development** mode: app admins/testers only. **Live** + App Review for other users.
    - Set `INSTAGRAM_GRAPH_VERSION=v25.0` (or newer supported version; default in repo).
    - If you manage multiple Pages, set `INSTAGRAM_EXPECTED_USERNAME=foto.sch` (no `@`) so OAuth picks the right IG account.
