@@ -16,6 +16,7 @@ import { BlurPanel } from "../BlurPanel";
 import { ClassifyPublishPanel } from "../ClassifyPublishPanel";
 import { CropPanel } from "../CropPanel";
 import { SAFETY_FILTERS, lifecycleLabel } from "../lifecycle";
+import { displayPreviewUrl, publishVariantLabel } from "../publishPresentation";
 import { acquireThumbSlot } from "../thumbQueue";
 import {
   appendGridPage,
@@ -222,6 +223,7 @@ export function ReviewPage() {
   const [multiIds, setMultiIds] = useState<Set<string>>(() => new Set());
   const [preview, setPreview] = useState(false);
   const [prepMode, setPrepMode] = useState<PrepMode>("rate");
+  const [showOriginalPreview, setShowOriginalPreview] = useState(false);
   const [ratingBusy, setRatingBusy] = useState(false);
   const [captionsOpen, setCaptionsOpen] = useState(false);
   const [message, setMessage] = useState("");
@@ -681,6 +683,7 @@ export function ReviewPage() {
     suppressSelectionScrollRef.current = true;
     setPreview(false);
     setPrepMode("rate");
+    setShowOriginalPreview(false);
   }
 
   function patchImage(updated: Partial<ImageItem> & { id: string }) {
@@ -1049,7 +1052,10 @@ export function ReviewPage() {
                           {lifecycleLabel(image.effective_state)}
                         </span>
                         {image.has_approved_crop ? <span className="badge crop-approved">crop</span> : null}
-                        {image.has_approved_covering_blur ? (
+                        {image.publish_variant_label ? (
+                          <span className="badge publish-variant">{image.publish_variant_label}</span>
+                        ) : null}
+                        {image.has_approved_blur && !image.publish_variant_label ? (
                           <span className="badge crop-approved">blur</span>
                         ) : null}
                         {image.gemini_label_status?.startsWith("blocked:") ? (
@@ -1136,13 +1142,30 @@ export function ReviewPage() {
             </div>
             {prepMode === "rate" ? (
               <div className="classify-stage">
-                {current.preview_url ? (
-                  <img key={current.id} src={current.preview_url} alt="" />
-                ) : current.thumbnail_url ? (
-                  <img key={current.id} src={current.thumbnail_url} alt="" />
+                {current.has_approved_blur && current.original_preview_url ? (
+                  <label className="show-original-toggle">
+                    <input
+                      type="checkbox"
+                      checked={showOriginalPreview}
+                      onChange={(event) => setShowOriginalPreview(event.target.checked)}
+                    />
+                    Show original (editing)
+                  </label>
+                ) : null}
+                {displayPreviewUrl(current, showOriginalPreview) ? (
+                  <img
+                    key={`${current.id}-${showOriginalPreview ? "orig" : "blur"}`}
+                    src={displayPreviewUrl(current, showOriginalPreview) ?? ""}
+                    alt=""
+                  />
                 ) : (
                   <span className="tile-empty">No preview</span>
                 )}
+                {current.publish_variant_label || publishVariantLabel(current.publish_variant) ? (
+                  <p className="muted publish-variant-caption">
+                    {current.publish_variant_label ?? publishVariantLabel(current.publish_variant)}
+                  </p>
+                ) : null}
               </div>
             ) : prepMode === "crop" ? (
               <CropPanel

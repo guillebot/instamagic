@@ -10,6 +10,10 @@ from instamagic.models import BlurCover, CropSuggestion, Image, SafetyState
 from instamagic.services.blurs.generator import BlurWindow, covers_unsafe_boxes
 from instamagic.services.gemini.context import gemini_allows_pixels
 from instamagic.services.images.paths import safe_join
+from instamagic.services.instagram.publish_derivative import (
+    ensure_publish_derivative,
+    has_any_approved_blur,
+)
 from instamagic.services.pipeline import clear_exposed_boxes
 from sqlalchemy.orm import Session
 
@@ -51,15 +55,22 @@ def derivative_bytes_for_gemini(
     if image.model_state == SafetyState.DO_NOT_POST.value:
         return None
     relative = None
-    if image.model_state == SafetyState.SAFE_AFTER_CROP.value:
-        approved_blur = next(
-            (blur for blur in (image.blurs or []) if blur.approved and blur.derivative_path),
-            None,
-        )
+    approved_blur_path = next(
+        (blur.derivative_path for blur in (image.blurs or []) if blur.approved and blur.derivative_path),
+        None,
+    )
+    if has_any_approved_blur(image):
         if approved is not None and approved.derivative_path:
             relative = approved.derivative_path
-        elif approved_blur is not None:
-            relative = approved_blur.derivative_path
+        elif approved_blur_path:
+            relative = approved_blur_path
+        else:
+            if require_policy:
+                raise GeminiBlocked("Approved blur requires a rendered blur derivative.")
+            return None
+    elif image.model_state == SafetyState.SAFE_AFTER_CROP.value:
+        if approved is not None and approved.derivative_path:
+            relative = approved.derivative_path
         else:
             if require_policy:
                 raise GeminiBlocked("SAFE_AFTER_CROP requires an approved crop or blur derivative.")
@@ -74,8 +85,29 @@ def derivative_bytes_for_gemini(
     return path.read_bytes()
 
 
-def curation_derivative_bytes(settings: Settings, image: Image) -> bytes | None:
+def curation_derivative_bytes(session: Session, settings: Settings, image: Image) -> bytes | None:
     if image.model_state == SafetyState.DO_NOT_POST.value:
         return None
     approved = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
-    return derivative_bytes_for_gemini(settings, image, approved, require_policy=False)
+    return gemini_preview_bytes(session, settings, image, approved, require_policy=False)
+
+
+def gemini_preview_bytes(
+    session: Session,
+    settings: Settings,
+    image: Image,
+    approved: CropSuggestion | None,
+    *,
+    require_policy: bool,
+) -> bytes | None:
+    if require_policy and not gemini_allows_pixels(settings.gemini_image_policy):
+        return None
+    if has_any_approved_blur(image):
+        relative = ensure_publish_derivative(session, settings, image, approved)
+        path = safe_join(settings.derivatives_root, Path(relative))
+        if not path.is_file():
+            if require_policy:
+                raise GeminiBlocked("Approved blur requires a rendered publish derivative.")
+            return None
+        return path.read_bytes()
+    return derivative_bytes_for_gemini(settings, image, approved, require_policy=require_policy)

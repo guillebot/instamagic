@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import UUID
 
 from instamagic.config import Settings
@@ -12,25 +11,21 @@ from instamagic.errors import InstagramNotConfigured, NotAllowed, NotConfigured,
 from instamagic.models import (
     Caption,
     CaptionStatus,
-    CropSuggestion,
     Image,
     InstagramPost,
-    Library,
     PublishAttempt,
     PublishingQueueItem,
     QueueState,
     SafetyState,
 )
 from instamagic.models.enums import PublishTrigger
-from instamagic.services.images.derivatives import crop_image, oriented_rgb, read_image
-from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
 from instamagic.services.instagram.client import InstagramClient, PublishResult
-from instamagic.services.instagram.feed_image import (
-    prepare_publish_file_from_path,
-    write_instagram_publish_jpeg,
+from instamagic.services.instagram.publish_derivative import (
+    blur_drawn_not_approved_reason,
+    ensure_publish_derivative,
 )
-from instamagic.services.pipeline import is_attested, render_blur_derivative
+from instamagic.services.pipeline import is_attested
 from instamagic.services.posting.publish_errors import (
     is_permanent_publish_error,
     is_transient_publish_error,
@@ -115,8 +110,12 @@ def publish_queue_item(
         has_approved_crop=approved is not None,
         has_approved_covering_blur=covering_blur,
     )
-    if not gate.allowed:
-        msg = " ".join(gate.reasons)
+    blur_pending = blur_drawn_not_approved_reason(image)
+    if not gate.allowed or blur_pending:
+        reasons = list(gate.reasons)
+        if blur_pending:
+            reasons.append(blur_pending)
+        msg = " ".join(reasons)
         attempt.finished_at = datetime.now(UTC)
         attempt.success = False
         attempt.error = msg
@@ -231,65 +230,6 @@ def _record_success(
     )
 
 
-def ensure_publish_derivative(
-    session: Session,
-    settings: Settings,
-    image: Image,
-    approved: CropSuggestion | None,
-    *,
-    carousel_slide: bool = False,
-) -> str:
-    """Return a derivatives-relative JPEG path suitable for Meta to fetch."""
-    if approved is not None:
-        if not approved.derivative_path:
-            _refresh_crop_derivative(session, settings, image, approved)
-            session.commit()
-        if approved.derivative_path:
-            return _instagram_publish_copy(
-                settings, image.id, approved.derivative_path, "from-crop", carousel_slide=carousel_slide
-            )
-    approved_blur = next((blur for blur in image.blurs if blur.approved), None)
-    if approved_blur is not None:
-        if not approved_blur.derivative_path or not any(
-            blur.derivative_path for blur in image.blurs if blur.approved
-        ):
-            _render_blur(session, settings, image)
-            session.commit()
-        blur_path = next(
-            (blur.derivative_path for blur in image.blurs if blur.approved and blur.derivative_path),
-            None,
-        )
-        if blur_path:
-            return _instagram_publish_copy(
-                settings, image.id, blur_path, "from-blur", carousel_slide=carousel_slide
-            )
-    if image.preview_path:
-        source = settings.derivatives_root / image.preview_path
-        if source.is_file():
-            relative = f"{image.id}/publish/feed.jpg"
-            dest = settings.derivatives_root / relative
-            if not dest.is_file() or dest.stat().st_mtime < source.stat().st_mtime:
-                prepare_publish_file_from_path(source, dest, carousel_slide=carousel_slide)
-            return relative
-    raise NotConfigured("No publishable derivative is available for this image.")
-
-
-def _instagram_publish_copy(
-    settings: Settings,
-    image_id: UUID,
-    source_relative: str,
-    label: str,
-    *,
-    carousel_slide: bool = False,
-) -> str:
-    source = settings.derivatives_root / source_relative
-    relative = f"{image_id}/publish/{label}.jpg"
-    dest = settings.derivatives_root / relative
-    if not dest.is_file() or dest.stat().st_mtime < source.stat().st_mtime:
-        prepare_publish_file_from_path(source, dest, carousel_slide=carousel_slide)
-    return relative
-
-
 def _publish_carousel_item(
     session: Session,
     settings: Settings,
@@ -332,8 +272,12 @@ def _publish_carousel_item(
             has_approved_crop=approved is not None,
             has_approved_covering_blur=covering_blur,
         )
-        if not gate.allowed:
-            msg = " ".join(gate.reasons)
+        blur_pending = blur_drawn_not_approved_reason(image)
+        if not gate.allowed or blur_pending:
+            reasons = list(gate.reasons)
+            if blur_pending:
+                reasons.append(blur_pending)
+            msg = " ".join(reasons)
             attempt.finished_at = datetime.now(UTC)
             attempt.success = False
             attempt.error = msg
@@ -401,48 +345,3 @@ def _publish_carousel_item(
 
 def _has_approved_covering_blur(image: Image) -> bool:
     return any(blur.approved and blur.covers_unsafe for blur in image.blurs)
-
-
-def _render_blur(session: Session, settings: Settings, image: Image) -> None:
-    library = session.get(Library, image.library_id)
-    if library is None:
-        raise NotFound("Library was not found.")
-    source = safe_join(Path(library.root_path), image.relative_path)
-    if not source.is_file():
-        raise NotFound("Original image was not found.")
-    rgb = oriented_rgb(read_image(source))
-    relative = render_blur_derivative(
-        rgb=rgb,
-        covers=list(image.blurs),
-        image_id=image.id,
-        derivatives_root=settings.derivatives_root,
-    )
-    for blur in image.blurs:
-        blur.derivative_path = relative
-
-
-def _refresh_crop_derivative(session: Session, settings: Settings, image: Image, crop: CropSuggestion) -> None:
-    library = session.get(Library, image.library_id)
-    if library is None:
-        raise NotFound("Library was not found.")
-    source = safe_join(Path(library.root_path), image.relative_path)
-    if source.is_file():
-        rgb = oriented_rgb(read_image(source))
-    elif image.preview_path and (settings.derivatives_root / image.preview_path).is_file():
-        rgb = oriented_rgb(read_image(settings.derivatives_root / image.preview_path))
-    else:
-        raise NotFound("Original image was not found.")
-    x, y, width, height = crop.x, crop.y, crop.width, crop.height
-    if image.width and image.height and rgb.size != (image.width, image.height):
-        scale_x = rgb.size[0] / image.width
-        scale_y = rgb.size[1] / image.height
-        x = max(0, int(round(x * scale_x)))
-        y = max(0, int(round(y * scale_y)))
-        width = max(1, int(round(width * scale_x)))
-        height = max(1, int(round(height * scale_y)))
-        width = min(width, rgb.size[0] - x)
-        height = min(height, rgb.size[1] - y)
-    relative = f"{image.id}/crops/{crop.aspect_ratio.replace(':', 'x')}.jpg"
-    rendered = crop_image(rgb, x, y, width, height)
-    write_instagram_publish_jpeg(rendered, settings.derivatives_root / relative)
-    crop.derivative_path = relative

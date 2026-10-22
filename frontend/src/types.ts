@@ -29,8 +29,13 @@ export type ImageItem = {
   has_gps: boolean;
   has_approved_crop?: boolean;
   has_approved_covering_blur?: boolean;
+  has_approved_blur?: boolean;
+  publish_variant?: string | null;
+  publish_variant_label?: string | null;
   thumbnail_url: string | null;
   preview_url: string | null;
+  original_preview_url?: string | null;
+  publish_preview_url?: string | null;
   gemini_label_status?: string | null;
   gemini_label_at?: string | null;
   gemini_description?: string | null;
