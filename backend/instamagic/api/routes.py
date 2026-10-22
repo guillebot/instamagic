@@ -8,7 +8,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
-
 from instamagic.api.deps import db_dep, require_session, settings_dep
 from instamagic.auth import (
     COOKIE_NAME,
@@ -86,6 +85,7 @@ from instamagic.services.blurs.generator import (
     with_strength,
 )
 from instamagic.services.crops.generator import validate_crop_window, window_excludes_unsafe
+from instamagic.services.factory import build_instagram
 from instamagic.services.gemini.context import build_context
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.geometry import Box
@@ -108,7 +108,6 @@ from instamagic.services.images.presentation import (
     effective_state_filter_clause,
     normalize_human_rating_filter,
 )
-from instamagic.services.factory import build_instagram
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
 from instamagic.services.instagram.oauth import (
     build_authorize_url,

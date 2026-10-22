@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 from instamagic.config import get_settings
 from instamagic.db import get_engine, reset_engine
 from instamagic.main import create_app
 from instamagic.models import Base
 from instamagic.services.secret_box import open_sealed, seal
-from fastapi.testclient import TestClient
 from tests.conftest import login
 
 
