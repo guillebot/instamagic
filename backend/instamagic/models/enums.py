@@ -25,6 +25,11 @@ class QueueState(enum.StrEnum):
     FAILED = "FAILED"
 
 
+class QueueMediaType(enum.StrEnum):
+    IMAGE = "IMAGE"
+    CAROUSEL = "CAROUSEL"
+
+
 class ScheduleMode(enum.StrEnum):
     EXPLICIT = "explicit"
     AUTO_SLOT = "auto_slot"

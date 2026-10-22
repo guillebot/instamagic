@@ -7,6 +7,7 @@ import type { AppConfig, CaptionItem, QueueItem } from "../types";
 
 export function QueuePage() {
   const queryClient = useQueryClient();
+  const [carouselPick, setCarouselPick] = useState<string[]>([]);
   const queue = useQuery({ queryKey: ["queue"], queryFn: () => api<QueueItem[]>("/api/queue") });
   const config = useQuery({ queryKey: ["config"], queryFn: () => api<AppConfig>("/api/config") });
   const ig = useQuery({
@@ -20,6 +21,25 @@ export function QueuePage() {
     await queryClient.invalidateQueries({ queryKey: ["queue"] });
   }
 
+  async function createCarousel() {
+    if (carouselPick.length < 2 || carouselPick.length > 10) {
+      window.alert("Pick 2–10 images for a carousel.");
+      return;
+    }
+    await api("/api/queue/carousel", {
+      method: "POST",
+      body: JSON.stringify({ image_ids: carouselPick }),
+    });
+    setCarouselPick([]);
+    await queryClient.invalidateQueries({ queryKey: ["queue"] });
+  }
+
+  function toggleCarouselPick(imageId: string) {
+    setCarouselPick((prev) =>
+      prev.includes(imageId) ? prev.filter((id) => id !== imageId) : prev.length >= 10 ? prev : [...prev, imageId],
+    );
+  }
+
   return (
     <main className="page">
       <h1>Publishing queue</h1>
@@ -29,6 +49,17 @@ export function QueuePage() {
         {ig.data?.configured ? `ready (${ig.data.provider})` : "not configured"}.{" "}
         <Link to="/instagram">Connection helper</Link>.
       </p>
+      <div className="row carousel-builder">
+        <button
+          className="button"
+          type="button"
+          disabled={carouselPick.length < 2}
+          onClick={() => void createCarousel()}
+        >
+          Queue carousel ({carouselPick.length} selected)
+        </button>
+        <p className="muted">Select 2–10 approved-ready images below (checkbox), reorder after queueing.</p>
+      </div>
       <div className="card-list">
         {queue.data?.map((item) => (
           <QueueCard
@@ -36,6 +67,8 @@ export function QueuePage() {
             item={item}
             policy={config.data?.gemini_policy ?? "text_only"}
             instagramReady={Boolean(ig.data?.configured)}
+            carouselPick={carouselPick}
+            onToggleCarouselPick={toggleCarouselPick}
             onApprove={() => void approve(item.id)}
             onChanged={() => void queryClient.invalidateQueries({ queryKey: ["queue"] })}
           />
@@ -50,12 +83,16 @@ function QueueCard({
   item,
   policy,
   instagramReady,
+  carouselPick,
+  onToggleCarouselPick,
   onApprove,
   onChanged,
 }: {
   item: QueueItem;
   policy: string;
   instagramReady: boolean;
+  carouselPick: string[];
+  onToggleCarouselPick: (imageId: string) => void;
   onApprove: () => void;
   onChanged: () => void;
 }) {
@@ -131,11 +168,51 @@ function QueueCard({
   const canPublish =
     (item.state === "APPROVED" || item.state === "FAILED") && Boolean(selectedCaptionId) && instagramReady;
 
+  const isCarousel = item.media_type === "CAROUSEL" && (item.slides?.length ?? 0) > 1;
+
+  async function moveSlide(imageId: string, direction: -1 | 1) {
+    if (!item.slides?.length) return;
+    const order = item.slides.map((s) => s.image_id);
+    const index = order.indexOf(imageId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= order.length) return;
+    const next = [...order];
+    const [row] = next.splice(index, 1);
+    next.splice(target, 0, row);
+    await api(`/api/queue/${item.id}/carousel-order`, {
+      method: "PUT",
+      body: JSON.stringify({ image_ids: next }),
+    });
+    onChanged();
+  }
+
   return (
     <article className="card queue-card">
-      {item.image.thumbnail_url ? <img src={item.image.thumbnail_url} alt="" /> : <div />}
+      {isCarousel ? (
+        <div className="carousel-thumbs">
+          {item.slides?.map((slide) => (
+            <div key={slide.id} className="carousel-thumb">
+              {slide.image.thumbnail_url ? <img src={slide.image.thumbnail_url} alt="" /> : <span />}
+              <div className="row">
+                <button className="ghost" type="button" onClick={() => void moveSlide(slide.image_id, -1)}>
+                  ↑
+                </button>
+                <button className="ghost" type="button" onClick={() => void moveSlide(slide.image_id, 1)}>
+                  ↓
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : item.image.thumbnail_url ? (
+        <img src={item.image.thumbnail_url} alt="" />
+      ) : (
+        <div />
+      )}
       <div className="queue-body">
-        <strong>{item.image.filename}</strong>
+        <strong>
+          {isCarousel ? `Carousel (${item.slides?.length ?? 0})` : item.image.filename}
+        </strong>
         <p>
           {item.state}
           {item.scheduled_at ? ` · scheduled ${new Date(item.scheduled_at).toLocaleString()}` : ""}
@@ -143,6 +220,16 @@ function QueueCard({
           model {item.image.model_state}
         </p>
         <div className="row">
+          {item.state === "CANDIDATE" && item.media_type !== "CAROUSEL" ? (
+            <label>
+              <input
+                type="checkbox"
+                checked={carouselPick.includes(item.image.id)}
+                onChange={() => onToggleCarouselPick(item.image.id)}
+              />
+              Add to new carousel
+            </label>
+          ) : null}
           {item.state === "CANDIDATE" ? (
             <button className="button" onClick={onApprove}>
               Approve for publish
