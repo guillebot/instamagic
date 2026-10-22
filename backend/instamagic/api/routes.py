@@ -98,7 +98,6 @@ from instamagic.services.images.presentation import (
     normalize_human_rating_filter,
 )
 from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
-from instamagic.services.instagram.client import mask_access_token
 from instamagic.services.instagram.publish import publish_queue_item
 from instamagic.services.pipeline import (
     clear_exposed_boxes,
@@ -1085,60 +1084,18 @@ def candidates(
     ]
 
 
-def _instagram_connection_status(settings: Settings, *, configured: bool) -> dict[str, object]:
-    token = settings.instagram_access_token
-    account_id = settings.instagram_business_account_id.strip()
-    return {
-        "configured": configured,
-        "provider": settings.instagram_provider,
-        "auto_publish": settings.auto_publish,
-        "public_base_url": settings.resolve_public_base_url(),
-        "graph_version": settings.instagram_graph_version,
-        "token_configured": bool(token.strip()) or settings.instagram_provider == "fake",
-        "token_masked": (
-            "fake-provider"
-            if settings.instagram_provider == "fake"
-            else mask_access_token(token)
-        ),
-        "business_account_id": account_id or None,
-        "business_account_id_configured": bool(account_id) or settings.instagram_provider == "fake",
-    }
-
-
 @router.get("/api/instagram/status")
 def instagram_status(
     request: Request,
     _auth: None = Depends(require_session),
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
-    """Credential presence only — no Graph call. Never returns the raw access token."""
     client = request.app.state.instagram
-    return _instagram_connection_status(settings, configured=bool(client.configured()))
-
-
-@router.post("/api/instagram/account")
-def instagram_account_refresh(
-    request: Request,
-    _auth: None = Depends(require_session),
-    settings: Settings = Depends(settings_dep),
-) -> dict[str, object]:
-    """Test connection and fetch IG user fields via Graph (or fake provider). Does not publish."""
-    client = request.app.state.instagram
-    status = _instagram_connection_status(settings, configured=bool(client.configured()))
-    try:
-        details = client.fetch_account_details()
-    except NotConfigured as exc:
-        return {
-            **status,
-            "ok": False,
-            "error": exc.detail,
-            "account": None,
-        }
     return {
-        **status,
-        "ok": True,
-        "error": None,
-        "account": details.as_dict(),
+        "configured": bool(client.configured()),
+        "provider": settings.instagram_provider,
+        "auto_publish": settings.auto_publish,
+        "public_base_url": settings.resolve_public_base_url(),
     }
 
 
