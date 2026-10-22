@@ -15,6 +15,18 @@ import { BlurPanel } from "../BlurPanel";
 import { CropPanel } from "../CropPanel";
 import { SAFETY_FILTERS, lifecycleLabel } from "../lifecycle";
 import { acquireThumbSlot } from "../thumbQueue";
+import {
+  createNavStacks,
+  indexOfImageId,
+  mergeImageListRefresh,
+  navBack,
+  navForward,
+  navVisit,
+  nextImageIdAfterCurrent,
+  resolveCurrentImage,
+  shouldApplyInitialImageFromUrl,
+  type ReviewNavStacks,
+} from "../reviewNavigation";
 import type {
   AppConfig,
   CaptionItem,
@@ -176,13 +188,23 @@ function neighborIndex(rows: JustifiedRow[], itemIndex: number, direction: -1 | 
 
 export function ReviewPage() {
   const queryClient = useQueryClient();
-  const libraries = useQuery({ queryKey: ["libraries"], queryFn: () => api<LibraryItem[]>("/api/libraries") });
-  const config = useQuery({ queryKey: ["config"], queryFn: () => api<AppConfig>("/api/config") });
+  const libraries = useQuery({
+    queryKey: ["libraries"],
+    queryFn: () => api<LibraryItem[]>("/api/libraries"),
+    refetchOnWindowFocus: false,
+  });
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api<AppConfig>("/api/config"),
+    refetchOnWindowFocus: false,
+  });
   const [libraryId, setLibraryId] = useState("");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [items, setItems] = useState<ImageItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [selected, setSelected] = useState(0);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [pinnedImage, setPinnedImage] = useState<ImageItem | null>(null);
+  const [navStacks, setNavStacks] = useState<ReviewNavStacks>(() => createNavStacks());
   const [multiIds, setMultiIds] = useState<Set<string>>(() => new Set());
   const [preview, setPreview] = useState(false);
   const [prepMode, setPrepMode] = useState<PrepMode>("rate");
@@ -195,7 +217,64 @@ export function ReviewPage() {
   const recursive = searchParams.get("recursive") === "1";
   const parentRef = useRef<HTMLDivElement>(null);
   const classifyDialogRef = useRef<HTMLDivElement>(null);
+  const currentIdRef = useRef<string | null>(null);
+  const pinnedRef = useRef<ImageItem | null>(null);
+  const urlSelectionInitialized = useRef(false);
+  const sessionImagesRef = useRef<Map<string, ImageItem>>(new Map());
   const [width, setWidth] = useState(960);
+
+  useEffect(() => {
+    currentIdRef.current = currentId;
+  }, [currentId]);
+  useEffect(() => {
+    pinnedRef.current = pinnedImage;
+  }, [pinnedImage]);
+
+  const syncImageParam = useCallback(
+    (imageId: string | null, replace = true) => {
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          if (imageId) params.set("image", imageId);
+          else params.delete("image");
+          return params;
+        },
+        { replace },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const rememberImage = useCallback((image: ImageItem) => {
+    sessionImagesRef.current.set(image.id, image);
+  }, []);
+
+  const pinIfMissingFromList = useCallback(
+    (imageId: string) => {
+      const inList = items.some((row) => row.id === imageId);
+      if (inList) {
+        setPinnedImage(null);
+        return;
+      }
+      const cached = sessionImagesRef.current.get(imageId) ?? pinnedRef.current;
+      if (cached?.id === imageId) setPinnedImage(cached);
+    },
+    [items],
+  );
+
+  const goToImage = useCallback(
+    (nextId: string, options?: { recordHistory?: boolean; replaceUrl?: boolean }) => {
+      const recordHistory = options?.recordHistory ?? true;
+      const replaceUrl = options?.replaceUrl ?? true;
+      if (recordHistory) {
+        setNavStacks((stacks) => navVisit(stacks, currentIdRef.current, nextId));
+      }
+      setCurrentId(nextId);
+      pinIfMissingFromList(nextId);
+      syncImageParam(nextId, replaceUrl);
+    },
+    [pinIfMissingFromList, syncImageParam],
+  );
 
   function openFolder(next: string) {
     setSearchParams(
@@ -246,12 +325,36 @@ export function ReviewPage() {
     const params = new URLSearchParams(queryString);
     if (!reset && cursor) params.set("cursor", cursor);
     const page = await api<Page>(`/api/images?${params.toString()}`);
-    setItems((current) => (reset ? page.items : [...current, ...page.items]));
-    setCursor(page.next_cursor);
-    if (reset && !keepSelection) {
-      setSelected(0);
-      setMultiIds(new Set());
+    if (reset) {
+      setItems((previous) => {
+        const activeId = keepSelection ? currentIdRef.current : null;
+        const { items: merged, pinned } = mergeImageListRefresh(
+          previous,
+          page.items,
+          activeId,
+          pinnedRef.current,
+        );
+        if (pinned) setPinnedImage(pinned);
+        else if (activeId && merged.some((row) => row.id === activeId)) setPinnedImage(null);
+        return merged;
+      });
+      if (!keepSelection) {
+        const urlImage = searchParams.get("image");
+        const pick =
+          urlImage && page.items.some((row) => row.id === urlImage)
+            ? urlImage
+            : page.items[0]?.id ?? null;
+        setCurrentId(pick);
+        setPinnedImage(null);
+        setNavStacks(createNavStacks());
+        setMultiIds(new Set());
+        if (pick) syncImageParam(pick, true);
+        urlSelectionInitialized.current = true;
+      }
+    } else {
+      setItems((current) => [...current, ...page.items]);
     }
+    setCursor(page.next_cursor);
   }
 
   useEffect(() => {
@@ -291,18 +394,41 @@ export function ReviewPage() {
   }, [justifiedRows]);
 
   useEffect(() => {
-    if (items.length === 0) return;
-    if (selected >= items.length) setSelected(items.length - 1);
-  }, [items.length, selected]);
+    const initial = shouldApplyInitialImageFromUrl(
+      urlSelectionInitialized.current,
+      items,
+      searchParams.get("image"),
+    );
+    if (initial) {
+      urlSelectionInitialized.current = true;
+      setCurrentId(initial);
+      setPinnedImage(null);
+    } else if (items.length > 0 && !urlSelectionInitialized.current) {
+      urlSelectionInitialized.current = true;
+    }
+  }, [items, searchParams]);
 
   useEffect(() => {
-    if (!items.length || preview) return;
-    const rowIndex = rowIndexForItem(justifiedRows, selected);
+    if (items.length === 0) {
+      setCurrentId(null);
+      setPinnedImage(null);
+      return;
+    }
+    if (!currentId) setCurrentId(items[0].id);
+  }, [items, currentId]);
+
+  const selectedIndex = indexOfImageId(items, currentId);
+
+  useEffect(() => {
+    if (!items.length || preview || !currentId) return;
+    const itemIndex = indexOfImageId(items, currentId);
+    if (itemIndex < 0) return;
+    const rowIndex = rowIndexForItem(justifiedRows, itemIndex);
     if (rowIndex < 0) return;
     virtualizer.scrollToIndex(rowIndex, { align: "auto" });
     // Scroll only when keyboard/click selection moves — not when row packing recomputes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, preview]);
+  }, [currentId, preview]);
 
   const loadingMore = useRef(false);
   useEffect(() => {
@@ -325,15 +451,16 @@ export function ReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursor, items.length]);
 
-  const current = items[selected];
+  const current = resolveCurrentImage(items, currentId, pinnedImage);
+  useEffect(() => {
+    if (current) rememberImage(current);
+  }, [current, rememberImage]);
+
   const multiActive = multiIds.size > 0;
 
-  const classifyIndices = useMemo(() => {
-    if (!multiActive) return items.map((_, index) => index);
-    return items.reduce<number[]>((acc, item, index) => {
-      if (multiIds.has(item.id)) acc.push(index);
-      return acc;
-    }, []);
+  const classifyIds = useMemo(() => {
+    if (!multiActive) return items.map((row) => row.id);
+    return items.filter((row) => multiIds.has(row.id)).map((row) => row.id);
   }, [items, multiActive, multiIds]);
 
   const applyRating = useCallback(async (imageId: string, rating: string) => {
@@ -342,8 +469,9 @@ export function ReviewPage() {
       body: JSON.stringify({ rating }),
     });
     setItems((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
+    rememberImage(updated);
     return updated;
-  }, []);
+  }, [rememberImage]);
 
   async function rate(rating: string) {
     if (!current || ratingBusy) return;
@@ -356,10 +484,11 @@ export function ReviewPage() {
   }
 
   function advanceInClassifySet() {
-    const pos = classifyIndices.indexOf(selected);
-    if (pos < 0) return;
-    if (pos < classifyIndices.length - 1) {
-      setSelected(classifyIndices[pos + 1]);
+    if (!currentId) return;
+    const orderedIds = [...classifyIds];
+    const nextId = nextImageIdAfterCurrent(orderedIds, currentId);
+    if (nextId) {
+      goToImage(nextId, { recordHistory: false });
       setMessage("");
       return;
     }
@@ -382,20 +511,46 @@ export function ReviewPage() {
   }
 
   function moveInClassifySet(delta: number) {
-    const pos = classifyIndices.indexOf(selected);
+    if (!currentId) return;
+    const pos = classifyIds.indexOf(currentId);
     if (pos < 0) return;
-    const next = classifyIndices[pos + delta];
-    if (next !== undefined) setSelected(next);
+    const nextId = classifyIds[pos + delta];
+    if (nextId) goToImage(nextId);
+  }
+
+  function navigateBack() {
+    if (!currentId) return false;
+    const result = navBack(navStacks, currentId);
+    if (!result.targetId) return false;
+    setNavStacks(result.stacks);
+    setCurrentId(result.targetId);
+    pinIfMissingFromList(result.targetId);
+    syncImageParam(result.targetId, true);
+    return true;
+  }
+
+  function navigateForward() {
+    if (!currentId) return false;
+    const result = navForward(navStacks, currentId);
+    if (!result.targetId) return false;
+    setNavStacks(result.stacks);
+    setCurrentId(result.targetId);
+    pinIfMissingFromList(result.targetId);
+    syncImageParam(result.targetId, true);
+    return true;
   }
 
   function openClassify(atIndex?: number, mode: PrepMode = "rate") {
-    const index = atIndex ?? selected;
-    if (atIndex !== undefined) setSelected(atIndex);
+    const index = atIndex ?? selectedIndex;
+    if (atIndex !== undefined) {
+      const image = items[atIndex];
+      if (image) goToImage(image.id);
+    }
     if (multiIds.size > 0) {
       const image = items[index];
       if (!image || !multiIds.has(image.id)) {
-        const first = items.findIndex((item) => multiIds.has(item.id));
-        if (first >= 0) setSelected(first);
+        const first = items.find((item) => multiIds.has(item.id));
+        if (first) goToImage(first.id);
       }
     }
     setMessage("");
@@ -410,13 +565,14 @@ export function ReviewPage() {
 
   function patchImage(updated: Partial<ImageItem> & { id: string }) {
     setItems((rows) => rows.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)));
+    setPinnedImage((pinned) => (pinned?.id === updated.id ? { ...pinned, ...updated } : pinned));
   }
 
   function selectTile(index: number, event: ReactMouseEvent) {
     const image = items[index];
     if (!image) return;
     if (event.metaKey || event.ctrlKey) {
-      setSelected(index);
+      goToImage(image.id);
       setMultiIds((currentIds) => {
         const next = new Set(currentIds);
         if (next.has(image.id)) next.delete(image.id);
@@ -426,14 +582,14 @@ export function ReviewPage() {
       return;
     }
     if (event.shiftKey) {
-      const from = selected;
+      const from = selectedIndex >= 0 ? selectedIndex : index;
       const lo = Math.min(from, index);
       const hi = Math.max(from, index);
       setMultiIds(new Set(items.slice(lo, hi + 1).map((item) => item.id)));
-      setSelected(index);
+      goToImage(image.id);
       return;
     }
-    setSelected(index);
+    goToImage(image.id);
     setMultiIds(new Set());
   }
 
@@ -534,11 +690,11 @@ export function ReviewPage() {
         if (prepMode !== "rate") return;
         if (event.key === "ArrowRight") {
           event.preventDefault();
-          moveInClassifySet(1);
+          if (!navigateForward()) moveInClassifySet(1);
         }
-        if (event.key === "ArrowLeft") {
+        if (event.key === "ArrowLeft" || event.key === "Backspace" || event.key.toLowerCase() === "z") {
           event.preventDefault();
-          moveInClassifySet(-1);
+          if (!navigateBack()) moveInClassifySet(-1);
         }
         return;
       }
@@ -548,15 +704,34 @@ export function ReviewPage() {
         void rate(RATINGS[event.key]);
         return;
       }
-      if (event.key === "ArrowRight") setSelected((index) => Math.min(items.length - 1, index + 1));
-      if (event.key === "ArrowLeft") setSelected((index) => Math.max(0, index - 1));
+      if (event.key === "ArrowRight") {
+        if (!navigateForward() && selectedIndex >= 0) {
+          const next = items[selectedIndex + 1];
+          if (next) goToImage(next.id);
+        }
+      }
+      if (event.key === "ArrowLeft" || event.key === "Backspace" || event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (!navigateBack() && selectedIndex > 0) {
+          const prev = items[selectedIndex - 1];
+          if (prev) goToImage(prev.id);
+        }
+      }
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        setSelected((index) => neighborIndex(justifiedRows, index, 1));
+        if (selectedIndex >= 0) {
+          const nextIndex = neighborIndex(justifiedRows, selectedIndex, 1);
+          const next = items[nextIndex];
+          if (next) goToImage(next.id);
+        }
       }
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        setSelected((index) => neighborIndex(justifiedRows, index, -1));
+        if (selectedIndex >= 0) {
+          const nextIndex = neighborIndex(justifiedRows, selectedIndex, -1);
+          const next = items[nextIndex];
+          if (next) goToImage(next.id);
+        }
       }
       if (event.key === " ") {
         event.preventDefault();
@@ -601,6 +776,7 @@ export function ReviewPage() {
             imageCount={libraries.data.find((library) => library.id === libraryId)?.image_count ?? 0}
             detectorAvailable={config.data?.detector_available ?? false}
             safetyClassifier={config.data?.safety_classifier ?? ""}
+            suspendImageRefresh={preview}
             onImages={() => {
               void load(true, true);
               setFolderRefresh((value) => value + 1);
@@ -716,7 +892,7 @@ export function ReviewPage() {
                 {row.items.map((image, offset) => {
                   const index = row.startIndex + offset;
                   const aspect = imageAspect(image);
-                  const isSelected = index === selected;
+                  const isSelected = image.id === currentId;
                   const isMulti = multiIds.has(image.id);
                   const tileClass = [
                     "tile",
@@ -768,9 +944,9 @@ export function ReviewPage() {
         </button>
       ) : null}
       <p className="help">
-        Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move, space classify, C crop, B blur, P queue, G
-        captions. ⌘/Ctrl-click multi-select, Shift-click range. In classify: 1–4 rate and advance, C/B prep tools,
-        Esc back/close.
+        Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move (→ next / forward, ← or Z or Backspace back), space
+        classify, C crop, B blur, P queue, G captions. ⌘/Ctrl-click multi-select, Shift-click range. In classify: 1–4 rate
+        and advance, C/B prep tools, Esc back/close.
         {multiActive ? ` · ${multiIds.size} selected for classify` : ""}
       </p>
       {preview && current ? (
@@ -788,8 +964,8 @@ export function ReviewPage() {
               <p className="classify-meta" title={current.relative_path}>
                 {current.relative_path}
                 {multiActive
-                  ? ` · ${classifyIndices.indexOf(selected) + 1}/${classifyIndices.length} selected`
-                  : ` · ${selected + 1}/${items.length}`}
+                  ? ` · ${(currentId ? classifyIds.indexOf(currentId) : -1) + 1}/${classifyIds.length} selected`
+                  : ` · ${(currentId ? classifyIds.indexOf(currentId) : selectedIndex) + 1}/${items.length}`}
                 {ratingBusy ? " · saving…" : ""}
               </p>
               <div className="classify-modes">
@@ -811,6 +987,17 @@ export function ReviewPage() {
                   </button>
                 ))}
               </div>
+              <button type="button" className="ghost" disabled={navStacks.back.length === 0} onClick={() => navigateBack()}>
+                ← Back
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={navStacks.forward.length === 0}
+                onClick={() => navigateForward()}
+              >
+                Forward →
+              </button>
               <button type="button" className="ghost" onClick={closeClassify}>
                 Close
               </button>
@@ -955,6 +1142,7 @@ function ScanPanel({
   imageCount,
   detectorAvailable,
   safetyClassifier,
+  suspendImageRefresh,
   onImages,
   onLibraryRefresh,
 }: {
@@ -962,6 +1150,7 @@ function ScanPanel({
   imageCount: number;
   detectorAvailable: boolean;
   safetyClassifier: string;
+  suspendImageRefresh?: boolean;
   onImages: () => void;
   onLibraryRefresh: () => void;
 }) {
@@ -972,8 +1161,10 @@ function ScanPanel({
   const [now, setNow] = useState(() => Date.now());
   const onImagesRef = useRef(onImages);
   const onLibraryRef = useRef(onLibraryRefresh);
+  const suspendRef = useRef(suspendImageRefresh);
   onImagesRef.current = onImages;
   onLibraryRef.current = onLibraryRefresh;
+  suspendRef.current = suspendImageRefresh;
 
   async function refreshJobs() {
     const jobs = await api<JobItem[]>(`/api/jobs?library_id=${encodeURIComponent(libraryId)}`);
@@ -1006,7 +1197,7 @@ function ScanPanel({
     Promise.all([refreshJobs(), refreshQueues()])
       .then(([result]) => {
         if (cancelled) return;
-        if (result.active && scanActive(result.active.status)) {
+        if (result.active && scanActive(result.active.status) && !suspendRef.current) {
           onImagesRef.current();
           onLibraryRef.current();
         }
@@ -1046,11 +1237,11 @@ function ScanPanel({
         polls += 1;
         still = result.active ? scanActive(result.active.status) : false;
         // Reload the grid only while a scan is active (or just finished) — never on idle polls.
-        if (still && (polls === 1 || polls % 4 === 0)) {
+        if (!suspendRef.current && still && (polls === 1 || polls % 4 === 0)) {
           onImagesRef.current();
           onLibraryRef.current();
         }
-        if (watchActive && !still) {
+        if (!suspendRef.current && watchActive && !still) {
           onImagesRef.current();
           onLibraryRef.current();
         }
