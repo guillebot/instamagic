@@ -394,6 +394,51 @@ input, select, textarea {
   flex-wrap: wrap;
   gap: 6px;
 }
+.classify-publish {
+  flex-shrink: 0;
+  border-top: 1px solid #2a2f36;
+  padding-top: 10px;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.classify-publish-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.badge.queue-badge { background: #2a4a5c; }
+.classify-publish-actions { flex-wrap: wrap; }
+.classify-publish-schedule { flex-wrap: wrap; align-items: center; gap: 8px; }
+.caption-pick.compact label { font-size: 12px; }
+.classify-post-confirm {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 12, 0.82);
+  display: grid;
+  place-items: center;
+  z-index: 40;
+  padding: 16px;
+}
+.classify-post-confirm-body {
+  background: #181b20;
+  border: 1px solid #3a414b;
+  border-radius: 12px;
+  padding: 16px;
+  max-width: 520px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.classify-post-preview {
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  background: #0d0f12;
+  border-radius: 8px;
+}
 .prep-panel {
   display: flex;
   flex-direction: column;

@@ -13,6 +13,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { BlurPanel } from "../BlurPanel";
+import { ClassifyPublishPanel } from "../ClassifyPublishPanel";
 import { CropPanel } from "../CropPanel";
 import { SAFETY_FILTERS, lifecycleLabel } from "../lifecycle";
 import { acquireThumbSlot } from "../thumbQueue";
@@ -1050,7 +1051,7 @@ export function ReviewPage() {
       <p className="help">
         Keys: 1 reject, 2 review, 3 safe, 4 excellent, arrows move (→ next / forward, ← or Z or Backspace back), space
         classify, C crop, B blur, P queue, G captions. ⌘/Ctrl-click multi-select, Shift-click range. In classify: 1–4 rate
-        and advance, C/B prep tools, Esc back/close.
+        and advance, C/B prep tools, Queue / Schedule / Post now panel, Esc back/close.
         {multiActive ? ` · ${multiIds.size} selected for classify` : ""}
       </p>
       {preview && current ? (
@@ -1140,6 +1141,12 @@ export function ReviewPage() {
                 onStatus={setMessage}
               />
             )}
+            <ClassifyPublishPanel
+              image={current}
+              geminiPolicy={config.data?.gemini_policy ?? "text_only"}
+              onImageUpdated={(updated) => patchImage(updated)}
+              onStatus={setMessage}
+            />
             <div className="classify-toolbar">
               <div className="classify-ratings">
                 {RATING_KEYS.map(({ key, rating, label }) => (

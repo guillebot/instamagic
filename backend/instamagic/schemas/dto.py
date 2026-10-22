@@ -77,6 +77,22 @@ class ScheduleIn(BaseModel):
     caption_id: UUID | None = None
 
 
+class ImagePublishReadinessOut(BaseModel):
+    publishing_allowed: bool
+    publishing_reasons: list[str]
+    caption_generation_allowed: bool
+    caption_generation_reasons: list[str]
+    library_attested: bool
+    queue_item_id: UUID | None = None
+    queue_state: str | None = None
+    scheduled_at: datetime | None = None
+    published_at: datetime | None = None
+    instagram_configured: bool
+    instagram_target_username: str | None = None
+    feed_preview_url: str | None = None
+    uses_approved_crop: bool = False
+
+
 class PostingScheduleConfigIn(BaseModel):
     timezone: str | None = Field(default=None, max_length=64)
     weekday_slots: dict[str, list[str]] | None = None

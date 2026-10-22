@@ -72,6 +72,7 @@ from instamagic.schemas.dto import (
     HashtagIn,
     HealthStatusOut,
     ImageOut,
+    ImagePublishReadinessOut,
     ImagePage,
     InstagramCredentialsIn,
     InstagramOAuthSelectIn,
@@ -155,6 +156,7 @@ from instamagic.services.posting.carousel_queue import (
     reorder_carousel_slides,
     slides_for_item,
 )
+from instamagic.services.posting.readiness import build_image_publish_readiness
 from instamagic.services.posting.queue_schedule import (
     fill_slots_from_approved,
     list_upcoming,
@@ -707,6 +709,29 @@ def list_images(
 @router.get("/api/images/{image_id}", response_model=ImageOut)
 def get_image(image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> ImageOut:
     return _image_out(session, _load_image(session, image_id))
+
+
+@router.get("/api/images/{image_id}/publish-readiness", response_model=ImagePublishReadinessOut)
+def get_image_publish_readiness(
+    image_id: UUID,
+    request: Request,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> ImagePublishReadinessOut:
+    image = _load_image(session, image_id)
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    configured = bool(client.configured()) or settings.instagram_provider == "fake"
+    payload = build_image_publish_readiness(
+        session,
+        settings,
+        image,
+        instagram_configured=configured,
+    )
+    presented = _image_out(session, image)
+    payload["feed_preview_url"] = presented.preview_url or presented.thumbnail_url
+    return ImagePublishReadinessOut(**payload)
 
 
 @router.post("/api/images/{image_id}/rating", response_model=ImageOut)
