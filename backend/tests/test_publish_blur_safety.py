@@ -71,8 +71,8 @@ def test_api_returns_blurred_thumbnail_url(client, app_env) -> None:
     assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "standard"}).status_code == 200
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     detail = client.get(f"/api/images/{image_id}").json()
-    assert detail["thumbnail_url"] == f"/api/derivatives/{image_id}/blurred-thumbnail"
-    assert detail["preview_url"] == f"/api/derivatives/{image_id}/blurred-preview"
+    assert detail["thumbnail_url"].startswith(f"/api/derivatives/{image_id}/blurred-thumbnail?v=")
+    assert detail["preview_url"].startswith(f"/api/derivatives/{image_id}/blurred-preview?v=")
     assert detail["publish_variant"] == "BLURRED"
     assert detail["publish_variant_label"] == "SAFE · BLURRED"
     thumb = client.get(detail["thumbnail_url"])

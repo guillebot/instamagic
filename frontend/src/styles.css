@@ -517,6 +517,8 @@ input, select, textarea {
 .blur-ellipse.approved { border-color: #8fd4a4; box-shadow: inset 0 0 24px rgba(143, 212, 164, 0.22); }
 .blur-ellipse.selected { border-color: #9ec5ff; box-shadow: inset 0 0 20px rgba(158, 197, 255, 0.35); }
 .blur-ellipse.interactive { cursor: grab; }
+/* Client-side preview while the server render for the new geometry is pending. */
+.blur-ellipse.live-blur { background: rgba(20, 24, 28, 0.08); }
 .blur-ellipse.interactive:active { cursor: grabbing; }
 .blur-handle.resize-handle {
   position: absolute;

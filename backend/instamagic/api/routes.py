@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ from instamagic.auth import (
     record_login_failure,
     sign_session,
 )
-from instamagic.config import ATTESTATION_STATEMENT, Settings
+from instamagic.config import ATTESTATION_STATEMENT, Settings, get_settings
 from instamagic.errors import GeminiBlocked, NotAllowed, NotConfigured, NotFound
 from instamagic.models import (
     AdultAttestation,
@@ -111,6 +112,7 @@ from instamagic.services.blurs.unlock import (
     unlock_summary_message,
     verify_blur_unlock,
 )
+from instamagic.services.blurs.version import blur_render_version, file_stamp
 from instamagic.services.crops.generator import validate_crop_window, window_excludes_unsafe
 from instamagic.services.factory import build_instagram
 from instamagic.services.gemini.context import build_context, gemini_allows_pixels
@@ -305,15 +307,26 @@ def _image_out(session: Session, image: Image) -> ImageOut:
     use_blurred_previews = has_approved_blur or (
         image.model_state == SafetyState.DO_NOT_POST.value and bool(image.blurs)
     )
+    blur_version = _image_blur_version(image) if image.blurs else None
+    approved_crop = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
+    crop_key = (
+        f"{approved_crop.id}:{approved_crop.x},{approved_crop.y},{approved_crop.width},{approved_crop.height}"
+        if approved_crop
+        else "-"
+    )
+    publish_v = hashlib.sha1(f"{blur_version or '-'}|{crop_key}".encode()).hexdigest()[:12]
     if use_blurred_previews:
-        thumbnail_url = f"/api/derivatives/{image.id}/blurred-thumbnail"
-        preview_url = f"/api/derivatives/{image.id}/blurred-preview"
-        publish_preview_url = f"/api/images/{image.id}/publish-preview"
+        thumb_v = _image_blur_version(image, "blurs/thumb.jpg")
+        thumbnail_url = f"/api/derivatives/{image.id}/blurred-thumbnail?v={thumb_v}"
+        preview_url = f"/api/derivatives/{image.id}/blurred-preview?v={blur_version}"
+        publish_preview_url = f"/api/images/{image.id}/publish-preview?v={publish_v}"
     else:
         thumbnail_url = f"/api/derivatives/{image.id}/thumbnail" if image.thumbnail_path else None
         preview_url = original_preview
         publish_preview_url = (
-            f"/api/images/{image.id}/publish-preview" if image.preview_path or has_approved_crop else None
+            f"/api/images/{image.id}/publish-preview?v={publish_v}"
+            if image.preview_path or has_approved_crop
+            else None
         )
     variant = publish_variant(
         image.human_rating,
@@ -972,7 +985,7 @@ def create_blur(
         approved=False,
     )
     session.add(row)
-    session.flush()
+    _reload_blurs(session, image)
     _refresh_blur_derivative(session, settings, image)
     if image.model_state == SafetyState.DO_NOT_POST.value:
         reset_blur_unlock(image)
@@ -1007,6 +1020,10 @@ def suggest_blur_covers(
         )
     except ValueError as exc:
         raise NotAllowed(str(exc)) from exc
+    # Old covers were bulk-deleted: reload the collection and re-render so the cover
+    # and the grid thumbnail both reflect exactly the new set.
+    _reload_blurs(session, image)
+    _refresh_blur_derivative(session, settings, image)
     for crop in image.crops:
         crop.approved = False
     if image.model_state == SafetyState.DO_NOT_POST.value:
@@ -1112,7 +1129,7 @@ def delete_blur(
     if blur is None or blur.image_id != image.id:
         raise NotFound("Blur cover was not found.")
     session.delete(blur)
-    session.flush()
+    _reload_blurs(session, image)
     _refresh_blur_derivative(session, settings, image)
     if image.model_state == SafetyState.DO_NOT_POST.value:
         reset_blur_unlock(image)
@@ -1156,6 +1173,13 @@ def approve_blurs(
 
 
 _DERIVATIVE_CACHE = {"Cache-Control": "private, max-age=604800, immutable"}
+# Blur/crop renders are rewritten in place: only a versioned URL (?v=) may be cached
+# long-term; an unversioned request must always revalidate.
+_NO_CACHE = {"Cache-Control": "private, no-cache"}
+
+
+def _render_cache(v: str | None) -> dict[str, str]:
+    return _DERIVATIVE_CACHE if v else _NO_CACHE
 _GRID_KIND_FILES = {"thumbnail": THUMB_FILENAME, "preview": PREVIEW_FILENAME}
 _BLUR_KIND_FILES = {"blurred-preview": "blurs/cover.jpg", "blurred-thumbnail": "blurs/thumb.jpg"}
 
@@ -1164,6 +1188,7 @@ _BLUR_KIND_FILES = {"blurred-preview": "blurs/cover.jpg", "blurred-thumbnail": "
 def derivative(
     image_id: UUID,
     kind: str,
+    v: str | None = Query(default=None, max_length=64),
     _auth: None = Depends(require_session),
     settings: Settings = Depends(settings_dep),
 ) -> FileResponse:
@@ -1183,7 +1208,7 @@ def derivative(
                 path = cover
         if not path.is_file():
             raise NotFound("Derivative was not found.")
-        return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
+        return FileResponse(path, media_type="image/jpeg", headers=_render_cache(v))
     filename = _GRID_KIND_FILES.get(kind)
     if filename is None:
         raise NotFound("Derivative was not found.")
@@ -1249,6 +1274,7 @@ def story_preview(
 def crop_derivative(
     image_id: UUID,
     crop_id: UUID,
+    v: str | None = Query(default=None, max_length=64),
     _auth: None = Depends(require_session),
     session: Session = db_dep,
     settings: Settings = Depends(settings_dep),
@@ -1259,13 +1285,14 @@ def crop_derivative(
     path = safe_join(settings.derivatives_root, crop.derivative_path)
     if not path.is_file():
         raise NotFound("Derivative was not found.")
-    return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
+    return FileResponse(path, media_type="image/jpeg", headers=_render_cache(v))
 
 
 @router.get("/api/derivatives/{image_id}/blurs/{blur_id}")
 def blur_derivative(
     image_id: UUID,
     blur_id: UUID,
+    v: str | None = Query(default=None, max_length=64),
     _auth: None = Depends(require_session),
     session: Session = db_dep,
     settings: Settings = Depends(settings_dep),
@@ -1276,7 +1303,7 @@ def blur_derivative(
     path = safe_join(settings.derivatives_root, blur.derivative_path)
     if not path.is_file():
         raise NotFound("Derivative was not found.")
-    return FileResponse(path, media_type="image/jpeg", headers=_DERIVATIVE_CACHE)
+    return FileResponse(path, media_type="image/jpeg", headers=_render_cache(v))
 
 
 @router.get("/api/tags")
@@ -2773,7 +2800,9 @@ def suggest_hashtags(
 def _crop_out(image: Image, crop: CropSuggestion) -> CropOut:
     preview = None
     if crop.derivative_path:
-        preview = f"/api/derivatives/{image.id}/crops/{crop.id}"
+        stamp = file_stamp(_derivatives_path(crop.derivative_path))
+        crop_v = hashlib.sha1(f"{crop.x},{crop.y},{crop.width},{crop.height}|{stamp}".encode()).hexdigest()[:12]
+        preview = f"/api/derivatives/{image.id}/crops/{crop.id}?v={crop_v}"
     elif crop.aspect_ratio == "original":
         preview = f"/api/derivatives/{image.id}/preview"
     return CropOut(
@@ -2794,7 +2823,8 @@ def _crop_out(image: Image, crop: CropSuggestion) -> CropOut:
 def _blur_out(image: Image, blur: BlurCover) -> BlurOut:
     preview = None
     if blur.derivative_path:
-        preview = f"/api/derivatives/{image.id}/blurs/{blur.id}"
+        version = blur_render_version(image.blurs, _derivatives_path(blur.derivative_path))
+        preview = f"/api/derivatives/{image.id}/blurs/{blur.id}?v={version}"
     return BlurOut(
         id=blur.id,
         x=blur.x,
@@ -2835,6 +2865,30 @@ def _has_approved_covering_blur(session: Session, image: Image) -> bool:
     return _has_approved_covering_blur_impl(session, image)
 
 
+def _derivatives_path(relative: str | None) -> Path | None:
+    if not relative:
+        return None
+    try:
+        return safe_join(get_settings().derivatives_root, relative)
+    except Exception:  # noqa: BLE001 - a version stamp must never break a listing
+        return None
+
+
+def _image_blur_version(image: Image, relative: str = "blurs/cover.jpg") -> str:
+    return blur_render_version(image.blurs, _derivatives_path(f"{image.id}/{relative}"))
+
+
+def _reload_blurs(session: Session, image: Image) -> None:
+    """Flush pending blur inserts/deletes and reload ``image.blurs`` from the DB.
+
+    An already-loaded collection does not pick up ``session.add`` of a new row or
+    ``session.delete`` of an old one, so rendering from it would bake a stale set of
+    covers (new cover missing, deleted cover still blurred).
+    """
+    session.flush()
+    session.expire(image, ["blurs"])
+
+
 def _refresh_blur_derivative(session: Session, settings: Settings, image: Image) -> None:
     library = session.get(Library, image.library_id)
     if library is None:
@@ -2862,6 +2916,11 @@ def _refresh_blur_derivative(session: Session, settings: Settings, image: Image)
             thumb = cover.copy()
             thumb.thumbnail((THUMB_LONG_EDGE, THUMB_LONG_EDGE), PilImage.Resampling.LANCZOS)
             thumb.save(thumb_path, format="JPEG", quality=THUMB_QUALITY)
+    else:
+        for name in ("cover.jpg", "thumb.jpg"):
+            stale = settings.derivatives_root / f"{image.id}/blurs/{name}"
+            if stale.is_file():
+                stale.unlink()
 
 
 def _rgb_for_image(session: Session, settings: Settings, image: Image):

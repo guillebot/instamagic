@@ -34,11 +34,22 @@ export function storyShareFromQueueItem(item: QueueItem): StoryShareValue {
   });
 }
 
-export function storyPreviewUrl(imageId: string, value: StoryShareValue): string {
+/** Extract the `v` cache-buster from a versioned render URL (blur/crop geometry hash). */
+export function renderVersion(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const query = url.split("?")[1];
+  if (!query) return null;
+  return new URLSearchParams(query).get("v");
+}
+
+export function storyPreviewUrl(imageId: string, value: StoryShareValue, version?: string | null): string {
   const params = new URLSearchParams({
     render_mode: value.story_render_mode,
     border_color: value.story_border_color,
   });
+  // The story is rendered from the current publish (blurred/cropped) render: bust the browser
+  // cache whenever that render's geometry changes.
+  if (version) params.set("v", version);
   return `/api/images/${imageId}/story-preview?${params.toString()}`;
 }
 
