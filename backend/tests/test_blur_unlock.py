@@ -126,3 +126,23 @@ def test_publish_preview_requires_unlock_on_do_not_post(client, app_env) -> None
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     preview = client.get(f"/api/images/{image_id}/publish-preview")
     assert preview.status_code == 200, preview.text
+
+
+def test_captions_allowed_after_verified_blur_unlock(client, app_env) -> None:
+    library = app_env["library"]
+    _marked(library / "blocked-frame.jpg", (40, 40, 90), (120, 80, 200, 280))
+    login(client)
+    library_id = _attested_library(client, library)
+    image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
+    client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
+    # Before any verified unlock, DO_NOT_POST still blocks caption generation.
+    assert client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409
+    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
+    assert client.get(f"/api/images/{image_id}").json()["blur_unlock_status"] == "verified"
+    captions = client.post(f"/api/images/{image_id}/captions", json={"confirmed": True})
+    assert captions.status_code == 201, captions.text
+    assert captions.json()
+    # Editing covers after verification resets the unlock and blocks captions again.
+    assert client.post(f"/api/images/{image_id}/blurs/strength", json={"strength": "subtle"}).status_code == 200
+    assert client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409
