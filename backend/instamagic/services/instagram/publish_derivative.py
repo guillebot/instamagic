@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+import cv2
 import numpy as np
 from instamagic.config import Settings
 from instamagic.errors import NotAllowed, NotConfigured, NotFound
@@ -24,6 +25,12 @@ from sqlalchemy.orm import Session
 
 # Mean |ΔRGB| per channel in a blur ellipse must exceed this vs the unblurred equivalent.
 _MIN_BLUR_REGION_MEAN_ABS_DIFF = 4.0
+# Laplacian variance in the feather-eroded interior must drop sharply vs the sharp original.
+_MIN_LAPLACIAN_REDUCTION_RATIO = 8.0
+# Publish interior texture must match a full-strength reference blur (guards partial composites).
+_MAX_LAPLACIAN_RATIO_VS_REFERENCE = 1.35
+# Entire shape interior (including feather band) must match reference blur compositing.
+_MAX_SHAPE_INTERIOR_MEAN_ABS_DIFF_VS_REFERENCE = 8.0
 
 BLUR_COVER_RELATIVE = "blurs/cover.jpg"
 
@@ -103,29 +110,67 @@ def _windows_in_crop_space(
     return [window_for_crop(window, cx, cy) for window in windows]
 
 
-def _mean_abs_diff_in_ellipses(publish: PilImage.Image, reference: PilImage.Image, windows: list[BlurWindow]) -> float:
-    from instamagic.services.blurs.masks import feathered_shape_mask
+def _interior_core_masks(size: tuple[int, int], windows: list[BlurWindow]) -> list[np.ndarray]:
+    from instamagic.services.blurs.masks import core_mask_array
 
-    if publish.size != reference.size:
-        raise NotAllowed("Publish derivative size does not match the unblurred reference.")
-    pub = np.asarray(publish.convert("RGB"), dtype=np.float32)
-    ref = np.asarray(reference.convert("RGB"), dtype=np.float32)
-    total_diff = 0.0
-    total_weight = 0.0
+    masks: list[np.ndarray] = []
     for window in windows:
         if window.width <= 0 or window.height <= 0:
             continue
-        alpha = np.asarray(feathered_shape_mask(publish.size, window), dtype=np.float32) / 255.0
-        mask = alpha > 0.35
-        if not np.any(mask):
+        core = core_mask_array(size, window)
+        if np.any(core):
+            masks.append(core)
+    return masks
+
+
+def _shape_interior_masks(size: tuple[int, int], windows: list[BlurWindow]) -> list[np.ndarray]:
+    from instamagic.services.blurs.masks import interior_mask_array
+
+    masks: list[np.ndarray] = []
+    for window in windows:
+        if window.width <= 0 or window.height <= 0:
             continue
-        diff = float(np.mean(np.abs(pub[mask] - ref[mask])))
-        weight = float(np.count_nonzero(mask))
+        interior = interior_mask_array(size, window)
+        if np.any(interior):
+            masks.append(interior)
+    return masks
+
+
+def _mean_abs_diff_in_cores(
+    publish: np.ndarray, reference: np.ndarray, core_masks: list[np.ndarray]
+) -> float:
+    total_diff = 0.0
+    total_weight = 0.0
+    for core in core_masks:
+        if not np.any(core):
+            continue
+        diff = float(np.mean(np.abs(publish[core] - reference[core])))
+        weight = float(np.count_nonzero(core))
         total_diff += diff * weight
         total_weight += weight
     if total_weight <= 0:
         return 0.0
     return total_diff / total_weight
+
+
+def _laplacian_stats_in_cores(rgb: np.ndarray, core_masks: list[np.ndarray]) -> float:
+    gray = np.mean(rgb, axis=2).astype(np.float32)
+    lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
+    total_var = 0.0
+    total_weight = 0.0
+    for core in core_masks:
+        if not np.any(core):
+            continue
+        vals = lap[core]
+        if vals.size == 0:
+            continue
+        var = float(vals.var())
+        weight = float(vals.size)
+        total_var += var * weight
+        total_weight += weight
+    if total_weight <= 0:
+        return 0.0
+    return total_var / total_weight
 
 
 def assert_publish_blur_integrity(
@@ -146,10 +191,40 @@ def assert_publish_blur_integrity(
         check_windows = windows
     if not check_windows:
         return
-    mean_diff = _mean_abs_diff_in_ellipses(publish_rgb, reference, check_windows)
+    if publish_rgb.size != reference.size:
+        raise NotAllowed("Publish derivative size does not match the unblurred reference.")
+    pub = np.asarray(publish_rgb.convert("RGB"), dtype=np.float32)
+    ref = np.asarray(reference.convert("RGB"), dtype=np.float32)
+    cores = _interior_core_masks(publish_rgb.size, check_windows)
+    if not cores:
+        return
+    mean_diff = _mean_abs_diff_in_cores(pub, ref, cores)
     if mean_diff < _MIN_BLUR_REGION_MEAN_ABS_DIFF:
         raise NotAllowed(
             "Publish derivative failed blur integrity check; refusing to upload an unblurred frame."
+        )
+    original_lap = _laplacian_stats_in_cores(ref, cores)
+    publish_lap = _laplacian_stats_in_cores(pub, cores)
+    if original_lap > 1.0:
+        reduction = original_lap / max(publish_lap, 1e-6)
+        if reduction < _MIN_LAPLACIAN_REDUCTION_RATIO:
+            raise NotAllowed(
+                "Publish derivative failed blur integrity check (high-frequency detail remains inside blur regions)."
+            )
+    reference_blurred = apply_blur_covers(reference, check_windows)
+    ref_blur = np.asarray(reference_blurred.convert("RGB"), dtype=np.float32)
+    reference_lap = _laplacian_stats_in_cores(ref_blur, cores)
+    if reference_lap > 1.0:
+        ratio = publish_lap / reference_lap
+        if ratio > _MAX_LAPLACIAN_RATIO_VS_REFERENCE:
+            raise NotAllowed(
+                "Publish derivative failed blur integrity check (interior blur weaker than reference)."
+            )
+    shape_masks = _shape_interior_masks(publish_rgb.size, check_windows)
+    shape_mae = _mean_abs_diff_in_cores(pub, ref_blur, shape_masks)
+    if shape_mae > _MAX_SHAPE_INTERIOR_MEAN_ABS_DIFF_VS_REFERENCE:
+        raise NotAllowed(
+            "Publish derivative failed blur integrity check (shape interior does not match reference blur)."
         )
 
 
