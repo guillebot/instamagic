@@ -2751,6 +2751,8 @@ def _comment_draft_out(row: CommentDraft) -> dict[str, object]:
 
 
 def _curation_batch_summary(batch: CurationBatch) -> dict[str, object]:
+    from instamagic.services.recommendations.curate import parse_curation_detail_held_back
+
     return {
         "id": batch.id,
         "library_id": batch.library_id,
@@ -2758,6 +2760,7 @@ def _curation_batch_summary(batch: CurationBatch) -> dict[str, object]:
         "status": batch.status,
         "limit": batch.limit,
         "detail": batch.detail,
+        "held_back": parse_curation_detail_held_back(batch.detail),
         "error": batch.error,
         "created_at": batch.created_at,
         "finished_at": batch.finished_at,

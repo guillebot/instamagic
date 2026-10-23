@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from uuid import UUID
 
+from instamagic.config import get_settings
 from instamagic.db import session_factory
 from instamagic.errors import GeminiBlocked, GeminiEmpty, GeminiTruncated, NotConfigured
 from instamagic.logging_config import get_logger
@@ -36,6 +37,7 @@ from instamagic.services.images.presentation import normalize_human_rating_filte
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.gates import gemini_gate
+from instamagic.services.recommendations.gemini_derivatives import curation_derivative_bytes
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -329,6 +331,7 @@ def run_gemini_label_job(
         return
 
     outcomes = {"ok": 0, "blocked": 0, "empty": 0, "error": 0}
+    job_settings = get_settings()
 
     def work(image_id: UUID) -> tuple[UUID, str]:
         inner = session_factory()()
@@ -345,19 +348,21 @@ def run_gemini_label_job(
             )
             if image is None:
                 return image_id, "error"
+            def thread_preview(img: Image) -> bytes | None:
+                return curation_derivative_bytes(inner, job_settings, img)
+
             try:
-                with inner.begin_nested():
-                    outcome = label_one_image(
-                        inner,
-                        provider,
-                        image,
-                        policy=policy,
-                        account_voice=account_voice,
-                        preview_bytes_fn=preview_bytes_fn,
-                        thinking_budget=thinking_budget,
-                        max_output_tokens=max_output_tokens,
-                        covering_blur_fn=covering_blur_fn,
-                    )
+                outcome = label_one_image(
+                    inner,
+                    provider,
+                    image,
+                    policy=policy,
+                    account_voice=account_voice,
+                    preview_bytes_fn=thread_preview,
+                    thinking_budget=thinking_budget,
+                    max_output_tokens=max_output_tokens,
+                    covering_blur_fn=covering_blur_fn,
+                )
                 inner.commit()
             except Exception:
                 inner.rollback()
