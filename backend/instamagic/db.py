@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
+from typing import Any
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, exc
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -10,6 +12,64 @@ from instamagic.config import Settings, get_settings
 
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
+_fork_hooks_installed = False
+_redis_connections: list[Any] = []
+
+
+def dispose_engine(*, close: bool = False) -> None:
+    """Drop pooled DB connections (fork-safe invalidation or full shutdown)."""
+    global _engine
+    if _engine is not None:
+        _engine.dispose(close=close)
+
+
+def register_shared_redis(connection: Any) -> Any:
+    """Track a Redis client so fork hooks can disconnect inherited sockets."""
+    _redis_connections.append(connection)
+    _ensure_fork_hooks()
+    return connection
+
+
+def _reset_redis_pools() -> None:
+    for connection in _redis_connections:
+        pool = getattr(connection, "connection_pool", None)
+        if pool is None:
+            continue
+        try:
+            pool.disconnect()
+        except Exception:
+            pass
+
+
+def _after_fork() -> None:
+    dispose_engine(close=False)
+    _reset_redis_pools()
+
+
+def _ensure_fork_hooks() -> None:
+    global _fork_hooks_installed
+    if _fork_hooks_installed:
+        return
+    register = getattr(os, "register_at_fork", None)
+    if register is None:
+        return
+    register(after_in_parent=_after_fork, after_in_child=_after_fork)
+    _fork_hooks_installed = True
+
+
+def _install_pool_pid_guard(engine: Engine) -> None:
+    @event.listens_for(engine, "connect")
+    def _store_pid(dbapi_connection, connection_record) -> None:  # type: ignore[no-untyped-def]
+        connection_record.info["pid"] = os.getpid()
+
+    @event.listens_for(engine, "checkout")
+    def _check_pid(dbapi_connection, connection_record, connection_proxy) -> None:  # type: ignore[no-untyped-def]
+        recorded = connection_record.info.get("pid")
+        if recorded is not None and recorded != os.getpid():
+            connection_record.dbapi_connection = connection_proxy.dbapi_connection = None
+            raise exc.DisconnectionError(
+                f"Connection belongs to pid {recorded}, checkout attempted in pid {os.getpid()}"
+            )
 
 
 def get_engine(settings: Settings | None = None) -> Engine:
@@ -19,6 +79,8 @@ def get_engine(settings: Settings | None = None) -> Engine:
         url = settings.database_url
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         _engine = create_engine(url, pool_pre_ping=not url.startswith("sqlite"), connect_args=connect_args)
+        _install_pool_pid_guard(_engine)
+        _ensure_fork_hooks()
         if url.startswith("sqlite"):
 
             @event.listens_for(_engine, "connect")
@@ -47,7 +109,6 @@ def get_db() -> Generator[Session, None, None]:
 
 def reset_engine() -> None:
     global _engine, _session_factory
-    if _engine is not None:
-        _engine.dispose()
+    dispose_engine(close=True)
     _engine = None
     _session_factory = None

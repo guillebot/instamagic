@@ -4,23 +4,46 @@ import sys
 import threading
 
 from instamagic.config import get_settings
+from instamagic.db import register_shared_redis
 from instamagic.logging_config import configure_logging, get_logger
 from instamagic.services.worker_heartbeat import HEARTBEAT_INTERVAL_SECONDS, write_heartbeat
 from redis import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from rq import Queue, Worker
 
 
 def _start_heartbeat(connection: Redis, queue_name: str) -> threading.Event:
     stop = threading.Event()
 
+    def _write_once() -> None:
+        write_heartbeat(connection, queue_name)
+
     def loop() -> None:
         while not stop.wait(HEARTBEAT_INTERVAL_SECONDS):
             try:
-                write_heartbeat(connection, queue_name)
+                _write_once()
+            except RedisConnectionError:
+                try:
+                    connection.connection_pool.disconnect()
+                except Exception:
+                    pass
+                try:
+                    _write_once()
+                except Exception:
+                    pass
             except Exception:
                 pass
         try:
-            write_heartbeat(connection, queue_name)
+            _write_once()
+        except RedisConnectionError:
+            try:
+                connection.connection_pool.disconnect()
+            except Exception:
+                pass
+            try:
+                _write_once()
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -66,7 +89,7 @@ def main() -> None:
         except Exception:
             log.info("insights_sync_schedule_failed")
         use_scheduler = True
-    connection = Redis.from_url(settings.redis_url)
+    connection = register_shared_redis(Redis.from_url(settings.redis_url))
     write_heartbeat(connection, queue_name)
     stop_heartbeat = _start_heartbeat(connection, queue_name)
     worker = Worker([Queue(queue_name, connection=connection)], connection=connection)
