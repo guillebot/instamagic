@@ -232,6 +232,7 @@ export function ReviewPage() {
   const folder = searchParams.get("folder") ?? "";
   const recursive = searchParams.get("recursive") === "1";
   const focusImageId = searchParams.get("image");
+  const openRequested = searchParams.get("open") === "1";
   const parentRef = useRef<HTMLDivElement>(null);
   const classifyDialogRef = useRef<HTMLDivElement>(null);
   const currentIdRef = useRef<string | null>(null);
@@ -248,6 +249,11 @@ export function ReviewPage() {
   useEffect(() => {
     cursorRef.current = cursor;
   }, [cursor]);
+
+  const itemsRef = useRef<GridImageItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   useEffect(() => {
     currentIdRef.current = currentId;
@@ -381,16 +387,19 @@ export function ReviewPage() {
     setPendingNewPhotos([]);
     if (resetSelection) {
       const urlImage = searchParams.get("image");
-      const pick =
-        urlImage && page.items.some((row) => row.id === urlImage)
-          ? urlImage
-          : page.items[0]?.id ?? null;
-      setCurrentId(pick);
       setPinnedImage(null);
       setNavStacks(createNavStacks());
       setMultiIds(new Set());
-      if (pick) syncImageParam(pick, true);
-      urlSelectionInitialized.current = true;
+      if (urlImage) {
+        // Keep deep-linked selection (even off the first page); never rewrite ?image= to the first tile.
+        setCurrentId(urlImage);
+        urlSelectionInitialized.current = true;
+      } else {
+        const pick = page.items[0]?.id ?? null;
+        setCurrentId(pick);
+        if (pick) syncImageParam(pick, true);
+        urlSelectionInitialized.current = true;
+      }
     }
   }
 
@@ -452,11 +461,24 @@ export function ReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryString, libraryId]);
 
+  // Deep links (e.g. Candidates → "/?image=<id>&open=1") open the classify modal exactly once.
+  // A bare ?image= only restores the selection; it must never open the modal on its own,
+  // because selection/clicks/scans keep ?image= in the URL (see syncImageParam).
   useEffect(() => {
-    if (!focusImageId) return;
-    if (items.some((row) => row.id === focusImageId)) {
+    if (!focusImageId || !openRequested) return;
+    const consumeOpenParam = () =>
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          params.delete("open");
+          return params;
+        },
+        { replace: true },
+      );
+    if (itemsRef.current.some((row) => row.id === focusImageId)) {
       setCurrentId(focusImageId);
       setPreview(true);
+      consumeOpenParam();
       return;
     }
     let cancelled = false;
@@ -467,6 +489,35 @@ export function ReviewPage() {
         setItems((rows) => (rows.some((row) => row.id === image.id) ? rows : [image, ...rows]));
         setCurrentId(image.id);
         setPreview(true);
+        consumeOpenParam();
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          consumeOpenParam();
+          setMessage(err instanceof Error ? err.message : "Could not open image from link.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Only an explicit open request triggers this — never items/scan/selection changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusImageId, openRequested]);
+
+  // Bare ?image= for a photo not on the first loaded page: fetch for selection without opening classify.
+  useEffect(() => {
+    if (!focusImageId || openRequested) return;
+    if (itemsRef.current.some((row) => row.id === focusImageId)) {
+      setCurrentId(focusImageId);
+      return;
+    }
+    let cancelled = false;
+    void api<ImageItem>(`/api/images/${focusImageId}`)
+      .then((image) => {
+        if (cancelled) return;
+        sessionImagesRef.current.set(image.id, image);
+        setItems((rows) => (rows.some((row) => row.id === image.id) ? rows : [image, ...rows]));
+        setCurrentId(image.id);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -476,7 +527,8 @@ export function ReviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [focusImageId, items]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusImageId, openRequested]);
 
   useEffect(() => {
     const element = parentRef.current;
@@ -1041,6 +1093,13 @@ export function ReviewPage() {
                       aria-label={`${image.relative_path}, ${image.human_rating ?? "unrated"}`}
                       onClick={(event) => selectTile(index, event)}
                       onDoubleClick={() => openClassify(index)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openClassify(index);
+                        }
+                      }}
                     >
                       {image.thumbnail_url ? (
                         <GridThumb src={image.thumbnail_url} />
