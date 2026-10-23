@@ -4,9 +4,22 @@ DEFAULT_INSTAGRAM_GRAPH_VERSION = "v25.0"
 
 # Facebook Login for Business → Page-linked IG professional account.
 OAUTH_SCOPES = (
-    "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,"
-    "business_management"
+    "instagram_basic,instagram_content_publish,instagram_manage_insights,"
+    "pages_show_list,pages_read_engagement,business_management"
 )
+
+# Permissions the Login for Business configuration must grant (documented in README).
+REQUIRED_GRAPH_PERMISSIONS: tuple[str, ...] = (
+    "instagram_basic",
+    "instagram_content_publish",
+    "instagram_manage_insights",
+    "pages_show_list",
+    "pages_read_engagement",
+    "business_management",
+)
+
+INSIGHTS_PERMISSION = "instagram_manage_insights"
+COMMENTS_PERMISSION = "instagram_manage_comments"
 
 # Instagram feed image (Graph Content Publishing).
 IG_FEED_MIN_ASPECT = 4 / 5  # 0.8 (4:5 portrait)

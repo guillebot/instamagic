@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from uuid import UUID
 
 from instamagic.config import get_settings
@@ -8,7 +9,13 @@ from instamagic.db import session_factory
 from instamagic.logging_config import get_logger
 from instamagic.models import JobStatus, ProcessingJob
 from instamagic.models.enums import JobKind
-from instamagic.services.factory import build_classifier, build_face_detector, build_gemini
+from instamagic.services.factory import (
+    build_classifier,
+    build_face_detector,
+    build_gemini,
+    build_instagram,
+)
+from instamagic.services.instagram.insights_sync import sync_instagram_insights
 from instamagic.services.pipeline import run_scan
 from instamagic.services.recommendations.curate import execute_curation_batch
 from instamagic.services.recommendations.gemini_derivatives import (
@@ -16,8 +23,12 @@ from instamagic.services.recommendations.gemini_derivatives import (
     has_approved_covering_blur,
 )
 from instamagic.services.recommendations.label_job import run_gemini_label_job
+from redis import Redis
+from rq import Queue
 
 log = get_logger("worker.tasks")
+
+INSIGHTS_RESCHEDULE_SECONDS = int(timedelta(hours=6).total_seconds())
 
 
 def run_scan_job(library_id: str, job_id: str) -> None:
@@ -63,6 +74,7 @@ def run_curation_job(processing_job_id: str) -> None:
             preview_bytes_fn=lambda image: curation_derivative_bytes(session, settings, image),
             thinking_budget=settings.gemini_curation_thinking_budget,
             image_ids=image_ids or None,
+            performance_weight=settings.curate_performance_weight,
         )
         job.status = JobStatus.SUCCEEDED.value
         session.commit()
@@ -106,3 +118,23 @@ def run_gemini_label_job_entry(processing_job_id: str) -> None:
         raise
     finally:
         session.close()
+
+
+def sync_instagram_insights_job() -> None:
+    settings = get_settings()
+    session = session_factory()()
+    try:
+        client = build_instagram(settings, session)
+        result = sync_instagram_insights(session, settings, client)
+        log.info("insights_sync_finished", **{k: result.get(k) for k in ("ok", "synced_media", "skipped", "error")})
+    except Exception:
+        log.info("insights_sync_failed")
+        raise
+    finally:
+        session.close()
+    try:
+        connection = Redis.from_url(settings.redis_url)
+        queue = Queue("io", connection=connection)
+        queue.enqueue_in(timedelta(seconds=INSIGHTS_RESCHEDULE_SECONDS), sync_instagram_insights_job)
+    except Exception:
+        log.info("insights_sync_reschedule_failed")

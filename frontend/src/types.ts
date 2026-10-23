@@ -331,6 +331,10 @@ export type InstagramConnectionStatus = {
   oauth_available?: boolean;
   oauth_redirect_uri?: string;
   oauth_scopes?: string;
+  required_permissions?: string[];
+  granted_permissions?: string[] | null;
+  insights_permission_granted?: boolean | null;
+  insights_reconnect_required?: boolean;
   meta_docs_url?: string;
   meta_apps_dashboard_url?: string;
   meta_create_app_docs_url?: string;

@@ -13,6 +13,7 @@ from typing import Any, Protocol
 import httpx
 from instamagic.errors import InstagramNotConfigured, NotConfigured
 from instamagic.services.instagram.graph_constants import DEFAULT_INSTAGRAM_GRAPH_VERSION
+from instamagic.services.instagram.graph_http import graph_get_page, graph_paginate
 
 # IG User fields for graph.facebook.com (Facebook Login / Page token).
 # account_type exists only on graph.instagram.com (Instagram Login) — omit here.
@@ -65,6 +66,29 @@ class InstagramAccountDetails:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class MediaSummary:
+    id: str
+    caption: str | None
+    media_type: str | None
+    timestamp: str | None
+    permalink: str | None
+    like_count: int | None = None
+    comments_count: int | None = None
+
+
+@dataclass(frozen=True)
+class MediaInsightSnapshot:
+    reach: int | None = None
+    saved: int | None = None
+    shares: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    total_interactions: int | None = None
+    views: int | None = None
+    impressions: int | None = None
+
+
 class InstagramClient(Protocol):
     def configured(self) -> bool: ...
 
@@ -75,6 +99,14 @@ class InstagramClient(Protocol):
     def fetch_account_details(self) -> InstagramAccountDetails: ...
 
     def fetch_content_publishing_limit(self) -> ContentPublishingLimit: ...
+
+    def fetch_granted_permissions(self) -> set[str]: ...
+
+    def fetch_account_insight_snapshot(self) -> dict[str, int | None]: ...
+
+    def list_recent_media(self, *, limit: int = 50) -> list[MediaSummary]: ...
+
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot: ...
 
 
 def mask_access_token(token: str) -> str | None:
@@ -103,6 +135,18 @@ class NotConfiguredInstagramClient:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def fetch_content_publishing_limit(self) -> ContentPublishingLimit:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def fetch_granted_permissions(self) -> set[str]:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def fetch_account_insight_snapshot(self) -> dict[str, int | None]:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def list_recent_media(self, *, limit: int = 50) -> list[MediaSummary]:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
 
@@ -171,6 +215,51 @@ class FakeInstagramClient:
             biography="Local fake Graph account for CI.",
             website="https://example.test",
             linked_facebook_page_id="fake-page-001",
+        )
+
+    def fetch_granted_permissions(self) -> set[str]:
+        return {
+            "instagram_basic",
+            "instagram_content_publish",
+            "instagram_manage_insights",
+            "pages_show_list",
+            "pages_read_engagement",
+            "business_management",
+        }
+
+    def fetch_account_insight_snapshot(self) -> dict[str, int | None]:
+        return {
+            "follower_count": 128,
+            "reach": 400,
+            "profile_views": 55,
+            "impressions": 900,
+            "accounts_engaged": 30,
+        }
+
+    def list_recent_media(self, *, limit: int = 50) -> list[MediaSummary]:
+        del limit
+        return [
+            MediaSummary(
+                id="fake-media-001",
+                caption="Fixture post",
+                media_type="IMAGE",
+                timestamp="2026-01-01T12:00:00+0000",
+                permalink="https://www.instagram.com/p/fixture/",
+                like_count=10,
+                comments_count=2,
+            )
+        ]
+
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot:
+        del media_id, media_type
+        return MediaInsightSnapshot(
+            reach=120,
+            saved=3,
+            shares=1,
+            likes=10,
+            comments=2,
+            total_interactions=16,
+            views=200,
         )
 
 
@@ -391,12 +480,147 @@ class GraphInstagramClient:
         permalink = payload.get("permalink")
         return str(permalink) if permalink else None
 
+    def fetch_granted_permissions(self) -> set[str]:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        payload = graph_get_page(
+            f"{self._base}/me/permissions",
+            params={"access_token": self._token},
+            timeout=self._timeout,
+            action="fetch token permissions",
+        )
+        granted: set[str] = set()
+        for row in payload.get("data") or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("status") or "").lower() == "granted":
+                name = str(row.get("permission") or "").strip()
+                if name:
+                    granted.add(name)
+        return granted
+
+    def fetch_account_insight_snapshot(self) -> dict[str, int | None]:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        details = self.fetch_account_details()
+        follower_count = details.followers_count
+        metrics = (
+            "reach,profile_views,accounts_engaged",
+        )
+        params = {
+            "metric": metrics[0],
+            "period": "day",
+            "metric_type": "total_value",
+        }
+        payload = graph_get_page(
+            f"{self._base}/{self._ig_user_id}/insights",
+            params={**params, "access_token": self._token},
+            timeout=self._timeout,
+            action="fetch account insights",
+        )
+        values: dict[str, int | None] = {
+            "follower_count": follower_count,
+            "reach": None,
+            "profile_views": None,
+            "impressions": None,
+            "accounts_engaged": None,
+        }
+        for row in payload.get("data") or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "")
+            total = row.get("total_value")
+            if isinstance(total, dict):
+                val = _optional_int(total.get("value"))
+            else:
+                val = _insight_series_last(row)
+            if name in values:
+                values[name] = val
+        return values
+
+    def list_recent_media(self, *, limit: int = 50) -> list[MediaSummary]:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        cap = max(1, min(limit, 100))
+        fields = "id,caption,media_type,timestamp,permalink,like_count,comments_count"
+        rows: list[MediaSummary] = []
+        for item in graph_paginate(
+            self._base,
+            f"{self._ig_user_id}/media",
+            access_token=self._token,
+            params={"fields": fields, "limit": str(min(cap, 25))},
+            timeout=self._timeout,
+            action="list media",
+            max_pages=max(1, (cap + 24) // 25),
+        ):
+            rows.append(
+                MediaSummary(
+                    id=str(item.get("id") or ""),
+                    caption=_optional_str(item.get("caption")),
+                    media_type=_optional_str(item.get("media_type")),
+                    timestamp=_optional_str(item.get("timestamp")),
+                    permalink=_optional_str(item.get("permalink")),
+                    like_count=_optional_int(item.get("like_count")),
+                    comments_count=_optional_int(item.get("comments_count")),
+                )
+            )
+            if len(rows) >= cap:
+                break
+        return rows
+
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        metric_list = "reach,saved,shares,likes,comments,total_interactions,views"
+        if (media_type or "").upper() in {"VIDEO", "REELS"}:
+            metric_list = "reach,saved,shares,likes,comments,total_interactions,views,impressions"
+        payload = graph_get_page(
+            f"{self._base}/{media_id}/insights",
+            params={
+                "metric": metric_list,
+                "access_token": self._token,
+                "metric_type": "total_value",
+            },
+            timeout=self._timeout,
+            action="fetch media insights",
+        )
+        values: dict[str, int | None] = {}
+        for row in payload.get("data") or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "")
+            total = row.get("total_value")
+            if isinstance(total, dict):
+                values[name] = _optional_int(total.get("value"))
+            else:
+                values[name] = _insight_series_last(row)
+        return MediaInsightSnapshot(
+            reach=values.get("reach"),
+            saved=values.get("saved"),
+            shares=values.get("shares"),
+            likes=values.get("likes"),
+            comments=values.get("comments"),
+            total_interactions=values.get("total_interactions"),
+            views=values.get("views"),
+            impressions=values.get("impressions"),
+        )
+
 
 def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _insight_series_last(row: dict) -> int | None:
+    values = row.get("values")
+    if not isinstance(values, list) or not values:
+        return None
+    last = values[-1]
+    if isinstance(last, dict):
+        return _optional_int(last.get("value"))
+    return None
 
 
 def _optional_int(value: object) -> int | None:

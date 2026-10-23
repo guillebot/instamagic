@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     account_voice: str = (
         "Quiet, craft-first photography captions. Mood, light, and composition. No engagement bait."
     )
+    # Blend historical IG engagement into Curate/local ranking (0 = off, max 0.5).
+    curate_performance_weight: float = 0.15
     # None derives from FRONTEND_ORIGIN (https → Secure cookies). Explicit true/false overrides.
     cookie_secure: bool | None = None
     session_ttl_seconds: int = 60 * 60 * 12
@@ -120,6 +122,8 @@ class Settings(BaseSettings):
             raise ValueError("SAFETY_CLASSIFIER must be onnx or fake.")
         if self.pipeline_mode not in {"queue", "inline"}:
             raise ValueError("PIPELINE_MODE must be queue or inline.")
+        if not 0.0 <= self.curate_performance_weight <= 0.5:
+            raise ValueError("CURATE_PERFORMANCE_WEIGHT must be between 0 and 0.5.")
         return self
 
     def instagram_configured(self) -> bool:
