@@ -19,6 +19,7 @@ from instamagic.services.blurs.generator import (
     apply_blur_covers,
     region_coverages,
 )
+from instamagic.services.blurs.version import blur_geometry_hash as blur_geometry_version
 from instamagic.services.images.derivatives import oriented_rgb, read_image
 from instamagic.services.images.paths import safe_join
 from instamagic.services.pipeline import (
@@ -107,10 +108,14 @@ def unlock_summary_message(image: Image) -> str | None:
 def unlock_summary_message_from_parts(uncovered: list[dict], detections: list[dict]) -> str:
     parts: list[str] = []
     if uncovered:
-        parts.append(f"{len(uncovered)} regions uncovered")
+        pct = ", ".join(f"{round(float(row.get('coverage', 0)) * 100)}%" for row in uncovered)
+        parts.append(
+            f"coverage check: {len(uncovered)} regions uncovered "
+            f"({pct} covered; every flagged area needs {round(_COVERAGE_MIN * 100)}%)"
+        )
     if detections:
         labels = ", ".join(sorted({row["label"] for row in detections}))
-        parts.append(f"classifier still detects {labels}")
+        parts.append(f"re-check on the blurred render: classifier still detects {labels}")
     if not parts:
         return "Blur unlock verification failed."
     return "Still unsafe: " + " / ".join(parts)
@@ -215,6 +220,8 @@ def verify_blur_unlock(
         "classifier_detections": detections,
         "coverage_min": _COVERAGE_MIN,
         "model_name": signals.model_name,
+        # Lets the editor tell whether this result still applies to the covers on screen.
+        "geometry_version": blur_geometry_version(list(image.blurs)),
     }
 
     if uncovered or detections:

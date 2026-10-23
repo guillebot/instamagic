@@ -10,7 +10,7 @@ import {
   snapRotation,
 } from "./blurGeometry";
 import { containedLayout, cropToCss, type ContainedLayout, type CropRect } from "./cropGeometry";
-import type { BlurItem, ImageItem } from "./types";
+import type { BlurCoverageRegion, BlurCoverageReport, BlurItem, ImageItem } from "./types";
 
 type Props = {
   image: ImageItem;
@@ -95,11 +95,71 @@ export function blurVerificationLabel(
   return null;
 }
 
+const pct = (value: number) => `${Math.floor(value * 100)}%`;
+
+function prettyLabel(label: string): string {
+  return label.replace(/_EXPOSED$/, "").replace(/^FEMALE_|^MALE_/, "").replace(/_/g, " ").toLowerCase();
+}
+
+/** Which side(s) of a flagged box the cover misses, e.g. "extend ~27px up". */
+export function missedHint(region: Pick<BlurCoverageRegion, "missed_px">): string {
+  const missed = region.missed_px;
+  if (!missed) return "";
+  const sides: Array<[number, string]> = [
+    [missed.top, "up"],
+    [missed.bottom, "down"],
+    [missed.left, "left"],
+    [missed.right, "right"],
+  ];
+  const parts = sides.filter(([px]) => px > 0).map(([px, dir]) => `~${px}px ${dir}`);
+  return parts.length ? `extend ${parts.join(", ")}` : "solid core too thin here — enlarge or lower feather";
+}
+
+/** Per-check lines for the editor: which check passes/fails for the covers on screen. */
+export function coverageCheckLines(
+  report: BlurCoverageReport,
+  dirty = false,
+): Array<{ tone: "ok" | "error" | "info"; text: string }> {
+  const lines: Array<{ tone: "ok" | "error" | "info"; text: string }> = [];
+  const min = pct(report.min_coverage);
+  const uncovered = report.regions.filter((row) => !row.covered);
+  if (report.regions.length === 0) {
+    lines.push({ tone: "info", text: "Coverage check: no flagged areas from the local model." });
+  } else if (uncovered.length === 0) {
+    lines.push({
+      tone: "ok",
+      text: `Coverage check ✓ — all ${report.regions.length} flagged areas ≥${min} under the blur.`,
+    });
+  } else {
+    const detail = uncovered.map((row) => `${prettyLabel(row.label)} ${pct(row.coverage)} (${missedHint(row)})`);
+    lines.push({
+      tone: "error",
+      text: `Coverage check ✗ — ${uncovered.length} of ${report.regions.length} flagged areas under ${min}: ${detail.join("; ")}.`,
+    });
+  }
+  const verification = report.verification;
+  if (!report.do_not_post) return lines;
+  if (dirty || !verification.current_geometry || verification.recheck === "not_run") {
+    lines.push({ tone: "info", text: "Re-check on the blurred render: runs when you approve (Enter/A)." });
+  } else if (verification.recheck === "fail") {
+    const labels = Array.from(new Set(verification.classifier_detections.map((row) => prettyLabel(row.label))));
+    lines.push({ tone: "error", text: `Re-check on the blurred render ✗ — classifier still detects ${labels.join(", ")}.` });
+  } else {
+    lines.push({ tone: "ok", text: "Re-check on the blurred render ✓ — classifier no longer detects exposure." });
+  }
+  return lines;
+}
+
 export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Props) {
   const queryClient = useQueryClient();
   const blurs = useQuery({
     queryKey: ["blurs", image.id],
     queryFn: () => api<BlurItem[]>(`/api/images/${image.id}/blurs`),
+  });
+  // Live coverage of each flagged area by the covers as saved now (same math as the gate).
+  const coverage = useQuery({
+    queryKey: ["blur-coverage", image.id],
+    queryFn: () => api<BlurCoverageReport>(`/api/images/${image.id}/blur-coverage`),
   });
   const [strength, setStrength] = useState("standard");
   const [shapeMode, setShapeMode] = useState<"ellipse" | "rectangle">("ellipse");
@@ -136,6 +196,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
 
   function notifyChanged() {
     void queryClient.invalidateQueries({ queryKey: ["publish-readiness", image.id] });
+    void queryClient.invalidateQueries({ queryKey: ["blur-coverage", image.id] });
     onChanged?.(image.id);
   }
   const notifyRef = useRef(notifyChanged);
@@ -539,21 +600,38 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             draggable={false}
           />
         ) : null}
-        {(image.blur_unlock_highlights ?? []).map((region, index) =>
-          image.width && image.height && layout ? (
-            <div
-              key={`highlight-${index}`}
-              className="blur-ellipse highlight-unsafe"
-              style={(() => {
-                const css = cropToCss(
-                  { x: region.x, y: region.y, width: region.width, height: region.height },
-                  layout,
-                );
-                return { left: css.left, top: css.top, width: css.width, height: css.height };
-              })()}
-            />
-          ) : null,
-        )}
+        {(() => {
+          if (!image.width || !image.height || !layout) return null;
+          const report = coverage.data;
+          const regions: Array<{ x: number; y: number; width: number; height: number; covered: boolean; tag: string }> =
+            report
+              ? report.regions.map((row) => ({
+                  ...row,
+                  tag: row.covered
+                    ? `✓ ${pct(row.coverage)}`
+                    : `cover this — ${pct(row.coverage)} (needs ${pct(report.min_coverage)})`,
+                }))
+              : (image.blur_unlock_highlights ?? [])
+                  .filter((row) => row.kind !== "detection")
+                  .map((row) => ({
+                    ...row,
+                    covered: false,
+                    tag: row.coverage !== undefined ? `cover this — ${pct(row.coverage)}` : "cover this",
+                  }));
+          return regions.map((region, index) => {
+            const css = cropToCss({ x: region.x, y: region.y, width: region.width, height: region.height }, layout);
+            return (
+              <div
+                key={`flag-${index}`}
+                className={`flag-region ${region.covered ? "covered" : "uncovered"}${dirty ? " stale" : ""}`}
+                data-testid="flag-region"
+                style={{ left: css.left, top: css.top, width: css.width, height: css.height }}
+              >
+                <span className="flag-tag">{dirty ? "…" : region.tag}</span>
+              </div>
+            );
+          });
+        })()}
         {items.map((blur) => {
           if (!image.width || !image.height || !layout) return null;
           const live =
@@ -660,6 +738,22 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             </p>
           );
         })()}
+        {coverage.data && (coverage.data.regions.length > 0 || coverage.data.do_not_post) ? (
+          <ul className="coverage-checks" data-testid="coverage-checks">
+            {coverageCheckLines(coverage.data, dirty).map((line, index) => (
+              <li key={index} className={`coverage-${line.tone}`}>
+                {line.text}
+              </li>
+            ))}
+            {coverage.data.regions.some((row) => !row.covered) ? (
+              <li className="coverage-hint">
+                Red dashed boxes are the flagged areas (from the original photo); each needs ≥
+                {pct(coverage.data.min_coverage)} under the blur. Soft feathered edges only count partly, so
+                the solid part of the cover must reach past the red box — enlarge the cover or lower feather.
+              </li>
+            ) : null}
+          </ul>
+        ) : null}
         <div className="row">
           <label>
             Shape{" "}
