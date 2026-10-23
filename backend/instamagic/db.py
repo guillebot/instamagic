@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator
-from typing import Any
 
 from sqlalchemy import create_engine, event, exc
 from sqlalchemy.engine import Engine
@@ -13,7 +12,6 @@ from instamagic.config import Settings, get_settings
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
 _fork_hooks_installed = False
-_redis_connections: list[Any] = []
 
 
 def dispose_engine(*, close: bool = False) -> None:
@@ -23,27 +21,9 @@ def dispose_engine(*, close: bool = False) -> None:
         _engine.dispose(close=close)
 
 
-def register_shared_redis(connection: Any) -> Any:
-    """Track a Redis client so fork hooks can disconnect inherited sockets."""
-    _redis_connections.append(connection)
-    _ensure_fork_hooks()
-    return connection
-
-
-def _reset_redis_pools() -> None:
-    for connection in _redis_connections:
-        pool = getattr(connection, "connection_pool", None)
-        if pool is None:
-            continue
-        try:
-            pool.disconnect()
-        except Exception:
-            pass
-
-
-def _after_fork() -> None:
+def _after_fork_in_child() -> None:
+    """Invalidate inherited SQLAlchemy sockets in the RQ work-horse only."""
     dispose_engine(close=False)
-    _reset_redis_pools()
 
 
 def _ensure_fork_hooks() -> None:
@@ -53,7 +33,7 @@ def _ensure_fork_hooks() -> None:
     register = getattr(os, "register_at_fork", None)
     if register is None:
         return
-    register(after_in_parent=_after_fork, after_in_child=_after_fork)
+    register(after_in_child=_after_fork_in_child)
     _fork_hooks_installed = True
 
 
@@ -108,7 +88,8 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def reset_engine() -> None:
-    global _engine, _session_factory
+    global _engine, _session_factory, _fork_hooks_installed
     dispose_engine(close=True)
     _engine = None
     _session_factory = None
+    _fork_hooks_installed = False
