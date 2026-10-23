@@ -51,15 +51,70 @@ export function canScheduleFromReadiness(
   return { ok: true, reason: "" };
 }
 
+export type InstagramStatusLite = {
+  configured: boolean;
+  token_configured?: boolean;
+  business_account_id_configured?: boolean;
+};
+
+export type HealthCheckLite = { id: string; status: string; detail: string };
+
+export type Connectivity = { ok: boolean; loading: boolean; reason: string };
+
+/**
+ * Instagram connectivity for publish actions, from /api/instagram/status and the
+ * `instagram` check of /api/health/status. Unknown (still loading) never enables posting.
+ */
+export function instagramConnectivity(
+  status: InstagramStatusLite | undefined,
+  healthChecks: HealthCheckLite[] | undefined,
+  opts: { statusError?: boolean } = {},
+): Connectivity {
+  if (opts.statusError) {
+    return { ok: false, loading: false, reason: "Instagram status unavailable — reconnect to post." };
+  }
+  if (!status) return { ok: false, loading: true, reason: "Checking Instagram connection…" };
+  if (!status.configured || status.token_configured === false) {
+    return { ok: false, loading: false, reason: "Instagram disconnected — reconnect to post." };
+  }
+  if (status.business_account_id_configured === false) {
+    return { ok: false, loading: false, reason: "Instagram account not linked — reconnect to post." };
+  }
+  const ig = healthChecks?.find((check) => check.id === "instagram");
+  if (ig && ig.status === "down") {
+    return {
+      ok: false,
+      loading: false,
+      reason: `Instagram disconnected — reconnect to post.${ig.detail ? ` (${ig.detail})` : ""}`,
+    };
+  }
+  return { ok: true, loading: false, reason: "" };
+}
+
+/** Queue states from which "Post now" may queue/approve/publish in one confirmed flow. */
+const POSTABLE_STATES = new Set([null, "CANDIDATE", "APPROVED", "FAILED"]);
+
 export function canPublishNowFromReadiness(
   readiness: ImagePublishReadiness | undefined,
   captionId: string | null,
+  connectivity?: Connectivity,
 ): { ok: boolean; reason: string } {
-  if (!readiness?.instagram_configured) {
-    return { ok: false, reason: "Instagram is not configured." };
+  if (!readiness) return { ok: false, reason: "Loading publish gates…" };
+  if (!readiness.instagram_configured) {
+    return { ok: false, reason: "Instagram disconnected — reconnect to post." };
   }
-  const schedule = canScheduleFromReadiness(readiness, captionId);
-  if (!schedule.ok) return schedule;
+  if (connectivity && !connectivity.ok) return { ok: false, reason: connectivity.reason };
+  if (readiness.published_at || readiness.queue_state === "PUBLISHED") {
+    return { ok: false, reason: "Already published." };
+  }
+  // Server-side safety gates (DO_NOT_POST, blur verification, attestation) — never bypassed.
+  if (!readiness.publishing_allowed) {
+    return { ok: false, reason: formatGateReasons(readiness.publishing_reasons) || "Publishing is blocked." };
+  }
+  if (!POSTABLE_STATES.has(readiness.queue_state)) {
+    return { ok: false, reason: `Queue state is ${readiness.queue_state}; cannot post now.` };
+  }
+  if (!captionId) return { ok: false, reason: "Pick or generate a caption before posting." };
   return { ok: true, reason: "" };
 }
 

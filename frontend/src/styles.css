@@ -891,3 +891,34 @@ input, select, textarea {
   .curate-modal-body { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* Review classify modal: publish panel + Post now confirm */
+.classify-publish {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.classify-publish-actions,
+.classify-publish-schedule { gap: 8px; flex-wrap: wrap; }
+.classify-gate-reason,
+.classify-ig-disconnected { margin: 0; }
+.classify-ig-disconnected .button { margin-left: 8px; display: inline-block; }
+.classify-post-confirm-overlay { z-index: 200; }
+.classify-post-confirm { width: min(560px, 100%); overflow-y: auto; }
+.classify-post-preview { max-width: 100%; max-height: 40vh; object-fit: contain; border-radius: 8px; align-self: center; }
+.classify-post-caption { white-space: pre-wrap; max-height: 20vh; overflow-y: auto; }
+.classify-post-success { color: #a3e0b0; overflow-wrap: anywhere; }
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
