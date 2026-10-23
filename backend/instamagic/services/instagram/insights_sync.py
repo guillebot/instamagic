@@ -17,7 +17,12 @@ from instamagic.models import (
     InstagramPost,
 )
 from instamagic.services.instagram.client import InstagramClient, MediaSummary
-from instamagic.services.instagram.permissions import insights_permission_ok, parse_scopes_json
+from instamagic.services.instagram.permissions import (
+    FetchedScopes,
+    graph_permission_missing_detail,
+    parse_scopes_json,
+    skip_insights_for_known_scopes,
+)
 from instamagic.services.instagram.store import get_connection, resolve_credentials
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -39,21 +44,33 @@ def granted_scopes_from_connection(session: Session) -> set[str]:
     return parse_scopes_json(row.token_scopes_json)
 
 
-def refresh_token_scopes(session: Session, client: InstagramClient) -> set[str]:
+def refresh_token_scopes(session: Session, client: InstagramClient) -> FetchedScopes:
     if not client.configured():
-        return set()
-    fetch = getattr(client, "fetch_granted_permissions", None)
-    if not callable(fetch):
-        return granted_scopes_from_connection(session)
-    try:
-        scopes = fetch()
-    except NotConfigured:
-        return granted_scopes_from_connection(session)
-    row = get_connection(session)
-    if row is not None:
-        row.token_scopes_json = json.dumps(sorted(scopes))
-        session.commit()
-    return scopes
+        return FetchedScopes(scopes=frozenset(), determined=False)
+    detailed_fetch = getattr(client, "fetch_granted_permissions_detailed", None)
+    if callable(detailed_fetch):
+        try:
+            fetched = detailed_fetch()
+        except NotConfigured:
+            cached = granted_scopes_from_connection(session)
+            return FetchedScopes(scopes=frozenset(cached), determined=False)
+    else:
+        fetch = getattr(client, "fetch_granted_permissions", None)
+        if not callable(fetch):
+            cached = granted_scopes_from_connection(session)
+            return FetchedScopes(scopes=frozenset(cached), determined=False)
+        try:
+            scopes = fetch()
+        except NotConfigured:
+            cached = granted_scopes_from_connection(session)
+            return FetchedScopes(scopes=frozenset(cached), determined=False)
+        fetched = FetchedScopes(scopes=frozenset(scopes), determined=True)
+    if fetched.determined:
+        row = get_connection(session)
+        if row is not None:
+            row.token_scopes_json = json.dumps(sorted(fetched.scopes))
+            session.commit()
+    return fetched
 
 
 def should_run_sync(row: InstagramConnection | None, *, force: bool = False) -> bool:
@@ -136,8 +153,8 @@ def sync_instagram_insights(
     if not should_run_sync(row, force=force):
         return {"ok": True, "skipped": True, "reason": "cached", "synced_media": 0}
 
-    scopes = refresh_token_scopes(session, client)
-    if not insights_permission_ok(scopes):
+    fetched_scopes = refresh_token_scopes(session, client)
+    if skip_insights_for_known_scopes(fetched_scopes):
         return {
             "ok": False,
             "error": "insights_permission_missing",
@@ -145,7 +162,17 @@ def sync_instagram_insights(
             "synced_media": 0,
         }
 
-    account_values = client.fetch_account_insight_snapshot()
+    try:
+        account_values = client.fetch_account_insight_snapshot()
+    except NotConfigured as exc:
+        if graph_permission_missing_detail(exc.detail):
+            return {
+                "ok": False,
+                "error": "insights_permission_missing",
+                "reconnect_hint": "Reconnect via Meta OAuth to grant instagram_manage_insights.",
+                "synced_media": 0,
+            }
+        return {"ok": False, "error": "insights_sync_failed", "detail": exc.detail[:200], "synced_media": 0}
     session.add(
         InstagramAccountInsightSnapshot(
             follower_count=account_values.get("follower_count"),

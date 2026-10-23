@@ -7,6 +7,7 @@ from instamagic.config import get_settings
 from instamagic.db import session_factory
 from instamagic.services.instagram.client import GraphInstagramClient
 from instamagic.services.instagram.insights_sync import sync_instagram_insights
+from instamagic.services.instagram.permissions import FetchedScopes
 from instamagic.services.recommendations.performance import best_posting_times
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
 from sqlalchemy import select
@@ -27,7 +28,10 @@ def test_sync_insights_persists_account_snapshot(monkeypatch: pytest.MonkeyPatch
     session = session_factory()()
 
     def fake_permissions(self):
-        return {"instagram_manage_insights", "instagram_basic"}
+        return FetchedScopes(
+            scopes=frozenset({"instagram_manage_insights", "instagram_basic"}),
+            determined=True,
+        )
 
     def fake_account_insights(self):
         return {"follower_count": 500, "reach": 100, "profile_views": 20, "impressions": None, "accounts_engaged": 5}
@@ -36,7 +40,7 @@ def test_sync_insights_persists_account_snapshot(monkeypatch: pytest.MonkeyPatch
         del limit
         return []
 
-    monkeypatch.setattr(GraphInstagramClient, "fetch_granted_permissions", fake_permissions)
+    monkeypatch.setattr(GraphInstagramClient, "fetch_granted_permissions_detailed", fake_permissions)
     monkeypatch.setattr(GraphInstagramClient, "fetch_account_insight_snapshot", fake_account_insights)
     monkeypatch.setattr(GraphInstagramClient, "list_recent_media", fake_media)
 
@@ -66,9 +70,9 @@ def test_sync_requires_insights_permission(monkeypatch: pytest.MonkeyPatch, app_
     session = session_factory()()
 
     def fake_permissions(self):
-        return {"instagram_basic"}
+        return FetchedScopes(scopes=frozenset({"instagram_basic"}), determined=True)
 
-    monkeypatch.setattr(GraphInstagramClient, "fetch_granted_permissions", fake_permissions)
+    monkeypatch.setattr(GraphInstagramClient, "fetch_granted_permissions_detailed", fake_permissions)
     client = GraphInstagramClient(access_token="tok", business_account_id="178414000")
     result = sync_instagram_insights(session, settings, client, force=True)
     assert result["ok"] is False

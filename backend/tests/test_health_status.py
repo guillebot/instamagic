@@ -124,8 +124,8 @@ def test_instagram_username_mismatch_is_down(client, monkeypatch) -> None:
             session,
             InstagramAccountDetails(
                 id="123",
-                username="other.user",
-                name="Other",
+                username="foto.sch",
+                name="Cached OK",
                 profile_picture_url=None,
                 followers_count=1,
                 follows_count=1,
@@ -138,6 +138,10 @@ def test_instagram_username_mismatch_is_down(client, monkeypatch) -> None:
     finally:
         session.close()
 
+    def fake_live_probe(_settings):
+        return "other.user", None
+
+    monkeypatch.setattr("instamagic.services.health_status.probe_instagram_username_live", fake_live_probe)
     monkeypatch.setattr(
         "instamagic.services.health_status._check_queue",
         lambda _settings: type(
@@ -151,4 +155,6 @@ def test_instagram_username_mismatch_is_down(client, monkeypatch) -> None:
     ig = next(item for item in payload["checks"] if item["id"] == "instagram")
     assert ig["status"] == "down"
     assert "foto.sch" in ig["detail"]
+    assert "other.user" in ig["detail"]
     get_settings.cache_clear()
+    reset_health_cache()

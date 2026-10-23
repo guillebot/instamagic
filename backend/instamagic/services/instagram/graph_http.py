@@ -9,16 +9,28 @@ import httpx
 from instamagic.errors import NotConfigured
 
 
+def graph_error_fields(payload: dict[str, Any]) -> tuple[int | None, str]:
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None, "request failed"
+    code_raw = error.get("code")
+    code = int(code_raw) if isinstance(code_raw, int) else None
+    message = str(error.get("message") or "request failed")
+    if code is not None:
+        return code, f"{message} (#{code})"
+    return None, message
+
+
 def graph_json_or_raise(response: httpx.Response, *, action: str) -> dict[str, Any]:
     try:
         payload = response.json()
     except ValueError as exc:
         raise NotConfigured(f"Instagram {action} returned non-JSON.") from exc
     if response.status_code >= 400:
-        error = payload.get("error") if isinstance(payload, dict) else None
-        message = "request failed"
-        if isinstance(error, dict):
-            message = str(error.get("message") or message)
+        if isinstance(payload, dict):
+            _code, message = graph_error_fields(payload)
+        else:
+            message = "request failed"
         raise NotConfigured(f"Instagram {action} failed: {message}")
     if not isinstance(payload, dict):
         raise NotConfigured(f"Instagram {action} returned an unexpected payload.")

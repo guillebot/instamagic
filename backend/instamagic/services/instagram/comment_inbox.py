@@ -12,7 +12,10 @@ from instamagic.services.gemini.context import GeminiContext
 from instamagic.services.gemini.growth import GrowthDraftProvider, append_voice_to_context
 from instamagic.services.instagram.client import InstagramClient
 from instamagic.services.instagram.insights_sync import refresh_token_scopes
-from instamagic.services.instagram.permissions import comments_permission_ok
+from instamagic.services.instagram.permissions import (
+    graph_permission_missing_detail,
+    skip_comments_for_known_scopes,
+)
 from instamagic.services.instagram.store import get_connection
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -32,8 +35,8 @@ def sync_inbox_comments(session: Session, settings: Settings, client: InstagramC
     if not force and row and row.insights_last_sync_at:
         # Reuse insights timestamp slot is wrong - use separate - skip for MVP use force from worker always
         pass
-    scopes = refresh_token_scopes(session, client)
-    if not comments_permission_ok(scopes):
+    fetched_scopes = refresh_token_scopes(session, client)
+    if skip_comments_for_known_scopes(fetched_scopes):
         return {
             "ok": False,
             "error": "comments_permission_missing",
@@ -52,7 +55,14 @@ def sync_inbox_comments(session: Session, settings: Settings, client: InstagramC
             continue
         try:
             rows = list_fn(post.ig_media_id)
-        except NotConfigured:
+        except NotConfigured as exc:
+            if graph_permission_missing_detail(exc.detail):
+                return {
+                    "ok": False,
+                    "error": "comments_permission_missing",
+                    "reconnect_hint": "Reconnect to grant instagram_manage_comments.",
+                    "synced": 0,
+                }
             continue
         for item in rows:
             ig_id = str(item.get("id") or "")
