@@ -89,6 +89,26 @@ def test_suggested_sigma_is_strong_not_beauty_soft() -> None:
 STATEMENT = "I confirm that every person depicted in this library is a consenting adult."
 
 
+def test_create_rectangle_cover_defaults_hard_edge(client, app_env) -> None:
+    from tests.conftest import login, write_jpeg
+
+    library = app_env["library"]
+    write_jpeg(library / "frame.jpg", color=(40, 40, 40))
+    login(client)
+    library_id = client.post(
+        "/api/libraries",
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+    ).json()["id"]
+    assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
+    image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
+    created = client.post(
+        f"/api/images/{image_id}/blurs",
+        json={"x": 10, "y": 10, "width": 80, "height": 60, "shape": "rectangle", "strength": "standard"},
+    )
+    assert created.status_code == 201
+    assert created.json()["edge_mode"] == "hard"
+
+
 def test_suggest_blur_from_stored_regions_is_opt_in(client, app_env) -> None:
     """Scan stores boxes but does not auto-create covers; suggest builds them on demand."""
     from tests.conftest import login, write_jpeg

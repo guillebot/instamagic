@@ -689,7 +689,10 @@ def _blur_row(image_id: UUID, window: BlurWindow, derivative: str | None) -> Blu
         width=window.width,
         height=window.height,
         shape=window.shape,
+        rotation_deg=window.rotation_deg,
+        corner_radius=window.corner_radius,
         feather=window.feather,
+        edge_mode=window.edge_mode,
         radius=window.radius,
         strength=window.strength,
         reason=window.reason,
@@ -775,6 +778,7 @@ def render_blur_derivative(
             strength=cover.strength,
             rotation_deg=cover.rotation_deg,
             corner_radius=cover.corner_radius,
+            edge_mode=cover.edge_mode,
         )
         for cover in covers
     ]

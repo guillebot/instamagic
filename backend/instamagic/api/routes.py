@@ -298,7 +298,7 @@ def _enqueue_gemini_label_work(
     return job
 
 
-def _image_out(session: Session, image: Image) -> ImageOut:
+def _image_out(session: Session, image: Image, *, settings: Settings | None = None) -> ImageOut:
     approved_queue = next(iter(image.queue_items), None) if image.queue_items else None
     has_approved_crop = any(crop.approved for crop in image.crops) if image.crops is not None else False
     has_approved_blur = any(blur.approved for blur in image.blurs) if image.blurs is not None else False
@@ -939,9 +939,14 @@ def approve_crop(
 
 
 @router.get("/api/images/{image_id}/blurs", response_model=list[BlurOut])
-def list_blurs(image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> list[BlurOut]:
+def list_blurs(
+    image_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> list[BlurOut]:
     image = _load_image(session, image_id)
-    return [_blur_out(image, blur) for blur in image.blurs]
+    return [_blur_out(image, blur, settings) for blur in image.blurs]
 
 
 @router.post("/api/images/{image_id}/blurs", response_model=BlurOut, status_code=201)
@@ -965,6 +970,7 @@ def create_blur(
             shape=body.shape,
             rotation_deg=body.rotation_deg,
             corner_radius=body.corner_radius,
+            edge_mode=body.edge_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -980,6 +986,7 @@ def create_blur(
         rotation_deg=window.rotation_deg,
         corner_radius=window.corner_radius,
         feather=window.feather,
+        edge_mode=window.edge_mode,
         radius=window.radius,
         strength=window.strength,
         reason=window.reason,
@@ -993,7 +1000,7 @@ def create_blur(
         reset_blur_unlock(image)
     session.commit()
     session.refresh(row)
-    return _blur_out(image, row)
+    return _blur_out(image, row, settings)
 
 
 @router.post("/api/images/{image_id}/blurs/suggest", response_model=list[BlurOut])
@@ -1031,7 +1038,7 @@ def suggest_blur_covers(
     if image.model_state == SafetyState.DO_NOT_POST.value:
         reset_blur_unlock(image)
     session.commit()
-    return [_blur_out(image, row) for row in rows]
+    return [_blur_out(image, row, settings) for row in rows]
 
 
 @router.post("/api/images/{image_id}/blurs/strength", response_model=list[BlurOut])
@@ -1055,7 +1062,7 @@ def set_blur_strength(
     if image.model_state == SafetyState.DO_NOT_POST.value:
         reset_blur_unlock(image)
     session.commit()
-    return [_blur_out(image, blur) for blur in image.blurs]
+    return [_blur_out(image, blur, settings) for blur in image.blurs]
 
 
 @router.patch("/api/images/{image_id}/blurs/{blur_id}", response_model=BlurOut)
@@ -1089,7 +1096,10 @@ def update_blur(
         covers_unsafe=current.covers_unsafe,
         rotation_deg=body.rotation_deg if body.rotation_deg is not None else current.rotation_deg,
         corner_radius=body.corner_radius if body.corner_radius is not None else current.corner_radius,
+        edge_mode=body.edge_mode if body.edge_mode is not None else current.edge_mode,
     )
+    if body.edge_mode is not None and body.edge_mode not in {"hard", "soft"}:
+        raise HTTPException(status_code=400, detail="edge_mode must be hard or soft.")
     if body.strength is not None and body.strength != current.strength:
         window = with_strength(window, body.strength)
     try:
@@ -1103,6 +1113,7 @@ def update_blur(
     blur.shape = window.shape
     blur.rotation_deg = window.rotation_deg
     blur.corner_radius = window.corner_radius
+    blur.edge_mode = window.edge_mode
     blur.radius = window.radius
     blur.strength = window.strength
     blur.reason = window.reason
@@ -1115,7 +1126,7 @@ def update_blur(
         reset_blur_unlock(image)
     session.commit()
     session.refresh(blur)
-    return _blur_out(image, blur)
+    return _blur_out(image, blur, settings)
 
 
 @router.delete("/api/images/{image_id}/blurs/{blur_id}", status_code=204)
@@ -1186,7 +1197,7 @@ def approve_blurs(
             session.commit()
             raise NotAllowed("These blur covers do not fully cover every detected unsafe region.")
     session.commit()
-    return [_blur_out(image, blur) for blur in image.blurs]
+    return [_blur_out(image, blur, settings) for blur in image.blurs]
 
 
 _DERIVATIVE_CACHE = {"Cache-Control": "private, max-age=604800, immutable"}
@@ -2837,7 +2848,7 @@ def _crop_out(image: Image, crop: CropSuggestion) -> CropOut:
     )
 
 
-def _blur_out(image: Image, blur: BlurCover) -> BlurOut:
+def _blur_out(image: Image, blur: BlurCover, settings: Settings | None = None) -> BlurOut:
     preview = None
     if blur.derivative_path:
         version = blur_render_version(image.blurs, _derivatives_path(blur.derivative_path))
@@ -2852,6 +2863,7 @@ def _blur_out(image: Image, blur: BlurCover) -> BlurOut:
         rotation_deg=blur.rotation_deg,
         corner_radius=blur.corner_radius,
         feather=blur.feather,
+        edge_mode=blur.edge_mode,
         radius=blur.radius,
         strength=blur.strength,
         reason=blur.reason,
@@ -2875,6 +2887,7 @@ def _window_from_row(blur: BlurCover) -> BlurWindow:
         strength=blur.strength,
         rotation_deg=blur.rotation_deg,
         corner_radius=blur.corner_radius,
+        edge_mode=blur.edge_mode,
     )
 
 

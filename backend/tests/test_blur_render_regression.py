@@ -48,6 +48,31 @@ def _legacy_apply_rot0_ellipse(image: Image.Image, cover: BlurWindow) -> Image.I
     return result.crop((pad, pad, pad + rgb.width, pad + rgb.height))
 
 
+def test_soft_rotation_zero_ellipse_golden_jpeg_md5() -> None:
+    """Soft rotation-0 ellipse JPEG bytes stay stable (see test_blur_edge_mode golden)."""
+    import hashlib
+    import io
+
+    image = _horizontal_stripes()
+    cover = BlurWindow(
+        x=80,
+        y=200,
+        width=240,
+        height=180,
+        shape="ellipse",
+        feather=24,
+        radius=28.0,
+        reason="golden",
+        covers_unsafe=True,
+        rotation_deg=0.0,
+        edge_mode="soft",
+    )
+    rendered = apply_blur_covers(image, [cover])
+    buf = io.BytesIO()
+    rendered.save(buf, format="JPEG", quality=84)
+    assert hashlib.md5(buf.getvalue()).hexdigest() == "5009607f90156c49afede52eaff28537"
+
+
 def test_rotation_zero_ellipse_matches_pre_27_renderer() -> None:
     image = _horizontal_stripes()
     cover = BlurWindow(
@@ -61,6 +86,7 @@ def test_rotation_zero_ellipse_matches_pre_27_renderer() -> None:
         reason="golden",
         covers_unsafe=True,
         rotation_deg=0.0,
+        edge_mode="soft",
     )
     legacy = _legacy_apply_rot0_ellipse(image, cover)
     fixed = apply_blur_covers(image, [cover])

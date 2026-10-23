@@ -15,6 +15,9 @@ from typing import Any
 
 
 def _geometry_key(blur: Any) -> tuple[object, ...]:
+    edge_mode = str(getattr(blur, "edge_mode", None) or "soft")
+    # Only non-default edge modes join the key so existing (soft) hashes are unchanged.
+    extra: tuple[object, ...] = () if edge_mode == "soft" else (edge_mode,)
     return (
         str(blur.id),
         int(blur.x),
@@ -27,7 +30,7 @@ def _geometry_key(blur: Any) -> tuple[object, ...]:
         int(blur.feather),
         round(float(blur.radius), 3),
         str(blur.strength),
-    )
+    ) + extra
 
 
 def blur_geometry_hash(blurs: Iterable[Any]) -> str:
