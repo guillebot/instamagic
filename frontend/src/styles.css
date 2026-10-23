@@ -119,14 +119,26 @@ a { color: inherit; }
   text-decoration: none;
 }
 .nav a.active, .button { background: #d7a15f; color: #1b140c; border-color: #d7a15f; }
+/* Secondary action: outlined in the accent colour so it reads as intentional next to the
+   filled orange primary (.button), never as a stray black default button. */
 .ghost {
-  background: #161a1f;
-  color: #ece7df;
-  border-color: #4a5564;
+  background: transparent;
+  color: #e9c48f;
+  border-color: #d7a15f;
+  cursor: pointer;
 }
 .ghost:hover:not(:disabled) {
-  background: #232830;
-  border-color: #5c6675;
+  background: rgba(215, 161, 95, 0.14);
+  color: #f3d7ae;
+  border-color: #e9b877;
+}
+.ghost:focus-visible {
+  outline: 2px solid #d7a15f;
+  outline-offset: 2px;
+}
+.ghost .key-hint {
+  border-color: rgba(215, 161, 95, 0.45);
+  color: #e9c48f;
 }
 button:disabled,
 .button:disabled,
