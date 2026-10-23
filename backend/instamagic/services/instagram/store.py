@@ -121,11 +121,14 @@ def build_instagram_client(settings: Settings, session: Session | None = None) -
     creds = resolve_credentials(settings, session)
     if creds is None:
         return NotConfiguredInstagramClient()
+    meta = resolve_meta_app_credentials(settings, session)
     return GraphInstagramClient(
         access_token=creds.access_token,
         business_account_id=creds.business_account_id,
         graph_version=settings.instagram_graph_version,
         facebook_page_id=creds.facebook_page_id,
+        meta_app_id=meta.app_id if meta else None,
+        meta_app_secret=meta.app_secret if meta else None,
     )
 
 

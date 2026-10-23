@@ -19,9 +19,12 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from instamagic.config import Settings
 from instamagic.db import get_engine, session_factory
+from instamagic.errors import NotConfigured
 from instamagic.models import Library
 from instamagic.services.images.paths import is_mount_point
+from instamagic.services.instagram.permissions import graph_auth_failure_detail
 from instamagic.services.instagram.store import (
+    build_instagram_client,
     connection_status_fields,
     load_cached_account,
     resolve_credentials,
@@ -39,6 +42,8 @@ _cache_lock = threading.Lock()
 _cache_payload: tuple[float, dict[str, Any]] | None = None
 _publish_probe_cache: tuple[float, HealthLevel, str] | None = None
 _PUBLISH_PROBE_TTL = 600
+_instagram_live_probe_cache: tuple[float, str | None, str | None] | None = None
+_INSTAGRAM_LIVE_PROBE_TTL = 300
 # Syntactically valid publish-asset token (40–1000 chars); signature is bogus.
 _PUBLISH_PROBE_BOGUS_TOKEN = "A" * 60
 
@@ -170,6 +175,36 @@ def _check_library(settings: Settings) -> HealthCheck:
         session.close()
 
 
+def probe_instagram_username_live(settings: Settings) -> tuple[str | None, str | None]:
+    """Live Graph username probe. Returns (username, auth_error_detail). Never logs tokens."""
+    session = session_factory()()
+    try:
+        client = build_instagram_client(settings, session)
+        if not client.configured():
+            return None, None
+        fetch = getattr(client, "fetch_live_username", None)
+        if not callable(fetch):
+            return None, None
+        try:
+            username = fetch()
+        except NotConfigured as exc:
+            auth = graph_auth_failure_detail(exc.detail)
+            return None, auth or "Instagram Graph auth failed (reconnect Meta OAuth)"
+        return username, None
+    finally:
+        session.close()
+
+
+def _cached_instagram_live_username(settings: Settings) -> tuple[str | None, str | None]:
+    global _instagram_live_probe_cache
+    now = time.time()
+    if _instagram_live_probe_cache and now - _instagram_live_probe_cache[0] < _INSTAGRAM_LIVE_PROBE_TTL:
+        return _instagram_live_probe_cache[1], _instagram_live_probe_cache[2]
+    username, auth_error = probe_instagram_username_live(settings)
+    _instagram_live_probe_cache = (now, username, auth_error)
+    return username, auth_error
+
+
 def _check_instagram(settings: Settings) -> HealthCheck:
     session = session_factory()()
     try:
@@ -178,9 +213,6 @@ def _check_instagram(settings: Settings) -> HealthCheck:
         fields = connection_status_fields(settings, session, configured=configured)
         cached = load_cached_account(session)
         expected = (settings.instagram_expected_username or "").strip().lstrip("@").lower()
-        username = ""
-        if isinstance(cached, dict):
-            username = str(cached.get("username") or "").lstrip("@").lower()
 
         if settings.instagram_provider == "fake":
             return HealthCheck(
@@ -196,16 +228,33 @@ def _check_instagram(settings: Settings) -> HealthCheck:
                 status="warning",
                 detail="No Graph credentials configured.",
             )
+
+        live_username, auth_error = _cached_instagram_live_username(settings)
+        username = ""
+        if live_username:
+            username = live_username.lstrip("@").lower()
+            username_source = "live"
+        elif isinstance(cached, dict):
+            username = str(cached.get("username") or "").lstrip("@").lower()
+            username_source = "cached"
+        else:
+            username_source = "unknown"
+
         detail_parts = [f"source={fields.get('credential_source', 'unknown')}"]
+        status: HealthLevel = "ok"
+        if auth_error:
+            status = "down"
+            detail_parts.append(auth_error)
         if username:
-            detail_parts.append(f"@{username}")
+            detail_parts.append(f"@{username} ({username_source})")
         elif cached is None:
             detail_parts.append("profile not cached yet")
-        if fields.get("account_fetched_at"):
+        if fields.get("account_fetched_at") and username_source != "live":
             detail_parts.append(f"profile cached {fields['account_fetched_at']}")
-        status: HealthLevel = "ok"
         if expected:
-            if not username:
+            if auth_error:
+                pass
+            elif not username:
                 status = "warning"
                 detail_parts.append(f"expected @{expected} (username unknown)")
             elif username != expected:
@@ -534,7 +583,8 @@ def build_health_status(settings: Settings, *, bypass_cache: bool = False) -> di
 
 
 def reset_health_cache() -> None:
-    global _cache_payload, _publish_probe_cache
+    global _cache_payload, _publish_probe_cache, _instagram_live_probe_cache
     with _cache_lock:
         _cache_payload = None
         _publish_probe_cache = None
+        _instagram_live_probe_cache = None

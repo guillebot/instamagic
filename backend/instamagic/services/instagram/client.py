@@ -14,10 +14,12 @@ import httpx
 from instamagic.errors import InstagramNotConfigured, NotConfigured
 from instamagic.services.instagram.graph_constants import DEFAULT_INSTAGRAM_GRAPH_VERSION
 from instamagic.services.instagram.graph_http import (
+    graph_error_fields,
     graph_get_page,
     graph_json_or_raise,
     graph_paginate,
 )
+from instamagic.services.instagram.permissions import FetchedScopes, scopes_from_debug_token_data
 
 # IG User fields for graph.facebook.com (Facebook Login / Page token).
 # account_type exists only on graph.instagram.com (Instagram Login) — omit here.
@@ -252,15 +254,26 @@ class FakeInstagramClient:
         )
 
     def fetch_granted_permissions(self) -> set[str]:
-        return {
-            "instagram_basic",
-            "instagram_content_publish",
-            "instagram_manage_insights",
-            "instagram_manage_comments",
-            "pages_show_list",
-            "pages_read_engagement",
-            "business_management",
-        }
+        return set(self.fetch_granted_permissions_detailed().scopes)
+
+    def fetch_granted_permissions_detailed(self) -> FetchedScopes:
+        return FetchedScopes(
+            scopes=frozenset(
+                {
+                    "instagram_basic",
+                    "instagram_content_publish",
+                    "instagram_manage_insights",
+                    "instagram_manage_comments",
+                    "pages_show_list",
+                    "pages_read_engagement",
+                    "business_management",
+                }
+            ),
+            determined=True,
+        )
+
+    def fetch_live_username(self) -> str | None:
+        return "instamagic_fixture"
 
     def fetch_account_insight_snapshot(self) -> dict[str, int | None]:
         return {
@@ -351,12 +364,16 @@ class GraphInstagramClient:
         business_account_id: str,
         graph_version: str = DEFAULT_INSTAGRAM_GRAPH_VERSION,
         facebook_page_id: str | None = None,
+        meta_app_id: str | None = None,
+        meta_app_secret: str | None = None,
         timeout: float = 60.0,
     ) -> None:
         self._token = access_token.strip()
         self._ig_user_id = business_account_id.strip()
         self._version = graph_version.strip() or DEFAULT_INSTAGRAM_GRAPH_VERSION
         self._facebook_page_id = (facebook_page_id or "").strip() or None
+        self._meta_app_id = (meta_app_id or "").strip() or None
+        self._meta_app_secret = (meta_app_secret or "").strip() or None
         self._timeout = timeout
         self._base = f"https://graph.facebook.com/{self._version}"
 
@@ -418,6 +435,18 @@ class GraphInstagramClient:
             quota_duration_seconds=quota_duration,
             usage=usage,
         )
+
+    def fetch_live_username(self) -> str | None:
+        """Read-only live probe (username field only) for health checks."""
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        payload = graph_get_page(
+            f"{self._base}/{self._ig_user_id}",
+            params={"fields": "username", "access_token": self._token},
+            timeout=min(self._timeout, 15.0),
+            action="probe account username",
+        )
+        return _optional_str(payload.get("username"))
 
     def fetch_account_details(self) -> InstagramAccountDetails:
         if not self.configured():
@@ -558,15 +587,36 @@ class GraphInstagramClient:
         permalink = payload.get("permalink")
         return str(permalink) if permalink else None
 
-    def fetch_granted_permissions(self) -> set[str]:
+    def fetch_granted_permissions_detailed(self) -> FetchedScopes:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
-        payload = graph_get_page(
-            f"{self._base}/me/permissions",
-            params={"access_token": self._token},
-            timeout=self._timeout,
-            action="fetch token permissions",
-        )
+        if self._meta_app_id and self._meta_app_secret:
+            app_access = f"{self._meta_app_id}|{self._meta_app_secret}"
+            try:
+                payload = graph_get_page(
+                    f"{self._base}/debug_token",
+                    params={"input_token": self._token, "access_token": app_access},
+                    timeout=self._timeout,
+                    action="inspect access token",
+                )
+                data = payload.get("data")
+                if isinstance(data, dict):
+                    scopes = scopes_from_debug_token_data(data)
+                    return FetchedScopes(scopes=frozenset(scopes), determined=True)
+            except NotConfigured:
+                pass
+        try:
+            payload = graph_get_page(
+                f"{self._base}/me/permissions",
+                params={"access_token": self._token},
+                timeout=self._timeout,
+                action="fetch user token permissions",
+            )
+        except NotConfigured as exc:
+            detail = exc.detail.lower()
+            if "nonexisting field" in detail or "(permissions)" in detail:
+                return FetchedScopes(scopes=frozenset(), determined=False)
+            return FetchedScopes(scopes=frozenset(), determined=False)
         granted: set[str] = set()
         for row in payload.get("data") or []:
             if not isinstance(row, dict):
@@ -575,7 +625,10 @@ class GraphInstagramClient:
                 name = str(row.get("permission") or "").strip()
                 if name:
                     granted.add(name)
-        return granted
+        return FetchedScopes(scopes=frozenset(granted), determined=True)
+
+    def fetch_granted_permissions(self) -> set[str]:
+        return set(self.fetch_granted_permissions_detailed().scopes)
 
     def fetch_account_insight_snapshot(self) -> dict[str, int | None]:
         if not self.configured():
@@ -808,10 +861,10 @@ def _json_or_raise(response: httpx.Response, *, action: str) -> dict:
     except ValueError as exc:
         raise NotConfigured(f"Instagram {action} returned non-JSON.") from exc
     if response.status_code >= 400:
-        error = payload.get("error") if isinstance(payload, dict) else None
-        message = "request failed"
-        if isinstance(error, dict):
-            message = str(error.get("message") or message)
+        if isinstance(payload, dict):
+            _code, message = graph_error_fields(payload)
+        else:
+            message = "request failed"
         raise NotConfigured(f"Instagram {action} failed: {message}")
     if not isinstance(payload, dict):
         raise NotConfigured(f"Instagram {action} returned an unexpected payload.")
