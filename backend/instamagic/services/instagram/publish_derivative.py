@@ -59,6 +59,8 @@ def _window_from_row(blur: BlurCover) -> BlurWindow:
         strength=blur.strength,
         reason=blur.reason,
         covers_unsafe=blur.covers_unsafe,
+        rotation_deg=blur.rotation_deg,
+        corner_radius=blur.corner_radius,
     )
 
 
@@ -95,61 +97,29 @@ def _scale_crop_to_rgb(
 def _windows_in_crop_space(
     windows: list[BlurWindow], crop_box: tuple[int, int, int, int]
 ) -> list[BlurWindow]:
-    cx, cy, cw, ch = crop_box
-    mapped: list[BlurWindow] = []
-    for window in windows:
-        ix0 = max(cx, window.x)
-        iy0 = max(cy, window.y)
-        ix1 = min(cx + cw, window.x + window.width)
-        iy1 = min(cy + ch, window.y + window.height)
-        if ix1 <= ix0 or iy1 <= iy0:
-            continue
-        mapped.append(
-            BlurWindow(
-                x=ix0 - cx,
-                y=iy0 - cy,
-                width=ix1 - ix0,
-                height=iy1 - iy0,
-                shape=window.shape,
-                feather=window.feather,
-                radius=window.radius,
-                strength=window.strength,
-                reason=window.reason,
-                covers_unsafe=window.covers_unsafe,
-            )
-        )
-    return mapped
+    from instamagic.services.blurs.masks import window_for_crop
+
+    cx, cy, _, _ = crop_box
+    return [window_for_crop(window, cx, cy) for window in windows]
 
 
 def _mean_abs_diff_in_ellipses(publish: PilImage.Image, reference: PilImage.Image, windows: list[BlurWindow]) -> float:
+    from instamagic.services.blurs.masks import feathered_shape_mask
+
     if publish.size != reference.size:
         raise NotAllowed("Publish derivative size does not match the unblurred reference.")
     pub = np.asarray(publish.convert("RGB"), dtype=np.float32)
     ref = np.asarray(reference.convert("RGB"), dtype=np.float32)
     total_diff = 0.0
     total_weight = 0.0
-    h, w = pub.shape[:2]
     for window in windows:
         if window.width <= 0 or window.height <= 0:
             continue
-        x0 = max(0, window.x)
-        y0 = max(0, window.y)
-        x1 = min(w, window.x + window.width)
-        y1 = min(h, window.y + window.height)
-        if x1 <= x0 or y1 <= y0:
-            continue
-        cx = (x0 + x1) / 2.0
-        cy = (y0 + y1) / 2.0
-        rx = max(1.0, (x1 - x0) / 2.0)
-        ry = max(1.0, (y1 - y0) / 2.0)
-        yy, xx = np.ogrid[y0:y1, x0:x1]
-        norm = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
-        mask = norm <= 1.0
+        alpha = np.asarray(feathered_shape_mask(publish.size, window), dtype=np.float32) / 255.0
+        mask = alpha > 0.35
         if not np.any(mask):
             continue
-        patch_pub = pub[y0:y1, x0:x1][mask]
-        patch_ref = ref[y0:y1, x0:x1][mask]
-        diff = float(np.mean(np.abs(patch_pub - patch_ref)))
+        diff = float(np.mean(np.abs(pub[mask] - ref[mask])))
         weight = float(np.count_nonzero(mask))
         total_diff += diff * weight
         total_weight += weight

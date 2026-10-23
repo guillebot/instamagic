@@ -51,7 +51,7 @@ def test_cover_check_passes_when_core_contains_unsafe_box() -> None:
     unsafe = Box(40, 40, 20, 20)
     covering = suggest_blurs(200, 200, [unsafe], strength="standard")
     assert covering
-    assert covers_unsafe_boxes(covering, [unsafe])
+    assert covers_unsafe_boxes(covering, [unsafe], (200, 200))
 
 
 def test_suggested_cover_contains_wide_unsafe_box() -> None:
@@ -59,7 +59,7 @@ def test_suggested_cover_contains_wide_unsafe_box() -> None:
     unsafe = Box(60, 432, 240, 132)
     covering = suggest_blurs(400, 600, [unsafe], strength="standard")
     assert covering
-    assert covers_unsafe_boxes(covering, [unsafe])
+    assert covers_unsafe_boxes(covering, [unsafe], (400, 600))
 
 
 def test_cover_check_fails_when_blur_misses_region() -> None:
@@ -75,7 +75,7 @@ def test_cover_check_fails_when_blur_misses_region() -> None:
         reason="miss",
         covers_unsafe=False,
     )
-    assert not covers_unsafe_boxes([miss], [unsafe])
+    assert not covers_unsafe_boxes([miss], [unsafe], (200, 200))
 
 
 def test_suggested_sigma_is_strong_not_beauty_soft() -> None:

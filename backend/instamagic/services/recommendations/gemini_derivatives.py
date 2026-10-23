@@ -29,6 +29,8 @@ def _window_from_row(blur: BlurCover) -> BlurWindow:
         strength=blur.strength,
         reason=blur.reason,
         covers_unsafe=blur.covers_unsafe,
+        rotation_deg=blur.rotation_deg,
+        corner_radius=blur.corner_radius,
     )
 
 
@@ -39,7 +41,13 @@ def has_approved_covering_blur(session: Session, image: Image) -> bool:
     unsafe = clear_exposed_boxes(session, image.id)
     if not unsafe:
         return True
-    return covers_unsafe_boxes([_window_from_row(blur) for blur in approved], unsafe)
+    if image.width is None or image.height is None:
+        return False
+    return covers_unsafe_boxes(
+        [_window_from_row(blur) for blur in approved],
+        unsafe,
+        (image.width, image.height),
+    )
 
 
 def derivative_bytes_for_gemini(

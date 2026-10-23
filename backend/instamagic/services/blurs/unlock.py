@@ -57,6 +57,8 @@ def blur_geometry_hash(blurs: list[BlurCover]) -> str:
             "feather": blur.feather,
             "radius": round(blur.radius, 4),
             "strength": blur.strength,
+            "rotation_deg": round(blur.rotation_deg, 4),
+            "corner_radius": round(blur.corner_radius, 4),
         }
         for blur in approved
     ]
@@ -158,6 +160,8 @@ def verify_blur_unlock(
             strength=blur.strength,
             reason=blur.reason,
             covers_unsafe=blur.covers_unsafe,
+            rotation_deg=blur.rotation_deg,
+            corner_radius=blur.corner_radius,
         )
         for blur in image.blurs
     ]

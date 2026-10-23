@@ -263,6 +263,8 @@ class BlurOut(BaseModel):
     width: int
     height: int
     shape: str
+    rotation_deg: float = 0.0
+    corner_radius: float = 0.0
     feather: int
     radius: float
     strength: str
@@ -277,8 +279,23 @@ class BlurCreateIn(BaseModel):
     y: int
     width: int
     height: int
+    shape: str = "ellipse"
+    rotation_deg: float = 0.0
+    corner_radius: float = 0.0
     strength: str = "standard"
     reason: str = "Manual ellipse cover."
+
+
+class BlurUpdateIn(BaseModel):
+    x: int | None = None
+    y: int | None = None
+    width: int | None = None
+    height: int | None = None
+    shape: str | None = None
+    rotation_deg: float | None = None
+    corner_radius: float | None = None
+    strength: str | None = None
+    reason: str | None = None
 
 
 class BlurStrengthIn(BaseModel):
