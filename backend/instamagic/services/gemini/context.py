@@ -77,6 +77,8 @@ def build_context(
     safe_description: str,
     crop: dict[str, Any] | None,
     has_approved_covering_blur: bool = False,
+    has_approved_blur: bool = False,
+    do_not_post_blur_unlocked: bool = False,
 ) -> GeminiContext:
     gate = gemini_gate(
         attested=attested,
@@ -85,6 +87,8 @@ def build_context(
         needs_crop=needs_crop,
         has_approved_crop=has_approved_crop,
         has_approved_covering_blur=has_approved_covering_blur,
+        has_approved_blur=has_approved_blur,
+        do_not_post_blur_unlocked=do_not_post_blur_unlocked,
         operator_confirmed=operator_confirmed,
         policy=policy,
     )
@@ -108,6 +112,14 @@ def build_context(
                 + description
             )
             crop_payload = None
+    elif model_state == "DO_NOT_POST":
+        # Only reachable when the gate accepted a verified blur unlock with approved covers.
+        description = (
+            "Describe the photograph with approved covering blur applied. "
+            "Do not infer what was covered. "
+            + description
+        )
+        crop_payload = None
     return GeminiContext(
         content_tags=[_sanitize_prompt_text(tag, max_len=64) for tag in content_tags[:24]],
         composition=_sanitize_prompt_text(composition, max_len=120),

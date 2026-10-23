@@ -1615,6 +1615,7 @@ def create_captions(
     image = _load_image(session, image_id)
     approved = next((crop for crop in image.crops if crop.approved), None)
     covering_blur = _has_approved_covering_blur(session, image)
+    gate_kwargs = publishing_gate_kwargs(session, image)
     tags = list(
         session.scalars(
             select(ContentTag.name).join(ImageTag, ImageTag.tag_id == ContentTag.id).where(ImageTag.image_id == image.id)
@@ -1645,6 +1646,8 @@ def create_captions(
             needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
             has_approved_crop=approved is not None,
             has_approved_covering_blur=covering_blur,
+            has_approved_blur=bool(gate_kwargs["has_approved_blur"]),
+            do_not_post_blur_unlocked=bool(gate_kwargs["do_not_post_blur_unlocked"]),
             policy=settings.gemini_image_policy,
             operator_confirmed=body.confirmed,
             content_tags=tags,
