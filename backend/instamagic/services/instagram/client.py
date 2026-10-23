@@ -13,7 +13,11 @@ from typing import Any, Protocol
 import httpx
 from instamagic.errors import InstagramNotConfigured, NotConfigured
 from instamagic.services.instagram.graph_constants import DEFAULT_INSTAGRAM_GRAPH_VERSION
-from instamagic.services.instagram.graph_http import graph_get_page, graph_paginate
+from instamagic.services.instagram.graph_http import (
+    graph_get_page,
+    graph_json_or_raise,
+    graph_paginate,
+)
 
 # IG User fields for graph.facebook.com (Facebook Login / Page token).
 # account_type exists only on graph.instagram.com (Instagram Login) — omit here.
@@ -116,6 +120,10 @@ class InstagramClient(Protocol):
 
     def fetch_business_discovery(self, username: str) -> dict: ...
 
+    def list_media_comments(self, media_id: str) -> list[dict]: ...
+
+    def post_comment_reply(self, comment_id: str, message: str) -> None: ...
+
 
 def mask_access_token(token: str) -> str | None:
     """Never return the full token. Empty → None; short → opaque; else last 4 only."""
@@ -167,6 +175,12 @@ class NotConfiguredInstagramClient:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def fetch_business_discovery(self, username: str) -> dict:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def list_media_comments(self, media_id: str) -> list[dict]:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def post_comment_reply(self, comment_id: str, message: str) -> None:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
 
@@ -242,6 +256,7 @@ class FakeInstagramClient:
             "instagram_basic",
             "instagram_content_publish",
             "instagram_manage_insights",
+            "instagram_manage_comments",
             "pages_show_list",
             "pages_read_engagement",
             "business_management",
@@ -292,6 +307,20 @@ class FakeInstagramClient:
     def fetch_hashtag_recent_media(self, hashtag_id: str) -> list[dict]:
         del hashtag_id
         return [{"id": "m2", "caption": "#portrait", "like_count": 2}]
+
+    def list_media_comments(self, media_id: str) -> list[dict]:
+        del media_id
+        return [
+            {
+                "id": "fake-comment-1",
+                "text": "Beautiful tones!",
+                "username": "viewer1",
+                "timestamp": "2026-01-02T10:00:00+0000",
+            }
+        ]
+
+    def post_comment_reply(self, comment_id: str, message: str) -> None:
+        self.calls.append({"comment_id": comment_id, "message": message})
 
     def fetch_business_discovery(self, username: str) -> dict:
         return {
@@ -712,6 +741,39 @@ class GraphInstagramClient:
         if not isinstance(discovery, dict):
             raise NotConfigured("Business discovery is unavailable for this account.")
         return discovery
+
+    def list_media_comments(self, media_id: str) -> list[dict]:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        fields = "id,text,username,timestamp"
+        rows: list[dict] = []
+        for item in graph_paginate(
+            self._base,
+            f"{media_id}/comments",
+            access_token=self._token,
+            params={"fields": fields, "limit": "50"},
+            timeout=self._timeout,
+            action="list media comments",
+            max_pages=3,
+        ):
+            rows.append(item)
+        return rows
+
+    def post_comment_reply(self, comment_id: str, message: str) -> None:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        if not message.strip():
+            raise NotConfigured("Reply message is required.")
+        url = f"{self._base}/{comment_id}/replies"
+        try:
+            response = httpx.post(
+                url,
+                data={"message": message.strip(), "access_token": self._token},
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise NotConfigured("Instagram comment reply failed.") from exc
+        graph_json_or_raise(response, action="post comment reply")
 
 
 def _optional_str(value: object) -> str | None:

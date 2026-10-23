@@ -37,6 +37,7 @@ from instamagic.models import (
     HumanRating,
     Image,
     ImageTag,
+    InstagramInboxComment,
     InstagramPost,
     JobStatus,
     Library,
@@ -129,6 +130,11 @@ from instamagic.services.instagram.assets import parse_publish_token, resolve_pu
 from instamagic.services.instagram.business_discovery import (
     discovery_out,
     sync_related_account_discovery,
+)
+from instamagic.services.instagram.comment_inbox import (
+    post_reply,
+    suggest_reply,
+    sync_inbox_comments,
 )
 from instamagic.services.instagram.hashtag_research import (
     HashtagResearchUnavailable,
@@ -2211,6 +2217,89 @@ def update_related_account(
     return _related_out(row)
 
 
+@router.get("/api/inbox/comments")
+def inbox_list_comments(
+    status: str = Query(default="open"),
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> list[dict[str, object]]:
+    stmt = select(InstagramInboxComment).order_by(InstagramInboxComment.commented_at.desc().nullslast())
+    if status != "all":
+        stmt = stmt.where(InstagramInboxComment.status == status)
+    rows = session.scalars(stmt.limit(100)).all()
+    return [_inbox_comment_out(row) for row in rows]
+
+
+@router.post("/api/inbox/comments/sync")
+def inbox_sync_comments(
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    _reload_instagram_client(request, settings, session)
+    client = request.app.state.instagram
+    return sync_inbox_comments(session, settings, client, force=True)
+
+
+@router.post("/api/inbox/comments/{comment_id}/suggest-reply")
+def inbox_suggest_reply(
+    comment_id: UUID,
+    request: Request,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    row = session.get(InstagramInboxComment, comment_id)
+    if row is None:
+        raise NotFound("Comment was not found.")
+    post = session.get(InstagramPost, row.post_id) if row.post_id else None
+    text = suggest_reply(
+        session,
+        request.app.state.growth,
+        row,
+        account_voice=settings.account_voice,
+        post_caption=post.caption if post else None,
+    )
+    return {"suggested_reply": text}
+
+
+@router.post("/api/inbox/comments/{comment_id}/reply")
+def inbox_post_reply(
+    comment_id: UUID,
+    body: dict[str, str],
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    row = session.get(InstagramInboxComment, comment_id)
+    if row is None:
+        raise NotFound("Comment was not found.")
+    message = (body.get("message") or row.suggested_reply or "").strip()
+    _reload_instagram_client(request, settings, session)
+    post_reply(session, request.app.state.instagram, row, message)
+    return _inbox_comment_out(row)
+
+
+@router.patch("/api/inbox/comments/{comment_id}")
+def inbox_update_comment(
+    comment_id: UUID,
+    body: dict[str, str],
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    row = session.get(InstagramInboxComment, comment_id)
+    if row is None:
+        raise NotFound("Comment was not found.")
+    if "status" in body and body["status"] in {"open", "dismissed", "hidden"}:
+        row.status = body["status"]
+    if "suggested_reply" in body:
+        row.suggested_reply = body["suggested_reply"].strip() or row.suggested_reply
+    session.commit()
+    return _inbox_comment_out(row)
+
+
 @router.get("/api/hashtag-research/budget")
 def hashtag_research_budget(
     _auth: None = Depends(require_session),
@@ -2619,6 +2708,20 @@ def _caption_out(row: Caption) -> dict[str, object]:
         "text": row.text,
         "status": row.status,
         "created_at": row.created_at,
+    }
+
+
+def _inbox_comment_out(row: InstagramInboxComment) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "ig_comment_id": row.ig_comment_id,
+        "ig_media_id": row.ig_media_id,
+        "author_username": row.author_username,
+        "text": row.text,
+        "commented_at": row.commented_at.isoformat() if row.commented_at else None,
+        "suggested_reply": row.suggested_reply,
+        "status": row.status,
+        "replied_at": row.replied_at.isoformat() if row.replied_at else None,
     }
 
 
