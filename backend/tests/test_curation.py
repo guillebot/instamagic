@@ -104,6 +104,17 @@ def test_curation_drafts_then_human_queues(client, app_env) -> None:
     queue = client.get("/api/queue").json()
     assert any(item["image"]["id"] == first["image"]["id"] for item in queue)
 
+    undone = client.post(f"/api/curation/picks/{first['id']}/undo-queue")
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["status"] in {"suggested", "accepted"}
+    refreshed_after_undo = client.get(f"/api/curation/{batch['id']}").json()
+    assert next(pick for pick in refreshed_after_undo["picks"] if pick["id"] == first["id"])["status"] in {
+        "suggested",
+        "accepted",
+    }
+    queue_after = client.get("/api/queue").json()
+    assert not any(item["image"]["id"] == first["image"]["id"] for item in queue_after)
+
 
 def test_curation_requires_auth(client) -> None:
     assert client.get("/api/curation").status_code == 401

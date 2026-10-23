@@ -863,6 +863,27 @@ def queue_picks(
     return queued
 
 
+def undo_queued_pick(session: Session, pick: CurationPick) -> CurationPick:
+    """Remove a still-candidate queue row and reopen the curation pick (toast undo)."""
+    if pick.status != CurationPickStatus.QUEUED.value:
+        raise NotAllowed("Only queued picks can be undone here.")
+    item = session.scalar(
+        select(PublishingQueueItem)
+        .where(PublishingQueueItem.image_id == pick.image_id)
+        .order_by(PublishingQueueItem.created_at.desc())
+    )
+    if item is None:
+        pick.status = CurationPickStatus.SUGGESTED.value
+        session.commit()
+        return pick
+    if item.state != QueueState.CANDIDATE.value:
+        raise NotAllowed("Queue item is already approved or published; cannot undo send.")
+    session.delete(item)
+    pick.status = CurationPickStatus.ACCEPTED.value
+    session.commit()
+    return pick
+
+
 def processing_job_for_batch(session: Session, batch_id: UUID) -> ProcessingJob | None:
     jobs = session.scalars(
         select(ProcessingJob)
