@@ -3,37 +3,13 @@ from __future__ import annotations
 from instamagic.config import Settings
 from instamagic.models.entities import Image, PublishingQueueItem
 from instamagic.models.enums import SafetyState
-from instamagic.services.blurs.generator import BlurWindow, covers_unsafe_boxes
+from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.instagram.store import load_cached_account
-from instamagic.services.pipeline import clear_exposed_boxes, is_attested
+from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.gates import gemini_gate, publishing_gate
+from instamagic.services.recommendations.gemini_derivatives import has_approved_covering_blur
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-
-def _window_from_blur(blur) -> BlurWindow:
-    return BlurWindow(
-        x=blur.x,
-        y=blur.y,
-        width=blur.width,
-        height=blur.height,
-        shape=blur.shape,
-        feather=blur.feather,
-        radius=blur.radius,
-        reason=blur.reason,
-        covers_unsafe=blur.covers_unsafe,
-        strength=blur.strength,
-    )
-
-
-def has_approved_covering_blur(session: Session, image: Image) -> bool:
-    approved = [blur for blur in image.blurs if blur.approved]
-    if not approved:
-        return False
-    unsafe = clear_exposed_boxes(session, image.id)
-    if not unsafe:
-        return True
-    return covers_unsafe_boxes([_window_from_blur(blur) for blur in approved], unsafe)
 
 
 def instagram_target_username(settings: Settings, session: Session) -> str | None:
@@ -58,14 +34,18 @@ def build_image_publish_readiness(
     approved_crop = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
     covering_blur = has_approved_covering_blur(session, image)
     attested = is_attested(session, image.library_id)
-    publish_gate = publishing_gate(
-        attested=attested,
-        human_rating=image.human_rating,
-        model_state=image.model_state,
-        needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-        has_approved_crop=approved_crop is not None,
-        has_approved_covering_blur=covering_blur,
-    )
+    # Same gate as queue/publish (incl. rotation-aware coverage and DO_NOT_POST unlock),
+    # plus the "blur edited but not re-approved" block so a moved cover is never shown
+    # as ready while publish would refuse it.
+    from instamagic.services.instagram.publish_derivative import blur_drawn_not_approved_reason
+
+    publish_gate = publishing_gate(attested=attested, **publishing_gate_kwargs(session, image))
+    publishing_allowed = publish_gate.allowed
+    publishing_reasons = list(publish_gate.reasons)
+    blur_pending = blur_drawn_not_approved_reason(image)
+    if blur_pending:
+        publishing_allowed = False
+        publishing_reasons.append(blur_pending)
     caption_gate = gemini_gate(
         attested=attested,
         human_rating=image.human_rating,
@@ -82,8 +62,8 @@ def build_image_publish_readiness(
         .order_by(PublishingQueueItem.created_at.desc())
     )
     return {
-        "publishing_allowed": publish_gate.allowed,
-        "publishing_reasons": publish_gate.reasons,
+        "publishing_allowed": publishing_allowed,
+        "publishing_reasons": publishing_reasons,
         "caption_generation_allowed": caption_gate.allowed,
         "caption_generation_reasons": caption_gate.reasons,
         "library_attested": attested,

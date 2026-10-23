@@ -18,6 +18,7 @@ import {
 import {
   defaultStoryShareValue,
   StoryShareControls,
+  renderVersion,
   storyPreviewUrl,
   type StoryShareValue,
 } from "./StoryShareControls";
@@ -373,7 +374,9 @@ export function ClassifyPublishPanel({
 
   const selectedCaption = captions.data?.find((row) => row.id === selectedCaptionId);
   const previewSrc = ready?.feed_preview_url ?? image.preview_url ?? image.thumbnail_url;
-  const storyPreviewSrc = storyShare.story_share_enabled ? storyPreviewUrl(image.id, storyShare) : null;
+  const storyPreviewSrc = storyShare.story_share_enabled
+    ? storyPreviewUrl(image.id, storyShare, renderVersion(image.publish_preview_url ?? previewSrc))
+    : null;
 
   return (
     <section className="classify-publish" aria-label="Publish actions">

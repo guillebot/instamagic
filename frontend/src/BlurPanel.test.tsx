@@ -30,4 +30,15 @@ describe("blurVerificationLabel", () => {
     const label = blurVerificationLabel({ model_state: "REVIEW", blur_unlock_status: "none", blur_unlock_message: null }, flags);
     expect(label?.text).toMatch(/only the blurred version will be published/);
   });
+  it("any pending edit hides SAFE · BLURRED and shows re-rendering", () => {
+    const label = blurVerificationLabel(dnp("verified", "SAFE · BLURRED (verified)"), { ...flags, dirty: true });
+    expect(label?.tone).toBe("pending");
+    expect(label?.text).toMatch(/re-rendering/);
+    expect(label?.text).not.toMatch(/SAFE/);
+  });
+  it("does not show SAFE when a current cover is not approved (geometry changed)", () => {
+    const label = blurVerificationLabel(dnp("verified", "SAFE · BLURRED (verified)"), { ...flags, approved: false });
+    expect(label?.tone).not.toBe("ok");
+    expect(label?.text ?? "").not.toMatch(/SAFE/);
+  });
 });

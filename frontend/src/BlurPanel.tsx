@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
+import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
+import { createSaveQueue } from "./blurSaveQueue";
 import {
   type BlurRect,
   type BlurResizeMode,
@@ -51,14 +52,28 @@ function blurToRect(blur: BlurItem): BlurRect {
 
 export function blurVerificationLabel(
   image: Pick<ImageItem, "model_state" | "blur_unlock_status" | "blur_unlock_message">,
-  { verifying, hasCovers, approved }: { verifying: boolean; hasCovers: boolean; approved: boolean },
+  {
+    verifying,
+    hasCovers,
+    approved,
+    dirty = false,
+  }: { verifying: boolean; hasCovers: boolean; approved: boolean; dirty?: boolean },
 ): { tone: "ok" | "pending" | "error" | "info"; text: string } | null {
   if (verifying) return { tone: "pending", text: "Verifying blurred render…" };
+  // Any move/resize/rotate invalidates the previous verification until it is saved,
+  // re-rendered and approved again: never show a verified label for old geometry.
+  if (dirty && hasCovers) {
+    return {
+      tone: "pending",
+      text: "Blur changed — re-rendering… (approve again to re-verify)",
+    };
+  }
   if (image.model_state === "DO_NOT_POST") {
     switch (image.blur_unlock_status) {
       case "verified":
-        // The server only reports SAFE · BLURRED while the verified geometry still matches.
-        if ((image.blur_unlock_message ?? "").startsWith("SAFE · BLURRED")) {
+        // The server only reports SAFE · BLURRED while the verified geometry still matches,
+        // and every current cover must still be approved (edits clear approval).
+        if (approved && (image.blur_unlock_message ?? "").startsWith("SAFE · BLURRED")) {
           return { tone: "ok", text: "SAFE · BLURRED (verified) — only the blurred version can be published." };
         }
         return { tone: "error", text: "Covers changed since verification — approve (Enter/A) to re-verify. Still blocked." };
@@ -109,14 +124,51 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   const items = blurs.data ?? [];
   itemsLenRef.current = items.length;
   const previewUrl = items.find((item) => item.preview_url)?.preview_url ?? null;
-  const approved = items.some((item) => item.approved);
   const isDoNotPost = image.model_state === "DO_NOT_POST";
+  const allApproved = items.length > 0 && items.every((item) => item.approved);
   const [verifying, setVerifying] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const itemsRef = useRef<BlurItem[]>(items);
+  itemsRef.current = items;
+  const selectedIdRef = useRef<string | null>(selectedId);
+  selectedIdRef.current = selectedId;
 
   function notifyChanged() {
     void queryClient.invalidateQueries({ queryKey: ["publish-readiness", image.id] });
     onChanged?.(image.id);
   }
+  const notifyRef = useRef(notifyChanged);
+  notifyRef.current = notifyChanged;
+
+  // One latest-wins save queue per image: geometry edits are applied optimistically,
+  // persisted one request at a time, and server state is re-read only once all settle.
+  const saveQueue = useMemo(() => {
+    const imageId = image.id;
+    return createSaveQueue<Partial<BlurRect>>({
+      delayMs: 250,
+      send: (blurId, patch) =>
+        api(`/api/images/${imageId}/blurs/${blurId}`, { method: "PATCH", body: JSON.stringify(patch) }).then(
+          () => undefined,
+        ),
+      onBusyChange: setSaving,
+      onIdle: async () => {
+        await queryClient.invalidateQueries({ queryKey: ["blurs", imageId] });
+        notifyRef.current();
+      },
+      onError: (err) => {
+        setError(err instanceof ApiError ? err.message : "Could not update blur region.");
+        void queryClient.invalidateQueries({ queryKey: ["blurs", imageId] });
+      },
+    });
+  }, [image.id, queryClient]);
+
+  useEffect(() => {
+    return () => {
+      // Persist anything still pending when leaving this image, then stop timers.
+      void saveQueue.flush().finally(() => saveQueue.dispose());
+    };
+  }, [saveQueue]);
 
   useEffect(() => {
     setDraft(null);
@@ -170,6 +222,8 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     setVerifying(isDoNotPost);
     setError("");
     try {
+      // Approve exactly the geometry on screen: persist pending edits first.
+      await saveQueue.flush();
       await api(`/api/images/${image.id}/blurs/approve`, { method: "POST" });
       await blurs.refetch();
       notifyChanged();
@@ -215,46 +269,51 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           void approve();
         }
       }
+      // Read the latest items/selection through refs: this listener is installed once
+      // per image, so closing over render-time state would nudge from stale geometry.
+      const currentSelected = selectedIdRef.current;
       if (event.key === "Delete" || event.key === "Backspace") {
-        if (selectedId && !busyRef.current) {
+        if (currentSelected && !busyRef.current) {
           event.preventDefault();
-          void deleteBlur(selectedId);
+          void deleteBlur(currentSelected);
         }
       }
       const step = event.shiftKey ? 10 : 1;
-      if (selectedId && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+      if (currentSelected && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
         event.preventDefault();
-        const item = items.find((row) => row.id === selectedId);
+        if (busyRef.current) return;
+        const item = itemsRef.current.find((row) => row.id === currentSelected);
         if (!item) return;
         const dx = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
         const dy = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
-        const rect = blurToRect(item);
-        void patchBlur(item.id, moveBlur(rect, dx, dy));
+        const next = moveBlur(blurToRect(item), dx, dy);
+        patchBlur(item.id, { x: next.x, y: next.y });
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captureKeys, isDoNotPost, image.id]);
+  }, [captureKeys, isDoNotPost, image.id, saveQueue]);
 
-  async function patchBlur(blurId: string, patch: Partial<BlurRect>) {
-    setBusy(true);
+  /** Optimistically apply an edit and queue a latest-wins save (debounced unless delayMs=0). */
+  function patchBlur(blurId: string, patch: Partial<BlurRect>, delayMs?: number) {
     setError("");
-    try {
-      await api(`/api/images/${image.id}/blurs/${blurId}`, { method: "PATCH", body: JSON.stringify(patch) });
-      await blurs.refetch();
-      notifyChanged();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not update blur region.");
-    } finally {
-      setBusy(false);
-    }
+    // Drop any in-flight list refetch so an older server snapshot can't overwrite this edit.
+    void queryClient.cancelQueries({ queryKey: ["blurs", image.id] });
+    queryClient.setQueryData<BlurItem[]>(["blurs", image.id], (old) =>
+      (old ?? []).map((row) =>
+        // Any edit clears approval for the whole set (server does the same).
+        row.id === blurId ? { ...row, ...patch, approved: false } : { ...row, approved: false },
+      ),
+    );
+    saveQueue.schedule(blurId, patch, delayMs);
   }
 
   async function deleteBlur(blurId: string) {
     setBusy(true);
     setError("");
     try {
+      await saveQueue.flush();
       await api(`/api/images/${image.id}/blurs/${blurId}`, { method: "DELETE" });
       setSelectedId(null);
       await blurs.refetch();
@@ -307,6 +366,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   }
 
   function beginBlurDrag(blur: BlurItem, mode: BlurResizeMode, event: ReactPointerEvent<HTMLElement>) {
+    // Saves in flight don't block a new drag: the newest geometry always wins.
     if (!layout || !image.width || !image.height || busy) return;
     event.preventDefault();
     event.stopPropagation();
@@ -330,7 +390,10 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       setEditDraft((current) => {
-        if (current) void patchBlur(blur.id, current);
+        if (current) {
+          const { x, y, width, height, rotation_deg } = current;
+          queueMicrotask(() => patchBlur(blur.id, { x, y, width, height, rotation_deg }, 0));
+        }
         return null;
       });
     }
@@ -364,7 +427,10 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       setEditDraft((current) => {
-        if (current) void patchBlur(blur.id, { rotation_deg: current.rotation_deg });
+        if (current) {
+          const rotation_deg = current.rotation_deg;
+          queueMicrotask(() => patchBlur(blur.id, { rotation_deg }, 0));
+        }
         return null;
       });
     }
@@ -438,7 +504,20 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   }
 
   const draftCss = draft && layout ? cropToCss(draft, layout) : null;
-  const displaySrc = previewUrl ?? image.preview_url ?? "";
+  const baseSrc = image.original_preview_url ?? image.preview_url ?? "";
+  // While a cover is being dragged or its save/render is pending, the baked server render is
+  // stale: show the unblurred base with a live client-side blur inside each cover instead.
+  const dirty = editDraft !== null || saving;
+  const displaySrc = !dirty && previewUrl ? previewUrl : baseSrc;
+  const renderCurrent = !dirty && Boolean(previewUrl) && loadedSrc === previewUrl;
+  const liveBlur = items.length > 0 && !renderCurrent;
+
+  useEffect(() => {
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0 && img.getAttribute("src") === displaySrc) {
+      setLoadedSrc(displaySrc);
+    }
+  }, [displaySrc]);
 
   return (
     <div className="prep-panel">
@@ -447,7 +526,19 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
         ref={frameRef}
         onPointerDown={beginDraw}
       >
-        {displaySrc ? <img ref={imgRef} src={displaySrc} alt="" onLoad={measureLayout} draggable={false} /> : null}
+        {displaySrc ? (
+          <img
+            ref={imgRef}
+            src={displaySrc}
+            alt=""
+            data-testid="blur-stage-img"
+            onLoad={(event) => {
+              setLoadedSrc(event.currentTarget.getAttribute("src"));
+              measureLayout();
+            }}
+            draggable={false}
+          />
+        ) : null}
         {(image.blur_unlock_highlights ?? []).map((region, index) =>
           image.width && image.height && layout ? (
             <div
@@ -477,13 +568,20 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
               : `${Math.max(0, (blur.corner_radius ?? 0) * layout.scale)}px`;
           const selected = selectedId === blur.id;
           const handles: BlurResizeMode[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+          const liveSigma = Math.max(4, Math.round((blur.radius ?? 12) * layout.scale));
+          const stateClass = blur.approved ? " approved" : selected ? " selected" : "";
           return (
             <div
               key={blur.id}
-              className={
-                blur.approved ? "blur-ellipse approved interactive" : selected ? "blur-ellipse selected interactive" : "blur-ellipse interactive"
-              }
+              data-testid="blur-region"
+              className={`blur-ellipse${stateClass} interactive${liveBlur ? " live-blur" : ""}`}
               style={{
+                ...(liveBlur
+                  ? {
+                      backdropFilter: `blur(${liveSigma}px)`,
+                      WebkitBackdropFilter: `blur(${liveSigma}px)`,
+                    }
+                  : {}),
                 left: css.left,
                 top: css.top,
                 width: css.width,
@@ -545,7 +643,12 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           </p>
         )}
         {(() => {
-          const label = blurVerificationLabel(image, { verifying, hasCovers: items.length > 0, approved });
+          const label = blurVerificationLabel(image, {
+            verifying,
+            hasCovers: items.length > 0,
+            approved: allApproved,
+            dirty,
+          });
           if (!label) return null;
           return (
             <p
@@ -615,7 +718,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             disabled={busy || items.length === 0}
             onClick={() => void approve()}
           >
-            {busy ? "Saving…" : approved ? "Approved" : "Approve covers"}
+            {busy || saving ? "Saving…" : allApproved ? "Approved" : "Approve covers"}
           </button>
         </div>
         {error ? <p className="error">{error}</p> : null}
