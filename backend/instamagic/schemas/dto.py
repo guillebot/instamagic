@@ -57,6 +57,19 @@ class CaptionUpdate(BaseModel):
 
 class QueueIn(BaseModel):
     image_id: UUID
+    story_share_enabled: bool | None = None
+    story_render_mode: str | None = Field(default=None, max_length=32)
+    story_border_color: str | None = Field(default=None, max_length=16)
+    story_timing_mode: str | None = Field(default=None, max_length=16)
+    story_delay_hours: int | None = Field(default=None, ge=1, le=12)
+
+
+class QueueStoryUpdateIn(BaseModel):
+    story_share_enabled: bool | None = None
+    story_render_mode: str | None = Field(default=None, max_length=32)
+    story_border_color: str | None = Field(default=None, max_length=16)
+    story_timing_mode: str | None = Field(default=None, max_length=16)
+    story_delay_hours: int | None = Field(default=None, ge=1, le=12)
 
 
 class CarouselQueueIn(BaseModel):
@@ -99,6 +112,9 @@ class PostingScheduleConfigIn(BaseModel):
     max_posts_per_day: int | None = Field(default=None, ge=1, le=24)
     min_gap_hours: float | None = Field(default=None, ge=0.5, le=48)
     paused: bool | None = None
+    story_share_default: bool | None = None
+    story_render_mode_default: str | None = Field(default=None, max_length=32)
+    story_border_color_default: str | None = Field(default=None, max_length=16)
 
 
 class RelatedAccountIn(BaseModel):
@@ -222,6 +238,11 @@ class CurationPickUpdate(BaseModel):
 
 class CurationQueueIn(BaseModel):
     pick_ids: list[UUID] = Field(min_length=1, max_length=500)
+    story_share_enabled: bool | None = None
+    story_render_mode: str | None = Field(default=None, max_length=32)
+    story_border_color: str | None = Field(default=None, max_length=16)
+    story_timing_mode: str | None = Field(default=None, max_length=16)
+    story_delay_hours: int | None = Field(default=None, ge=1, le=12)
 
 
 class CropOut(BaseModel):

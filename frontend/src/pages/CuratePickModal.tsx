@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
 import {
@@ -8,7 +8,12 @@ import {
 } from "../curatePickUx";
 import { lifecycleLabel } from "../lifecycle";
 import { displayPreviewUrl, publishVariantLabel } from "../publishPresentation";
-import type { CaptionItem, CurationPick, QueueItem } from "../types";
+import {
+  defaultStoryShareValue,
+  StoryShareControls,
+  type StoryShareValue,
+} from "../StoryShareControls";
+import type { CaptionItem, CurationPick, PostingScheduleConfig, QueueItem } from "../types";
 
 export type CurateModalAction = "queue" | "reject" | "skip";
 
@@ -53,6 +58,12 @@ export function CuratePickModal({
   const [tags, setTags] = useState<string[]>(() => [...pick.suggested_tags]);
   const [tagInput, setTagInput] = useState("");
   const [error, setError] = useState("");
+  const scheduleDefaults = useQuery({
+    queryKey: ["posting-schedule-config"],
+    queryFn: () => api<PostingScheduleConfig>("/api/posting-schedule/config"),
+    staleTime: 60_000,
+  });
+  const [storyShare, setStoryShare] = useState<StoryShareValue>(() => defaultStoryShareValue());
 
   useEffect(() => {
     setCaptionId(preferredCaptionId(pick));
@@ -60,8 +71,17 @@ export function CuratePickModal({
     setTags([...pick.suggested_tags]);
     setTagInput("");
     setError("");
+    if (scheduleDefaults.data) {
+      setStoryShare(
+        defaultStoryShareValue({
+          story_share_enabled: scheduleDefaults.data.story_share_default ?? false,
+          story_render_mode: scheduleDefaults.data.story_render_mode_default ?? "blur_backdrop",
+          story_border_color: scheduleDefaults.data.story_border_color_default ?? "black",
+        }),
+      );
+    }
     dialogRef.current?.focus();
-  }, [pick.id]);
+  }, [pick.id, scheduleDefaults.data]);
 
   const hashtagSuggest = useMutation({
     mutationFn: () =>
@@ -112,7 +132,7 @@ export function CuratePickModal({
       // Only adds a CANDIDATE queue row; approving/scheduling/publishing stays a separate human step.
       await api<QueueItem[]>("/api/curation/queue", {
         method: "POST",
-        body: JSON.stringify({ pick_ids: [pick.id] }),
+        body: JSON.stringify({ pick_ids: [pick.id], ...storyShare }),
       });
       onPickPatched({ ...pick, status: "queued", suggested_tags: tags });
       onToast("Sent to publish queue", async () => {
@@ -328,6 +348,7 @@ export function CuratePickModal({
                 </button>
               </div>
             </div>
+            <StoryShareControls value={storyShare} onChange={setStoryShare} disabled={busy} compact />
             {error ? <p className="error">{error}</p> : null}
             <div className="curate-modal-actions">
               <button

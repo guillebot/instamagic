@@ -261,6 +261,17 @@ export type QueueItem = {
   permalink?: string | null;
   published_caption?: string | null;
   slides?: QueueSlide[];
+  story_share_enabled?: boolean;
+  story_render_mode?: string;
+  story_border_color?: string;
+  story_timing_mode?: string;
+  story_delay_hours?: number | null;
+  story_scheduled_at?: string | null;
+  story_published_at?: string | null;
+  story_last_error?: string | null;
+  story_status?: string;
+  story_ig_media_id?: string | null;
+  story_preview_url?: string | null;
   image: ImageItem;
 };
 
@@ -270,6 +281,9 @@ export type PostingScheduleConfig = {
   max_posts_per_day: number;
   min_gap_hours: number;
   paused: boolean;
+  story_share_default?: boolean;
+  story_render_mode_default?: string;
+  story_border_color_default?: string;
   updated_at?: string | null;
 };
 

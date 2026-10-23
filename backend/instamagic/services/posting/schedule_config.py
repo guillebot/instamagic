@@ -31,6 +31,9 @@ class ScheduleConfigView:
     max_posts_per_day: int
     min_gap_hours: float
     paused: bool
+    story_share_default: bool
+    story_render_mode_default: str
+    story_border_color_default: str
     updated_at: datetime | None
 
 
@@ -61,6 +64,9 @@ def get_or_create_config(session: Session) -> PostingScheduleConfig:
             max_posts_per_day=2,
             min_gap_hours=4.0,
             paused=False,
+            story_share_default=False,
+            story_render_mode_default="blur_backdrop",
+            story_border_color_default="black",
         )
         session.add(row)
         session.commit()
@@ -79,6 +85,9 @@ def config_view(session: Session) -> ScheduleConfigView:
         max_posts_per_day=row.max_posts_per_day,
         min_gap_hours=row.min_gap_hours,
         paused=row.paused,
+        story_share_default=bool(row.story_share_default),
+        story_render_mode_default=row.story_render_mode_default,
+        story_border_color_default=row.story_border_color_default,
         updated_at=row.updated_at,
     )
 
@@ -91,6 +100,9 @@ def update_config(
     max_posts_per_day: int | None = None,
     min_gap_hours: float | None = None,
     paused: bool | None = None,
+    story_share_default: bool | None = None,
+    story_render_mode_default: str | None = None,
+    story_border_color_default: str | None = None,
 ) -> ScheduleConfigView:
     row = get_or_create_config(session)
     if timezone is not None:
@@ -103,6 +115,13 @@ def update_config(
         row.min_gap_hours = max(0.5, float(min_gap_hours))
     if paused is not None:
         row.paused = paused
+    if story_share_default is not None:
+        row.story_share_default = story_share_default
+    if story_render_mode_default is not None:
+        row.story_render_mode_default = story_render_mode_default.strip() or "blur_backdrop"
+    if story_border_color_default is not None:
+        color = story_border_color_default.strip().lower()
+        row.story_border_color_default = color if color in {"black", "white"} else "black"
     session.commit()
     return config_view(session)
 
@@ -114,5 +133,8 @@ def config_as_dict(view: ScheduleConfigView) -> dict[str, Any]:
         "max_posts_per_day": view.max_posts_per_day,
         "min_gap_hours": view.min_gap_hours,
         "paused": view.paused,
+        "story_share_default": view.story_share_default,
+        "story_render_mode_default": view.story_render_mode_default,
+        "story_border_color_default": view.story_border_color_default,
         "updated_at": view.updated_at,
     }

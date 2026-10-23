@@ -805,6 +805,11 @@ def queue_picks(
     *,
     pick_ids: list[UUID],
     covering_blur_fn,
+    story_share_enabled: bool | None = None,
+    story_render_mode: str | None = None,
+    story_border_color: str | None = None,
+    story_timing_mode: str | None = None,
+    story_delay_hours: int | None = None,
 ) -> list[PublishingQueueItem]:
     """Human-approved send to publish queue. Re-checks gates; never auto-publishes."""
     if not pick_ids:
@@ -849,6 +854,18 @@ def queue_picks(
         if existing is not None:
             if pick.preferred_caption_id and existing.caption_id is None:
                 existing.caption_id = pick.preferred_caption_id
+            from instamagic.services.posting.story_fields import apply_story_fields_from_payload
+
+            apply_story_fields_from_payload(
+                session,
+                existing,
+                story_share_enabled=story_share_enabled,
+                story_render_mode=story_render_mode,
+                story_border_color=story_border_color,
+                story_timing_mode=story_timing_mode,
+                story_delay_hours=story_delay_hours,
+                is_new=False,
+            )
             pick.status = CurationPickStatus.QUEUED.value
             queued.append(existing)
             continue
@@ -857,6 +874,18 @@ def queue_picks(
             crop_id=approved.id if approved else None,
             caption_id=pick.preferred_caption_id,
             state=QueueState.CANDIDATE.value,
+        )
+        from instamagic.services.posting.story_fields import apply_story_fields_from_payload
+
+        apply_story_fields_from_payload(
+            session,
+            item,
+            story_share_enabled=story_share_enabled,
+            story_render_mode=story_render_mode,
+            story_border_color=story_border_color,
+            story_timing_mode=story_timing_mode,
+            story_delay_hours=story_delay_hours,
+            is_new=True,
         )
         session.add(item)
         pick.status = CurationPickStatus.QUEUED.value

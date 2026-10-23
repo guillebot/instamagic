@@ -313,6 +313,15 @@ class PublishingQueueItem(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    story_share_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    story_render_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    story_border_color: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    story_timing_mode: Mapped[str] = mapped_column(String(16), default="with_post", server_default="with_post")
+    story_delay_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    story_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    story_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    story_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feed_publish_relative_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     image: Mapped[Image] = relationship(back_populates="queue_items")
     publish_attempts: Mapped[list[PublishAttempt]] = relationship(back_populates="queue_item")
@@ -350,6 +359,11 @@ class PostingScheduleConfig(Base):
     max_posts_per_day: Mapped[int] = mapped_column(Integer, default=2)
     min_gap_hours: Mapped[float] = mapped_column(Float, default=4.0)
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    story_share_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    story_render_mode_default: Mapped[str] = mapped_column(
+        String(32), default="blur_backdrop", server_default="blur_backdrop"
+    )
+    story_border_color_default: Mapped[str] = mapped_column(String(16), default="black", server_default="black")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )
@@ -363,11 +377,14 @@ class PublishAttempt(Base):
         ForeignKey("publishing_queue_items.id", ondelete="CASCADE"), index=True
     )
     attempt_number: Mapped[int] = mapped_column(Integer, default=1)
+    kind: Mapped[str] = mapped_column(String(16), default="feed", server_default="feed")
     trigger: Mapped[str] = mapped_column(String(16), default="manual")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ig_media_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ig_container_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     queue_item: Mapped[PublishingQueueItem] = relationship(back_populates="publish_attempts")
 
