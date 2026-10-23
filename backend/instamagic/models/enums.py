@@ -40,6 +40,22 @@ class PublishTrigger(enum.StrEnum):
     SCHEDULER = "scheduler"
 
 
+class PublishAttemptKind(enum.StrEnum):
+    FEED = "feed"
+    STORY = "story"
+
+
+class StoryRenderMode(enum.StrEnum):
+    BLUR_BACKDROP = "blur_backdrop"
+    CROP_FILL = "crop_fill"
+    FIT_BORDER = "fit_border"
+
+
+class StoryTimingMode(enum.StrEnum):
+    WITH_POST = "with_post"
+    DELAY_HOURS = "delay_hours"
+
+
 class JobKind(enum.StrEnum):
     SCAN = "scan"
     DERIVATIVE = "derivative"

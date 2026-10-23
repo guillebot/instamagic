@@ -15,7 +15,13 @@ import {
   type HealthCheckLite,
   type InstagramStatusLite,
 } from "./reviewPublish";
-import type { CaptionItem, ImageItem, ImagePublishReadiness, QueueItem } from "./types";
+import {
+  defaultStoryShareValue,
+  StoryShareControls,
+  storyPreviewUrl,
+  type StoryShareValue,
+} from "./StoryShareControls";
+import type { CaptionItem, ImageItem, ImagePublishReadiness, PostingScheduleConfig, QueueItem } from "./types";
 
 type PublishOutcome = {
   permalink?: string | null;
@@ -91,7 +97,13 @@ export function ClassifyPublishPanel({
   const [publishResult, setPublishResult] = useState<PublishOutcome | null>(null);
   const [postPhase, setPostPhase] = useState<PostPhase>("idle");
   const [postError, setPostError] = useState("");
+  const [storyShare, setStoryShare] = useState<StoryShareValue>(() => defaultStoryShareValue());
   const confirmRef = useRef<HTMLDivElement | null>(null);
+  const scheduleDefaults = useQuery({
+    queryKey: ["posting-schedule-config"],
+    queryFn: () => api<PostingScheduleConfig>("/api/posting-schedule/config"),
+    staleTime: 60_000,
+  });
   const igStatus = useQuery({
     queryKey: ["instagram-status"],
     queryFn: () => api<InstagramStatusLite>("/api/instagram/status"),
@@ -110,7 +122,15 @@ export function ClassifyPublishPanel({
     setPublishResult(null);
     setPostPhase("idle");
     setPostError("");
-  }, [image.id]);
+    const cfg = scheduleDefaults.data;
+    setStoryShare(
+      defaultStoryShareValue({
+        story_share_enabled: cfg?.story_share_default ?? false,
+        story_render_mode: cfg?.story_render_mode_default ?? "blur_backdrop",
+        story_border_color: cfg?.story_border_color_default ?? "black",
+      }),
+    );
+  }, [image.id, scheduleDefaults.data?.story_share_default]);
 
   useEffect(() => {
     setSelectedCaptionId(pickDefaultCaption(captions.data));
@@ -180,10 +200,17 @@ export function ClassifyPublishPanel({
     ]);
   }
 
+  async function syncStoryToQueue(itemId: string) {
+    await api(`/api/queue/${itemId}`, {
+      method: "PATCH",
+      body: JSON.stringify(storyShare),
+    });
+  }
+
   async function ensureQueueItem(): Promise<QueueItem> {
     const item = await api<QueueItem>(`/api/queue`, {
       method: "POST",
-      body: JSON.stringify({ image_id: image.id }),
+      body: JSON.stringify({ image_id: image.id, ...storyShare }),
     });
     onImageUpdated({ id: image.id, queued: true, queue_state: item.state });
     return item;
@@ -318,6 +345,7 @@ export function ClassifyPublishPanel({
         await api(`/api/queue/${itemId}/approve`, { method: "POST" });
         state = "APPROVED";
       }
+      await syncStoryToQueue(itemId);
       // Re-read server gates right before publishing (blur/DO_NOT_POST may have changed).
       setPostPhase("checking");
       const fresh = (await readiness.refetch()).data;
@@ -345,6 +373,7 @@ export function ClassifyPublishPanel({
 
   const selectedCaption = captions.data?.find((row) => row.id === selectedCaptionId);
   const previewSrc = ready?.feed_preview_url ?? image.preview_url ?? image.thumbnail_url;
+  const storyPreviewSrc = storyShare.story_share_enabled ? storyPreviewUrl(image.id, storyShare) : null;
 
   return (
     <section className="classify-publish" aria-label="Publish actions">
@@ -462,6 +491,7 @@ export function ClassifyPublishPanel({
       {!ready?.caption_generation_allowed && ready?.caption_generation_reasons.length ? (
         <p className="help">{ready.caption_generation_reasons.join(" ")}</p>
       ) : null}
+      <StoryShareControls value={storyShare} onChange={setStoryShare} disabled={busy !== ""} compact />
       <div className="caption-pick compact">
         {captions.data?.map((caption) => (
           <label key={caption.id} className={selectedCaptionId === caption.id ? "picked" : ""}>
@@ -507,10 +537,15 @@ export function ClassifyPublishPanel({
             <h3 id={`post-confirm-title-${image.id}`}>Post now to {target}?</h3>
             {postPhase !== "done" ? (
               <p className="banner">
-                This publishes immediately and publicly to <strong>{target}</strong>. It cannot be undone from here.
+                This publishes immediately and publicly to <strong>{target}</strong>
+                {storyShare.story_share_enabled ? " and will also publish an Instagram Story" : ""}. It cannot be
+                undone from here.
               </p>
             ) : null}
             {previewSrc ? <img src={previewSrc} alt="" className="classify-post-preview" /> : null}
+            {storyPreviewSrc ? (
+              <img src={storyPreviewSrc} alt="" className="classify-story-preview" />
+            ) : null}
             <p className="classify-meta">
               {image.relative_path}
               {ready?.uses_approved_crop ? " · approved crop derivative" : " · full preview"}

@@ -17,7 +17,7 @@ from instamagic.models import (
     PublishingQueueItem,
     QueueState,
 )
-from instamagic.models.enums import PublishTrigger
+from instamagic.models.enums import PublishAttemptKind, PublishTrigger, StoryTimingMode
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
 from instamagic.services.instagram.client import InstagramClient, PublishResult
@@ -73,12 +73,18 @@ def publish_queue_item(
     if resolved_caption_id is None:
         raise NotAllowed("A caption must be selected before publishing.")
     prior_attempts = session.scalar(
-        select(func.count()).select_from(PublishAttempt).where(PublishAttempt.queue_item_id == item.id)
+        select(func.count())
+        .select_from(PublishAttempt)
+        .where(
+            PublishAttempt.queue_item_id == item.id,
+            PublishAttempt.kind == PublishAttemptKind.FEED.value,
+        )
     )
     attempt_number = int(prior_attempts or 0) + 1
     attempt = PublishAttempt(
         queue_item_id=item.id,
         attempt_number=attempt_number,
+        kind=PublishAttemptKind.FEED.value,
         trigger=trigger,
     )
     session.add(attempt)
@@ -176,12 +182,38 @@ def publish_queue_item(
         session.commit()
         raise NotConfigured(err) from None
 
+    item.feed_publish_relative_path = relative
     outcome = _record_success(session, item, image, caption, result)
     attempt.finished_at = datetime.now(UTC)
     attempt.success = True
+    attempt.ig_media_id = result.media_id
+    attempt.ig_container_id = result.container_id
     item.schedule_mode = None
     item.scheduled_at = None
     item.publish_retry_after = None
+    from instamagic.services.instagram.story_publish import (
+        publish_story_for_queue_item,
+        schedule_story_after_feed,
+    )
+
+    published_at = item.published_at or datetime.now(UTC)
+    schedule_story_after_feed(item, published_at=published_at)
+    session.commit()
+    if (
+        item.story_share_enabled
+        and item.media_type != "CAROUSEL"
+        and item.story_timing_mode == StoryTimingMode.WITH_POST.value
+    ):
+        try:
+            publish_story_for_queue_item(
+                session,
+                settings,
+                client,
+                item_id=item.id,
+                trigger=trigger,
+            )
+        except Exception:
+            pass
     session.commit()
     return outcome
 
@@ -323,6 +355,8 @@ def _publish_carousel_item(
     outcome = _record_success(session, item, primary_image, caption, result, media_type="CAROUSEL")
     attempt.finished_at = datetime.now(UTC)
     attempt.success = True
+    attempt.ig_media_id = result.media_id
+    attempt.ig_container_id = result.container_id
     item.schedule_mode = None
     item.scheduled_at = None
     item.publish_retry_after = None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Request
-from instamagic.auth import COOKIE_NAME, session_is_valid
+from instamagic.auth import COOKIE_NAME, _is_private_or_loopback, client_ip, session_is_valid
 from instamagic.config import Settings, get_settings
 from instamagic.db import get_db
 
@@ -14,6 +14,15 @@ def require_session(request: Request, settings: Settings = Depends(settings_dep)
     token = request.cookies.get(COOKIE_NAME)
     if not session_is_valid(settings, token):
         raise HTTPException(status_code=401, detail="Login required.")
+
+
+def require_lan_session(request: Request, settings: Settings = Depends(settings_dep)) -> None:
+    require_session(request, settings)
+    if settings.environment == "local":
+        return
+    peer = client_ip(request)
+    if not _is_private_or_loopback(peer):
+        raise HTTPException(status_code=403, detail="Story preview is only available on the local network.")
 
 
 db_dep = Depends(get_db)

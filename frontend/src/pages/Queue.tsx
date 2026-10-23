@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ActionStatus, PendingButtonLabel, useBriefStatus } from "../actionButton";
 import { ApiError, api } from "../api";
@@ -12,6 +12,11 @@ import {
   splitQueueItems,
   writePublishedSectionExpanded,
 } from "../queueGrouping";
+import {
+  formatStoryStatus,
+  storyShareFromQueueItem,
+  StoryShareControls,
+} from "../StoryShareControls";
 import type { AppConfig, CaptionItem, QueueItem } from "../types";
 
 export function QueuePage() {
@@ -171,6 +176,11 @@ function QueueCard({
   const [saveBusy, setSaveBusy] = useState(false);
   const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
   const { status: hashtagStatus, setStatus: setHashtagStatus, clearStatus: clearHashtagStatus } = useBriefStatus();
+  const [storyShare, setStoryShare] = useState(() => storyShareFromQueueItem(item));
+
+  useEffect(() => {
+    setStoryShare(storyShareFromQueueItem(item));
+  }, [item.id, item.story_share_enabled, item.story_render_mode]);
 
   const captions = useQuery({
     queryKey: ["captions", item.image.id],
@@ -222,6 +232,16 @@ function QueueCard({
       }),
     onSuccess: () => onChanged(),
     onError: (err) => setError(err instanceof ApiError ? err.message : "Schedule failed."),
+  });
+
+  const saveStory = useMutation({
+    mutationFn: () =>
+      api(`/api/queue/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(storyShare),
+      }),
+    onSuccess: () => onChanged(),
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Could not save story options."),
   });
 
   const publish = useMutation({
@@ -309,6 +329,7 @@ function QueueCard({
           {item.last_error ? ` · ${item.last_error}` : ""} · {lifecycleLabel(item.image.effective_state)} ·
           model {item.image.model_state}
         </p>
+        {formatStoryStatus(item) ? <p className="muted">{formatStoryStatus(item)}</p> : null}
         <div className="row">
           {item.state === "CANDIDATE" && item.media_type !== "CAROUSEL" ? (
             <label>
@@ -381,10 +402,13 @@ function QueueCard({
                 onClick={() => {
                   if (!selectedCaptionId) return;
                   const previewUrl = publishConfirmPreviewUrl(item.image);
+                  const storyLine = storyShare.story_share_enabled
+                    ? " This will also publish an Instagram Story."
+                    : "";
                   const ok = window.confirm(
                     previewUrl
-                      ? "Publish this exact preview to Instagram now?"
-                      : "Publish this frame to Instagram now?",
+                      ? `Publish this exact preview to Instagram now?${storyLine}`
+                      : `Publish this frame to Instagram now?${storyLine}`,
                   );
                   if (!ok) return;
                   publish.mutate(selectedCaptionId);
@@ -418,6 +442,23 @@ function QueueCard({
             </Link>
           ) : null}
         </div>
+        {!isCarousel && item.state !== "PUBLISHED" && item.state !== "PUBLISHING" ? (
+          <>
+            <StoryShareControls
+              value={storyShare}
+              onChange={setStoryShare}
+              disabled={saveStory.isPending}
+            />
+            <button
+              type="button"
+              className="ghost"
+              disabled={saveStory.isPending}
+              onClick={() => saveStory.mutate()}
+            >
+              Save story options
+            </button>
+          </>
+        ) : null}
         {policy === "manual_only" ? (
           <label>
             <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I

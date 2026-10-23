@@ -102,6 +102,8 @@ class InstagramClient(Protocol):
 
     def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult: ...
 
+    def publish_story(self, *, image_url: str) -> PublishResult: ...
+
     def fetch_account_details(self) -> InstagramAccountDetails: ...
 
     def fetch_content_publishing_limit(self) -> ContentPublishingLimit: ...
@@ -149,6 +151,10 @@ class NotConfiguredInstagramClient:
         del image_urls, caption
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
+    def publish_story(self, *, image_url: str) -> PublishResult:
+        del image_url
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
     def fetch_account_details(self) -> InstagramAccountDetails:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
@@ -192,6 +198,7 @@ class FakeInstagramClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, str | list[str]]] = []
         self.carousel_calls: list[dict[str, object]] = []
+        self.story_calls: list[dict[str, str]] = []
         self.account_fetches: int = 0
         self.content_limit_usage: int = 0
         self.content_limit_total: int = 50
@@ -211,6 +218,18 @@ class FakeInstagramClient:
             container_id=container_id,
             media_id=media_id,
             permalink=f"https://www.instagram.com/p/{media_id}/",
+        )
+
+    def publish_story(self, *, image_url: str) -> PublishResult:
+        if not image_url.startswith(("http://", "https://")):
+            raise NotConfigured("Fake Instagram publisher requires an http(s) image_url.")
+        container_id = f"fake-story-container-{uuid.uuid4().hex[:12]}"
+        media_id = f"fake-story-media-{uuid.uuid4().hex[:12]}"
+        self.story_calls.append({"image_url": image_url, "media_id": media_id})
+        return PublishResult(
+            container_id=container_id,
+            media_id=media_id,
+            permalink=None,
         )
 
     def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
@@ -393,6 +412,16 @@ class GraphInstagramClient:
         permalink = self._permalink(media_id)
         return PublishResult(container_id=container_id, media_id=media_id, permalink=permalink)
 
+    def publish_story(self, *, image_url: str) -> PublishResult:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        if not image_url.startswith("https://"):
+            raise NotConfigured("Instagram requires a publicly reachable https image_url for stories.")
+        container_id = self._create_container(image_url=image_url, caption="", media_type="STORIES")
+        self._wait_for_container(container_id)
+        media_id = self._publish_container(container_id)
+        return PublishResult(container_id=container_id, media_id=media_id, permalink=None)
+
     def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
@@ -480,12 +509,21 @@ class GraphInstagramClient:
         """Page access tokens cannot list /me/accounts — only works with a user token."""
         return None
 
-    def _create_container(self, *, image_url: str, caption: str, is_carousel_item: bool = False) -> str:
+    def _create_container(
+        self,
+        *,
+        image_url: str,
+        caption: str,
+        is_carousel_item: bool = False,
+        media_type: str | None = None,
+    ) -> str:
         url = f"{self._base}/{self._ig_user_id}/media"
         payload: dict[str, str] = {
             "image_url": image_url,
             "access_token": self._token,
         }
+        if media_type:
+            payload["media_type"] = media_type
         if is_carousel_item:
             payload["is_carousel_item"] = "true"
         elif caption:
