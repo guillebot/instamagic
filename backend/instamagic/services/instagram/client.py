@@ -108,6 +108,14 @@ class InstagramClient(Protocol):
 
     def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot: ...
 
+    def search_hashtag(self, hashtag: str) -> str: ...
+
+    def fetch_hashtag_top_media(self, hashtag_id: str) -> list[dict]: ...
+
+    def fetch_hashtag_recent_media(self, hashtag_id: str) -> list[dict]: ...
+
+    def fetch_business_discovery(self, username: str) -> dict: ...
+
 
 def mask_access_token(token: str) -> str | None:
     """Never return the full token. Empty → None; short → opaque; else last 4 only."""
@@ -147,6 +155,18 @@ class NotConfiguredInstagramClient:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def search_hashtag(self, hashtag: str) -> str:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def fetch_hashtag_top_media(self, hashtag_id: str) -> list[dict]:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def fetch_hashtag_recent_media(self, hashtag_id: str) -> list[dict]:
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
+    def fetch_business_discovery(self, username: str) -> dict:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
 
@@ -261,6 +281,35 @@ class FakeInstagramClient:
             total_interactions=16,
             views=200,
         )
+
+    def search_hashtag(self, hashtag: str) -> str:
+        return f"fake-hashtag-id-{hashtag}"
+
+    def fetch_hashtag_top_media(self, hashtag_id: str) -> list[dict]:
+        del hashtag_id
+        return [{"id": "m1", "caption": "#street #night", "like_count": 4}]
+
+    def fetch_hashtag_recent_media(self, hashtag_id: str) -> list[dict]:
+        del hashtag_id
+        return [{"id": "m2", "caption": "#portrait", "like_count": 2}]
+
+    def fetch_business_discovery(self, username: str) -> dict:
+        return {
+            "followers_count": 900,
+            "media_count": 12,
+            "media": {
+                "data": [
+                    {
+                        "caption": "Hello #berlin",
+                        "like_count": 30,
+                        "comments_count": 2,
+                        "timestamp": "2026-01-01T12:00:00+0000",
+                        "media_type": "IMAGE",
+                        "permalink": f"https://www.instagram.com/p/{username}/",
+                    }
+                ]
+            },
+        }
 
 
 class GraphInstagramClient:
@@ -604,6 +653,65 @@ class GraphInstagramClient:
             views=values.get("views"),
             impressions=values.get("impressions"),
         )
+
+    def search_hashtag(self, hashtag: str) -> str:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        payload = graph_get_page(
+            f"{self._base}/{self._ig_user_id}/ig_hashtag_search",
+            params={"q": hashtag.lstrip("#"), "access_token": self._token},
+            timeout=self._timeout,
+            action="search hashtag",
+        )
+        data = payload.get("data") or []
+        if not data or not isinstance(data[0], dict):
+            raise NotConfigured("Hashtag was not found.")
+        hashtag_id = data[0].get("id")
+        if not hashtag_id:
+            raise NotConfigured("Hashtag search did not return an id.")
+        return str(hashtag_id)
+
+    def fetch_hashtag_top_media(self, hashtag_id: str) -> list[dict]:
+        return self._hashtag_media_edge(hashtag_id, edge="top_media")
+
+    def fetch_hashtag_recent_media(self, hashtag_id: str) -> list[dict]:
+        return self._hashtag_media_edge(hashtag_id, edge="recent_media")
+
+    def _hashtag_media_edge(self, hashtag_id: str, *, edge: str) -> list[dict]:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        fields = "caption,like_count,comments_count,timestamp,media_type,permalink"
+        rows: list[dict] = []
+        for item in graph_paginate(
+            self._base,
+            f"{hashtag_id}/{edge}",
+            access_token=self._token,
+            params={"user_id": self._ig_user_id, "fields": fields, "limit": "25"},
+            timeout=self._timeout,
+            action=f"fetch hashtag {edge}",
+            max_pages=2,
+        ):
+            rows.append(item)
+        return rows
+
+    def fetch_business_discovery(self, username: str) -> dict:
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        handle = username.lstrip("@")
+        fields = (
+            f"business_discovery.username({handle})"
+            "{followers_count,media_count,media{caption,like_count,comments_count,timestamp,media_type,permalink}}"
+        )
+        payload = graph_get_page(
+            f"{self._base}/{self._ig_user_id}",
+            params={"fields": fields, "access_token": self._token},
+            timeout=self._timeout,
+            action="business discovery",
+        )
+        discovery = payload.get("business_discovery")
+        if not isinstance(discovery, dict):
+            raise NotConfigured("Business discovery is unavailable for this account.")
+        return discovery
 
 
 def _optional_str(value: object) -> str | None:

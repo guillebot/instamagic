@@ -459,6 +459,41 @@ class InstagramConnection(Base):
     )
 
 
+class HashtagResearchEvent(Base):
+    __tablename__ = "hashtag_research_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    hashtag: Mapped[str] = mapped_column(String(128), index=True)
+    hashtag_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    action: Mapped[str] = mapped_column(String(32), default="search")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+
+
+class HashtagResearchCache(Base):
+    __tablename__ = "hashtag_research_cache"
+
+    hashtag: Mapped[str] = mapped_column(String(128), primary_key=True)
+    hashtag_id: Mapped[str] = mapped_column(String(64))
+    top_media_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recent_media_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+
+class RelatedAccountDiscovery(Base):
+    __tablename__ = "related_account_discovery"
+
+    related_account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("related_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    followers_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    media_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    media_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    common_hashtags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avg_likes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    posts_per_week: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+
 class RelatedAccount(Base):
     """Research list of accounts the operator studies — not follow/like/comment automation."""
 
