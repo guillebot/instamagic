@@ -1,16 +1,80 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
-import { lifecycleLabel } from "../lifecycle";
+import {
+  chunkGridRows,
+  columnCountForWidth,
+  curateTabCounts,
+  filterCuratePicks,
+  pickTileBadge,
+  type CurateFilterTab,
+} from "../curatePickUx";
+import { displayThumbnailUrl } from "../publishPresentation";
+import { acquireThumbSlot } from "../thumbQueue";
 import type {
   AppConfig,
-  CaptionItem,
   CurationBatch,
   CurationBatchSummary,
   CurationPick,
   JobItem,
   LibraryItem,
 } from "../types";
+import { CuratePickModal, resolveAfterCurateAction, type CurateModalAction } from "./CuratePickModal";
+
+const GRID_GAP = 8;
+const ROW_HEIGHT = 148;
+
+function CurateGridThumb({ src }: { src: string }) {
+  const [activeSrc, setActiveSrc] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const releaseRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setActiveSrc(null);
+    releaseRef.current?.();
+    releaseRef.current = null;
+    void acquireThumbSlot().then((done) => {
+      if (cancelled) {
+        done();
+        return;
+      }
+      releaseRef.current = done;
+      setActiveSrc(src);
+    });
+    return () => {
+      cancelled = true;
+      releaseRef.current?.();
+      releaseRef.current = null;
+    };
+  }, [src]);
+
+  function finish() {
+    setLoaded(true);
+    releaseRef.current?.();
+    releaseRef.current = null;
+  }
+
+  if (!activeSrc) {
+    return <span className="tile-empty tile-pending" aria-hidden />;
+  }
+  return (
+    <img
+      src={activeSrc}
+      alt=""
+      draggable={false}
+      loading="lazy"
+      decoding="async"
+      className={loaded ? "thumb-loaded" : "thumb-loading"}
+      onLoad={finish}
+      onError={finish}
+    />
+  );
+}
+
+type ToastState = { message: string; undo?: () => Promise<void> };
 
 export function CuratePage() {
   const queryClient = useQueryClient();
@@ -47,12 +111,18 @@ export function CuratePage() {
   const [includeImages, setIncludeImages] = useState(true);
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [runPanelOpen, setRunPanelOpen] = useState(false);
 
   useEffect(() => {
     if (config.data) {
       setIncludeImages(Boolean(config.data.gemini_pixels_allowed));
     }
   }, [config.data?.gemini_pixels_allowed]);
+
+  useEffect(() => {
+    if (activeBatchId || !batches.data?.length) return;
+    setActiveBatchId(batches.data[0].id);
+  }, [activeBatchId, batches.data]);
 
   const activeBatch = useQuery({
     queryKey: ["curation-batch", activeBatchId],
@@ -111,111 +181,113 @@ export function CuratePage() {
   return (
     <main className="page">
       <h1>Curate</h1>
-      <p>
-        After Review (rate + crop/blur), Gemini ranks Safe and Publishable frames (human safe/excellent) and drafts
-        tags + captions. Reorder, accept/reject, then send to the publish queue. Nothing publishes until Queue.{" "}
-        <strong>text_only</strong> sends scores, tags, and a short safe description — no picture bytes. With{" "}
-        <strong>Send image previews</strong> on (when the server ceiling allows), Gemini also gets EXIF-stripped
-        preview/thumb JPEGs for those candidates only — never library originals or DO_NOT_POST frames. Pixels leave
-        this machine to Google; you still decide what queues. Env ceiling: {config.data?.gemini_policy ?? "…"}. Auto
-        publish stays off.
+      <p className="muted">
+        Browse curation picks as thumbnails, tune caption and hashtags, then send to the publish queue. Nothing
+        publishes until you approve on Queue.
       </p>
 
-      <section className="panel">
-        <div className="row">
-          <label>
-            Library
-            <select value={libraryId} onChange={(event) => setLibraryId(event.target.value)}>
-              <option value="">All attested</option>
-              {libraries.data?.map((library) => (
-                <option key={library.id} value={library.id}>
-                  {library.name}
-                  {library.attested ? "" : " (not attested)"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Folder
-            <input
-              value={folder}
-              onChange={(event) => setFolder(event.target.value)}
-              placeholder="optional relative folder"
-            />
-          </label>
-          <label className="row" style={{ alignItems: "center", gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={allEligible}
-              onChange={(event) => setAllEligible(event.target.checked)}
-            />
-            All eligible
-          </label>
-          {!allEligible ? (
-            <label>
-              Limit
-              <input
-                type="number"
-                min={1}
-                max={2000}
-                value={limit}
-                onChange={(event) => setLimit(Number(event.target.value) || 48)}
-              />
-            </label>
-          ) : null}
-          <label className="row" style={{ alignItems: "center", gap: 8 }} title={!pixelsAllowed ? "Server GEMINI_IMAGE_POLICY forbids image bytes (text_only / manual_only)." : undefined}>
-            <input
-              type="checkbox"
-              checked={pixelsAllowed && includeImages}
-              disabled={!pixelsAllowed}
-              onChange={(event) => setIncludeImages(event.target.checked)}
-            />
-            Send image previews to Gemini
-          </label>
-          <button
-            className="button"
-            type="button"
-            disabled={curationBusy}
-            onClick={() => run.mutate()}
-          >
-            {curationBusy ? "Curating…" : "Run Gemini curation"}
-          </button>
-          <button
-            className="button ghost"
-            type="button"
-            disabled={labelAll.isPending}
-            onClick={() => labelAll.mutate()}
-          >
-            {labelAll.isPending ? "Labeling…" : "Label all safe photos"}
-          </button>
-        </div>
-        {labelStats.data ? (
-          <p className="muted">
-            Gemini labels: {labelStats.data.labeled} labeled · {labelStats.data.pending} pending ·{" "}
-            {labelStats.data.blocked} blocked ({labelStats.data.eligible} eligible)
-          </p>
+      <section className="panel curate-run-panel">
+        <button type="button" className="ghost curate-run-toggle" onClick={() => setRunPanelOpen((open) => !open)}>
+          {runPanelOpen ? "▾" : "▸"} Run Gemini curation / labeling
+        </button>
+        {runPanelOpen ? (
+          <div className="curate-run-body">
+            <div className="row">
+              <label>
+                Library
+                <select value={libraryId} onChange={(event) => setLibraryId(event.target.value)}>
+                  <option value="">All attested</option>
+                  {libraries.data?.map((library) => (
+                    <option key={library.id} value={library.id}>
+                      {library.name}
+                      {library.attested ? "" : " (not attested)"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Folder
+                <input
+                  value={folder}
+                  onChange={(event) => setFolder(event.target.value)}
+                  placeholder="optional relative folder"
+                />
+              </label>
+              <label className="row" style={{ alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={allEligible}
+                  onChange={(event) => setAllEligible(event.target.checked)}
+                />
+                All eligible
+              </label>
+              {!allEligible ? (
+                <label>
+                  Limit
+                  <input
+                    type="number"
+                    min={1}
+                    max={2000}
+                    value={limit}
+                    onChange={(event) => setLimit(Number(event.target.value) || 48)}
+                  />
+                </label>
+              ) : null}
+              <label
+                className="row"
+                style={{ alignItems: "center", gap: 8 }}
+                title={
+                  !pixelsAllowed ? "Server GEMINI_IMAGE_POLICY forbids image bytes (text_only / manual_only)." : undefined
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={pixelsAllowed && includeImages}
+                  disabled={!pixelsAllowed}
+                  onChange={(event) => setIncludeImages(event.target.checked)}
+                />
+                Send image previews to Gemini
+              </label>
+              <button className="button" type="button" disabled={curationBusy} onClick={() => run.mutate()}>
+                {curationBusy ? "Curating…" : "Run Gemini curation"}
+              </button>
+              <button
+                className="button ghost"
+                type="button"
+                disabled={labelAll.isPending}
+                onClick={() => labelAll.mutate()}
+              >
+                {labelAll.isPending ? "Labeling…" : "Label all safe photos"}
+              </button>
+            </div>
+            {labelStats.data ? (
+              <p className="muted">
+                Gemini labels: {labelStats.data.labeled} labeled · {labelStats.data.pending} pending ·{" "}
+                {labelStats.data.blocked} blocked ({labelStats.data.eligible} eligible)
+              </p>
+            ) : null}
+            {labelJob.data && (labelJob.data.status === "running" || labelJob.data.status === "queued") ? (
+              <p className="muted">
+                Labeling job {labelJob.data.status}
+                {labelJob.data.files_total != null
+                  ? ` — ${labelJob.data.files_processed ?? 0}/${labelJob.data.files_total}`
+                  : ""}
+              </p>
+            ) : null}
+            {run.isPending || activeBatch.data?.status === "running" ? (
+              <p className="muted">{activeBatch.data?.detail ?? "Ranking in chunks…"}</p>
+            ) : null}
+            {!pixelsAllowed ? (
+              <p className="muted">
+                Image previews are disabled by GEMINI_IMAGE_POLICY={config.data?.gemini_policy ?? "text_only"}.
+              </p>
+            ) : null}
+            {error ? <p className="error">{error}</p> : null}
+          </div>
         ) : null}
-        {labelJob.data && (labelJob.data.status === "running" || labelJob.data.status === "queued") ? (
-          <p className="muted">
-            Labeling job {labelJob.data.status}
-            {labelJob.data.files_total != null
-              ? ` — ${labelJob.data.files_processed ?? 0}/${labelJob.data.files_total}`
-              : ""}
-          </p>
-        ) : null}
-        {run.isPending || activeBatch.data?.status === "running" ? (
-          <p className="muted">{activeBatch.data?.detail ?? "Ranking in chunks…"}</p>
-        ) : null}
-        {!pixelsAllowed ? (
-          <p className="muted">
-            Image previews are disabled by GEMINI_IMAGE_POLICY={config.data?.gemini_policy ?? "text_only"}. Set the
-            server to preview (or safe_previews) to enable the toggle.
-          </p>
-        ) : null}
-        {error ? <p className="error">{error}</p> : null}
       </section>
 
-      <section className="row" style={{ marginBottom: 12 }}>
+      <section className="row curate-batch-row">
         {batches.data?.map((batch) => (
           <button
             key={batch.id}
@@ -232,258 +304,236 @@ export function CuratePage() {
       </section>
 
       {activeBatch.data ? (
-        <CurationBatchView
+        <CurationPicksWorkspace
           batch={activeBatch.data}
-          onChanged={() => void queryClient.invalidateQueries({ queryKey: ["curation-batch", activeBatch.data.id] })}
+          geminiPolicy={config.data?.gemini_policy ?? "text_only"}
+          onRefreshBatch={async () => {
+            await queryClient.invalidateQueries({ queryKey: ["curation-batch", activeBatch.data!.id] });
+            await queryClient.invalidateQueries({ queryKey: ["curation-batches"] });
+            await queryClient.invalidateQueries({ queryKey: ["queue"] });
+          }}
+          serverPickCount={activeBatch.data.pick_count}
         />
       ) : null}
     </main>
   );
 }
 
-function CurationBatchView({ batch, onChanged }: { batch: CurationBatch; onChanged: () => void }) {
-  const queryClient = useQueryClient();
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [error, setError] = useState("");
+export function CurationPicksWorkspace({
+  batch,
+  geminiPolicy,
+  onRefreshBatch,
+  serverPickCount,
+}: {
+  batch: CurationBatch;
+  geminiPolicy: string;
+  onRefreshBatch: () => Promise<void>;
+  serverPickCount: number;
+}) {
+  const [picks, setPicks] = useState<CurationPick[]>(() => [...batch.picks]);
+  const [filterTab, setFilterTab] = useState<CurateFilterTab>("pending");
+  const [modalPickId, setModalPickId] = useState<string | null>(null);
+  const [modalBusy, setModalBusy] = useState(false);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
+  const scrollSnapshotRef = useRef(0);
+  const [width, setWidth] = useState(960);
 
   const ordered = useMemo(
-    () => [...batch.picks].sort((a, b) => a.sort_order - b.sort_order),
-    [batch.picks],
+    () => [...picks].sort((a, b) => a.sort_order - b.sort_order),
+    [picks],
   );
+  const filtered = useMemo(() => filterCuratePicks(ordered, filterTab), [ordered, filterTab]);
+  const counts = useMemo(() => curateTabCounts(ordered), [ordered]);
+  const modalPick = modalPickId ? ordered.find((row) => row.id === modalPickId) ?? null : null;
 
-  async function reorder(pickIds: string[]) {
-    setError("");
-    try {
-      await api(`/api/curation/${batch.id}/reorder`, {
-        method: "PATCH",
-        body: JSON.stringify({ pick_ids: pickIds }),
-      });
-      onChanged();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Reorder failed.");
-    }
-  }
+  useEffect(() => {
+    setPicks([...batch.picks]);
+  }, [batch.id, batch.picks]);
 
-  function move(pickId: string, direction: -1 | 1) {
-    const ids = ordered.map((pick) => pick.id);
-    const index = ids.indexOf(pickId);
-    const next = index + direction;
-    if (index < 0 || next < 0 || next >= ids.length) return;
-    const copy = [...ids];
-    [copy[index], copy[next]] = [copy[next], copy[index]];
-    void reorder(copy);
-  }
+  const pendingNewCount = Math.max(0, serverPickCount - picks.length);
 
-  const send = useMutation({
-    mutationFn: (pickIds: string[]) =>
-      api("/api/curation/queue", {
-        method: "POST",
-        body: JSON.stringify({ pick_ids: pickIds }),
-      }),
-    onSuccess: async () => {
-      setError("");
-      setSelected(new Set());
-      onChanged();
-      await queryClient.invalidateQueries({ queryKey: ["queue"] });
-      await queryClient.invalidateQueries({ queryKey: ["curation-batches"] });
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Send to queue failed."),
+  useEffect(() => {
+    const element = parentRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      const next = element.clientWidth;
+      setWidth((prev) => (prev === next ? prev : next));
+    });
+    observer.observe(element);
+    setWidth(element.clientWidth);
+    return () => observer.disconnect();
+  }, []);
+
+  const columnCount = columnCountForWidth(width);
+  const gridRows = useMemo(() => chunkGridRows(filtered, columnCount), [filtered, columnCount]);
+  const virtualizer = useVirtualizer({
+    count: gridRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT + GRID_GAP,
+    overscan: 3,
   });
 
-  function toggle(pickId: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(pickId)) next.delete(pickId);
-      else next.add(pickId);
-      return next;
-    });
+  useEffect(() => {
+    virtualizer.measure();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridRows, columnCount]);
+
+  const patchPick = useCallback((updated: CurationPick) => {
+    setPicks((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
+  }, []);
+
+  function openModal(pickId: string) {
+    if (parentRef.current) scrollSnapshotRef.current = parentRef.current.scrollTop;
+    setModalPickId(pickId);
   }
 
-  const selectable = ordered.filter((pick) => pick.status !== "rejected" && pick.status !== "queued");
+  function closeModal() {
+    setModalPickId(null);
+  }
 
-  return (
-    <section>
-      <div className="row" style={{ marginBottom: 12 }}>
-        <button
-          className="ghost"
-          type="button"
-          onClick={() => setSelected(new Set(selectable.map((pick) => pick.id)))}
-        >
-          Select all open
-        </button>
-        <button className="ghost" type="button" onClick={() => setSelected(new Set())}>
-          Clear
-        </button>
-        <button
-          className="button"
-          type="button"
-          disabled={selected.size === 0 || send.isPending}
-          onClick={() => send.mutate([...selected])}
-        >
-          {send.isPending ? "Sending…" : `Send ${selected.size || ""} to publish queue`}
-        </button>
-      </div>
-      {batch.detail ? <p className="muted">{batch.detail}</p> : null}
-      {error ? <p className="error">{error}</p> : null}
-      <div className="card-list">
-        {ordered.map((pick, index) => (
-          <CurationPickCard
-            key={pick.id}
-            pick={pick}
-            checked={selected.has(pick.id)}
-            onToggle={() => toggle(pick.id)}
-            onMoveUp={() => move(pick.id, -1)}
-            onMoveDown={() => move(pick.id, 1)}
-            canUp={index > 0}
-            canDown={index < ordered.length - 1}
-            onChanged={onChanged}
-          />
-        ))}
-      </div>
-    </section>
-  );
-}
+  useLayoutEffect(() => {
+    if (modalPickId) return;
+    const element = parentRef.current;
+    if (!element) return;
+    element.scrollTop = scrollSnapshotRef.current;
+  }, [modalPickId]);
 
-function CurationPickCard({
-  pick,
-  checked,
-  onToggle,
-  onMoveUp,
-  onMoveDown,
-  canUp,
-  canDown,
-  onChanged,
-}: {
-  pick: CurationPick;
-  checked: boolean;
-  onToggle: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
-  canUp: boolean;
-  canDown: boolean;
-  onChanged: () => void;
-}) {
-  const [tagsText, setTagsText] = useState(pick.suggested_tags.join(", "));
-  const [captionId, setCaptionId] = useState(pick.preferred_caption_id);
-  const [captionText, setCaptionText] = useState(
-    () => pick.captions.find((caption) => caption.id === pick.preferred_caption_id)?.text ?? pick.captions[0]?.text ?? "",
-  );
-  const [error, setError] = useState("");
-
-  async function patch(body: Record<string, unknown>) {
-    setError("");
-    try {
-      await api(`/api/curation/picks/${pick.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
-      onChanged();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Update failed.");
+  function handleAfterAction(action: CurateModalAction, previousPickId: string) {
+    const nextId = resolveAfterCurateAction(ordered, filtered, previousPickId, action);
+    if (nextId && ordered.some((row) => row.id === nextId)) {
+      setModalPickId(nextId);
+    } else {
+      setModalPickId(null);
     }
   }
 
-  function selectCaption(caption: CaptionItem) {
-    setCaptionId(caption.id);
-    setCaptionText(caption.text);
-    void patch({ preferred_caption_id: caption.id });
+  async function applyRefresh() {
+    await onRefreshBatch();
   }
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  const heldBack = batch.held_back ?? 0;
+
   return (
-    <article className="card curation-card">
-      <div>
-        {pick.image.thumbnail_url ? <img src={pick.image.thumbnail_url} alt="" /> : <div />}
-        <label className="row" style={{ marginTop: 8 }}>
-          <input
-            type="checkbox"
-            checked={checked}
-            disabled={pick.status === "rejected" || pick.status === "queued"}
-            onChange={onToggle}
-          />
-          Select
-        </label>
+    <section className="curate-workspace">
+      <div className="curate-tabs row">
+        {(
+          [
+            ["pending", "Pending"],
+            ["queued", "Queued"],
+            ["rejected", "Rejected"],
+            ["all", "All"],
+          ] as const
+        ).map(([tab, label]) => (
+          <button
+            key={tab}
+            type="button"
+            className={filterTab === tab ? "button" : "ghost"}
+            onClick={() => setFilterTab(tab)}
+          >
+            {label} ({counts[tab]})
+          </button>
+        ))}
+        {heldBack > 0 ? <span className="muted curate-held-back">{heldBack} held back (near-duplicates)</span> : null}
       </div>
-      <div className="queue-body">
-        <div className="row">
-          <strong>
-            #{pick.sort_order} · local {pick.local_score} · Gemini #{pick.gemini_rank}
-          </strong>
-          <span className="muted">{pick.status}</span>
-          <button className="ghost" type="button" disabled={!canUp} onClick={onMoveUp}>
-            Up
-          </button>
-          <button className="ghost" type="button" disabled={!canDown} onClick={onMoveDown}>
-            Down
-          </button>
-          <button className="ghost" type="button" onClick={() => void patch({ status: "accepted" })}>
-            Accept
-          </button>
-          <button className="ghost" type="button" onClick={() => void patch({ status: "rejected" })}>
-            Reject
+      {pendingNewCount > 0 ? (
+        <div className="grid-refresh-banner" role="status">
+          <span>{pendingNewCount} new pick{pendingNewCount === 1 ? "" : "s"} in this batch — </span>
+          <button type="button" className="ghost" onClick={() => void applyRefresh()}>
+            Refresh
           </button>
         </div>
-        <p className="muted">
-          {pick.image.filename} · {lifecycleLabel(pick.image.effective_state)} · model{" "}
-          {pick.image.model_state ?? "—"}
-        </p>
-        <ul>
-          {pick.reasons.map((reason) => (
-            <li key={reason}>{reason}</li>
-          ))}
-        </ul>
-        <label>
-          Suggested tags
-          <div className="row">
-            <input value={tagsText} onChange={(event) => setTagsText(event.target.value)} style={{ flex: 1 }} />
-            <button
-              className="ghost"
-              type="button"
-              onClick={() =>
-                void patch({
-                  suggested_tags: tagsText
-                    .split(",")
-                    .map((tag) => tag.trim())
-                    .filter(Boolean),
-                })
-              }
-            >
-              Save tags
-            </button>
-          </div>
-        </label>
-        <div className="caption-pick">
-          {pick.captions.map((caption) => (
-            <label key={caption.id} className={captionId === caption.id ? "picked" : ""}>
-              <input
-                type="radio"
-                name={`caption-${pick.id}`}
-                checked={captionId === caption.id}
-                onChange={() => selectCaption(caption)}
-              />
-              <div>
-                <div className="muted">
-                  {caption.style} · {caption.language}
+      ) : null}
+      {batch.detail ? <p className="muted">{batch.detail}</p> : null}
+      {filtered.length === 0 ? (
+        <p className="muted">No picks in this tab.</p>
+      ) : (
+        <div className="grid-scroll curate-grid-scroll" ref={parentRef}>
+          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const row = gridRows[virtualRow.index];
+              if (!row) return null;
+              return (
+                <div
+                  key={virtualRow.key}
+                  className="curate-grid-row"
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: ROW_HEIGHT,
+                    transform: `translateY(${virtualRow.start}px)`,
+                    gap: GRID_GAP,
+                    gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {row.map((pick) => {
+                    const thumb = displayThumbnailUrl(pick.image);
+                    const badge = pickTileBadge(pick);
+                    const selected = pick.id === modalPickId;
+                    return (
+                      <button
+                        key={pick.id}
+                        type="button"
+                        className={`curate-tile${selected ? " selected" : ""}`}
+                        aria-pressed={selected}
+                        aria-label={`${pick.image.filename}, ${badge}`}
+                        onClick={() => openModal(pick.id)}
+                      >
+                        {thumb ? <CurateGridThumb src={thumb} /> : <span className="tile-empty" />}
+                        <span className="curate-tile-badge">{badge}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                {captionId === caption.id ? (
-                  <textarea
-                    rows={3}
-                    value={captionText}
-                    onChange={(event) => setCaptionText(event.target.value)}
-                    onBlur={() => {
-                      if (captionText.trim() && captionText !== caption.text) {
-                        void patch({ preferred_caption_id: caption.id, caption_text: captionText });
-                      }
-                    }}
-                  />
-                ) : (
-                  <p>{caption.text}</p>
-                )}
-              </div>
-            </label>
-          ))}
+              );
+            })}
+          </div>
         </div>
-        {error ? <p className="error">{error}</p> : null}
-      </div>
-    </article>
+      )}
+      {toast ? (
+        <div className="curate-toast" role="status">
+          <span>{toast.message}</span>
+          {toast.undo ? (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                void toast.undo?.().then(
+                  () => setToast(null),
+                  (err: unknown) =>
+                    setToast({
+                      message: err instanceof Error && err.message ? `Undo failed: ${err.message}` : "Undo failed.",
+                    }),
+                );
+              }}
+            >
+              Undo
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {modalPick ? (
+        <CuratePickModal
+          pick={modalPick}
+          orderedPicks={filtered}
+          geminiPolicy={geminiPolicy}
+          busy={modalBusy}
+          onClose={closeModal}
+          onBusyChange={setModalBusy}
+          onPickPatched={patchPick}
+          onNavigateToPick={setModalPickId}
+          onAfterAction={handleAfterAction}
+          onToast={(message, undo) => setToast({ message, undo })}
+        />
+      ) : null}
+    </section>
   );
 }

@@ -208,6 +208,7 @@ from instamagic.services.recommendations.curate import (
     queue_picks,
     reconcile_stale_curation_batches,
     run_curation,
+    undo_queued_pick,
 )
 from instamagic.services.recommendations.gates import publishing_gate
 from instamagic.services.recommendations.gemini_derivatives import (
@@ -1891,6 +1892,20 @@ def update_curation_pick(
         caption.text = body.caption_text.strip()
         caption.status = CaptionStatus.MODIFIED.value
     session.commit()
+    return _curation_pick_out(session, pick)
+
+
+@router.post("/api/curation/picks/{pick_id}/undo-queue")
+def undo_curation_pick_queue(
+    pick_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Undo a recent send-to-queue while the publish queue item is still a candidate."""
+    pick = session.get(CurationPick, pick_id)
+    if pick is None:
+        raise NotFound("Curation pick was not found.")
+    pick = undo_queued_pick(session, pick)
     return _curation_pick_out(session, pick)
 
 
