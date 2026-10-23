@@ -60,6 +60,23 @@ from sqlalchemy.orm import Session, selectinload
 log = get_logger("curate")
 
 
+def held_back_near_duplicate_count(eligible_count: int, shortlist_count: int) -> int:
+    """Near-duplicate frames suppressed by the local ranker (not in the shortlist)."""
+    return max(0, eligible_count - shortlist_count)
+
+
+def parse_curation_detail_held_back(detail: str | None) -> int:
+    if not detail:
+        return 0
+    for part in detail.replace(";", " ").split():
+        if part.startswith("held_back="):
+            try:
+                return int(part.split("=", 1)[1])
+            except ValueError:
+                return 0
+    return 0
+
+
 @dataclass
 class ResilientCurationOutcome:
     chunk_results: list[CurationResult]
@@ -360,6 +377,7 @@ def execute_curation_batch(
     preview_bytes_fn=None,
     thinking_budget: int = 512,
     image_ids: list[UUID] | None = None,
+    performance_weight: float = 0.0,
 ) -> CurationBatch:
     """Resume Gemini ranking for a RUNNING batch (worker entrypoint)."""
     batch = session.get(CurationBatch, batch_id)
@@ -374,6 +392,7 @@ def execute_curation_batch(
         folder=batch.folder,
         image_ids=image_ids,
         covering_blur_fn=covering_blur_fn,
+        performance_weight=performance_weight,
     )
     if not eligible:
         batch.status = CurationBatchStatus.FAILED.value
@@ -382,6 +401,7 @@ def execute_curation_batch(
         session.commit()
         raise NotAllowed("No SAFE/EXCELLENT attested candidates available for curation.")
     effective_limit = resolve_curation_limit(batch.limit or None, len(eligible))
+    perf_signals = load_performance_signals(session) if performance_weight > 0 else None
     shortlist_inputs = [
         CandidateInput(
             image_id=str(item.image.id),
@@ -394,12 +414,16 @@ def execute_curation_batch(
             model_state=item.image.model_state,
             sharpness=item.image.score.sharpness if item.image.score else 0,
             composition=item.image.score.composition if item.image.score else 0,
+            performance_score=(
+                image_performance_boost(perf_signals, str(item.image.id), item.tags) if perf_signals else 0.0
+            ),
         )
         for item in eligible
     ]
-    ranked = rank_candidates(shortlist_inputs, limit=effective_limit)
+    ranked = rank_candidates(shortlist_inputs, limit=effective_limit, performance_weight=performance_weight)
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
+    held_back = held_back_near_duplicate_count(len(eligible), len(shortlist))
     payloads = [
         CurationCandidatePayload(
             image_id=str(item.image.id),
@@ -484,6 +508,7 @@ def execute_curation_batch(
         account_voice=account_voice,
         pixels_by_id=pixels_by_id,
         thinking_budget=thinking_budget,
+        held_back=held_back,
     )
 
 
@@ -501,12 +526,13 @@ def _execute_curation_gemini(
     account_voice: str,
     pixels_by_id: dict[str, bytes],
     thinking_budget: int,
+    held_back: int = 0,
 ) -> CurationBatch:
     chunk_results: list[CurationResult] = []
     blocked_ids: list[str] = []
     try:
         for index, chunk in enumerate(chunks, start=1):
-            batch.detail = f"shortlist={len(shortlist)} chunks={index - 1}/{len(chunks)}"
+            batch.detail = f"shortlist={len(shortlist)} held_back={held_back} chunks={index - 1}/{len(chunks)}"
             session.commit()
             outcome = curate_chunk_resilient(
                 provider,
@@ -518,7 +544,10 @@ def _execute_curation_gemini(
             )
             chunk_results.extend(outcome.chunk_results)
             blocked_ids.extend(outcome.blocked_ids)
-            batch.detail = f"shortlist={len(shortlist)} chunks={index}/{len(chunks)} blocked={len(blocked_ids)}"
+            batch.detail = (
+                f"shortlist={len(shortlist)} held_back={held_back} chunks={index}/{len(chunks)} "
+                f"blocked={len(blocked_ids)}"
+            )
             session.commit()
     except NotConfigured:
         audit.status = "failed"
@@ -572,7 +601,7 @@ def _execute_curation_gemini(
     if blocked_ids:
         blocked_note += f" ids={','.join(blocked_ids[:12])}"
     batch.detail = (
-        f"picks={len(ordered_drafts)} shortlist={len(shortlist)} "
+        f"picks={len(ordered_drafts)} shortlist={len(shortlist)} held_back={held_back} "
         f"chunks={len(chunks)} chunk_size={chunk_size} mode={mode} pixels={len(pixels_by_id)}{blocked_note}"
     )
     session.commit()
@@ -640,6 +669,7 @@ def run_curation(
     ranked = rank_candidates(shortlist_inputs, limit=effective_limit, performance_weight=performance_weight)
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
+    held_back = held_back_near_duplicate_count(len(eligible), len(shortlist))
     payloads = [
         CurationCandidatePayload(
             image_id=str(item.image.id),
@@ -720,7 +750,7 @@ def run_curation(
         folder=folder,
         status=CurationBatchStatus.RUNNING.value,
         limit=stored_limit,
-        detail=f"shortlist={len(shortlist)} chunks=0/{len(chunks)}",
+        detail=f"shortlist={len(shortlist)} held_back={held_back} chunks=0/{len(chunks)}",
     )
     session.add(batch)
     session.flush()
@@ -741,6 +771,7 @@ def run_curation(
         account_voice=account_voice,
         pixels_by_id=pixels_by_id,
         thinking_budget=thinking_budget,
+        held_back=held_back,
     )
 
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from instamagic.config import Settings
 from instamagic.errors import GeminiBlocked
 from instamagic.models import BlurCover, CropSuggestion, Image, SafetyState
@@ -79,7 +77,7 @@ def derivative_bytes_for_gemini(
         relative = image.preview_path or image.thumbnail_path
     if not relative:
         return None
-    path = safe_join(settings.derivatives_root, Path(relative))
+    path = safe_join(settings.derivatives_root, str(relative))
     if not path.is_file():
         return None
     return path.read_bytes()
@@ -104,7 +102,7 @@ def gemini_preview_bytes(
         return None
     if has_any_approved_blur(image):
         relative = ensure_publish_derivative(session, settings, image, approved)
-        path = safe_join(settings.derivatives_root, Path(relative))
+        path = safe_join(settings.derivatives_root, str(relative))
         if not path.is_file():
             if require_policy:
                 raise GeminiBlocked("Approved blur requires a rendered publish derivative.")
