@@ -4,7 +4,6 @@ import sys
 import threading
 
 from instamagic.config import get_settings
-from instamagic.db import register_shared_redis
 from instamagic.logging_config import configure_logging, get_logger
 from instamagic.services.worker_heartbeat import HEARTBEAT_INTERVAL_SECONDS, write_heartbeat
 from redis import Redis
@@ -89,7 +88,7 @@ def main() -> None:
         except Exception:
             log.info("insights_sync_schedule_failed")
         use_scheduler = True
-    connection = register_shared_redis(Redis.from_url(settings.redis_url))
+    connection = Redis.from_url(settings.redis_url)
     write_heartbeat(connection, queue_name)
     stop_heartbeat = _start_heartbeat(connection, queue_name)
     worker = Worker([Queue(queue_name, connection=connection)], connection=connection)
