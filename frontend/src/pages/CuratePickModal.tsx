@@ -8,6 +8,7 @@ import {
 } from "../curatePickUx";
 import { lifecycleLabel } from "../lifecycle";
 import { displayPreviewUrl, publishVariantLabel } from "../publishPresentation";
+import { ActionLabel, KeyHint } from "../KeyHint";
 import type { CaptionItem, CurationPick, QueueItem } from "../types";
 
 export type CurateModalAction = "queue" | "reject" | "skip";
@@ -218,6 +219,8 @@ export function CuratePickModal({
     setCaptionText(caption.text);
   }
 
+  const prevPickId = neighborPickId(orderedPicks, pick.id, -1);
+  const nextPickId = neighborPickId(orderedPicks, pick.id, 1);
   const previewUrl = displayPreviewUrl(pick.image, false);
   const safetyLine =
     pick.image.blur_unlock_message ??
@@ -240,11 +243,26 @@ export function CuratePickModal({
             #{pick.sort_order} · Gemini #{pick.gemini_rank} · local {pick.local_score}
             {navIndex >= 0 ? ` · ${navIndex + 1}/${orderedPicks.length}` : ""}
           </p>
-          <p className="muted curate-shortcuts">
-            ← → prev/next · Q queue · R reject · S skip · Esc close
-          </p>
+          <div className="curate-modal-nav">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || !prevPickId}
+              onClick={() => prevPickId && onNavigateToPick(prevPickId)}
+            >
+              <ActionLabel label="Prev" shortcut="←" />
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || !nextPickId}
+              onClick={() => nextPickId && onNavigateToPick(nextPickId)}
+            >
+              <ActionLabel label="Next" shortcut="→" />
+            </button>
+          </div>
           <button type="button" className="ghost" onClick={onClose}>
-            Close
+            <ActionLabel label="Close" shortcut="Esc" />
           </button>
         </div>
         <div className="curate-modal-body">
@@ -336,7 +354,7 @@ export function CuratePickModal({
                 disabled={busy || !isPendingCuratePick(pick)}
                 onClick={() => void runQueue()}
               >
-                {busy ? "Working…" : "Send to queue"}
+                {busy ? "Working…" : <ActionLabel label="Send to queue" shortcut="Q" />}
               </button>
               <button
                 type="button"
@@ -344,14 +362,37 @@ export function CuratePickModal({
                 disabled={busy || !isPendingCuratePick(pick)}
                 onClick={() => void runReject()}
               >
-                Reject
+                <ActionLabel label="Reject" shortcut="R" />
               </button>
               <button type="button" className="ghost" disabled={busy} onClick={runSkip}>
-                Skip
+                <ActionLabel label="Skip" shortcut="S" />
               </button>
             </div>
           </div>
         </div>
+        <p className="modal-shortcut-legend" aria-label="Keyboard shortcuts">
+          <span className="legend-item">
+            <KeyHint>←</KeyHint>
+            <KeyHint>→</KeyHint>
+            prev/next
+          </span>
+          <span className="legend-item">
+            <KeyHint>Q</KeyHint>
+            queue
+          </span>
+          <span className="legend-item">
+            <KeyHint>R</KeyHint>
+            reject
+          </span>
+          <span className="legend-item">
+            <KeyHint>S</KeyHint>
+            skip
+          </span>
+          <span className="legend-item">
+            <KeyHint>Esc</KeyHint>
+            close
+          </span>
+        </p>
       </div>
     </div>
   );

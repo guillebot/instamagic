@@ -209,6 +209,18 @@ describe("Curate picks workspace", () => {
     await waitFor(() => expect(curateDialog()).toBeInTheDocument());
   });
 
+  it("shows visible keyboard hints on curate modal actions", async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    await waitFor(() => expect(tile("a")).toBeInTheDocument());
+    await user.click(tile("a"));
+    await waitFor(() => expect(curateDialog()).toBeInTheDocument());
+    const dialog = curateDialog()!;
+    const shortcuts = Array.from(dialog.querySelectorAll("kbd.key-hint")).map((el) => el.textContent);
+    expect(shortcuts).toEqual(expect.arrayContaining(["Q", "R", "S", "Esc", "←", "→"]));
+    expect(dialog.querySelector(".modal-shortcut-legend")).toBeTruthy();
+  });
+
   it("send to queue saves caption/tags and advances to the next pending pick", async () => {
     const user = userEvent.setup();
     renderWorkspace();

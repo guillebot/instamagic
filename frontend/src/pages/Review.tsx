@@ -15,6 +15,7 @@ import { ApiError, api } from "../api";
 import { BlurPanel } from "../BlurPanel";
 import { ClassifyPublishPanel } from "../ClassifyPublishPanel";
 import { CropPanel } from "../CropPanel";
+import { ActionLabel, KeyHint } from "../KeyHint";
 import { SAFETY_FILTERS, lifecycleLabel } from "../lifecycle";
 import { displayPreviewUrl, publishVariantLabel } from "../publishPresentation";
 import { acquireThumbSlot } from "../thumbQueue";
@@ -1181,13 +1182,18 @@ export function ReviewPage() {
                     className={prepMode === mode ? "ghost active" : "ghost"}
                     onClick={() => setPrepMode(mode)}
                   >
-                    {mode === "crop" ? "C " : mode === "blur" ? "B " : ""}
-                    {label}
+                    {mode === "crop" ? (
+                      <ActionLabel label={label} shortcut="C" />
+                    ) : mode === "blur" ? (
+                      <ActionLabel label={label} shortcut="B" />
+                    ) : (
+                      label
+                    )}
                   </button>
                 ))}
               </div>
               <button type="button" className="ghost" disabled={navStacks.back.length === 0} onClick={() => navigateBack()}>
-                ← Back
+                <ActionLabel label="Back" shortcut="←" />
               </button>
               <button
                 type="button"
@@ -1195,10 +1201,10 @@ export function ReviewPage() {
                 disabled={navStacks.forward.length === 0}
                 onClick={() => navigateForward()}
               >
-                Forward →
+                <ActionLabel label="Forward" shortcut="→" />
               </button>
               <button type="button" className="ghost" onClick={closeClassify}>
-                Close
+                <ActionLabel label="Close" shortcut="Esc" />
               </button>
             </div>
             {prepMode === "rate" ? (
@@ -1271,7 +1277,7 @@ export function ReviewPage() {
                       void rateAndAdvance(rating);
                     }}
                   >
-                    {key} {label}
+                    <ActionLabel label={label} shortcut={key} />
                   </button>
                 ))}
               </div>
@@ -1282,6 +1288,36 @@ export function ReviewPage() {
                 {prepMode !== "rate" ? " · Esc → rate" : ""}
               </p>
             </div>
+            <p className="modal-shortcut-legend" aria-label="Keyboard shortcuts">
+              <span className="legend-item">
+                <KeyHint>1</KeyHint>
+                <KeyHint>2</KeyHint>
+                <KeyHint>3</KeyHint>
+                <KeyHint>4</KeyHint>
+                rate
+              </span>
+              <span className="legend-item">
+                <KeyHint>C</KeyHint>
+                crop
+              </span>
+              <span className="legend-item">
+                <KeyHint>B</KeyHint>
+                blur
+              </span>
+              <span className="legend-item">
+                <KeyHint>←</KeyHint>
+                <KeyHint>→</KeyHint>
+                back/forward
+              </span>
+              <span className="legend-item">
+                <KeyHint>Q</KeyHint>
+                queue
+              </span>
+              <span className="legend-item">
+                <KeyHint>Esc</KeyHint>
+                close
+              </span>
+            </p>
           </div>
         </div>
       ) : null}
