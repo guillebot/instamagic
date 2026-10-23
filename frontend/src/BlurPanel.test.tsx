@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blurVerificationLabel } from "./BlurPanel";
+import { blurVerificationLabel, coverBorderRadius } from "./BlurPanel";
 
 const dnp = (status: string, message: string | null = null) => ({
   model_state: "DO_NOT_POST",
@@ -40,5 +40,16 @@ describe("blurVerificationLabel", () => {
     const label = blurVerificationLabel(dnp("verified", "SAFE · BLURRED (verified)"), { ...flags, approved: false });
     expect(label?.tone).not.toBe("ok");
     expect(label?.text ?? "").not.toMatch(/SAFE/);
+  });
+});
+
+describe("coverBorderRadius", () => {
+  it("previews rectangles as rectangles (draft and saved covers)", () => {
+    expect(coverBorderRadius("rectangle", 0, 0.5)).toBe("0px");
+    expect(coverBorderRadius("rectangle", 20, 0.5)).toBe("10px");
+    expect(coverBorderRadius("rectangle", null, 1)).toBe("0px");
+  });
+  it("keeps ellipses round", () => {
+    expect(coverBorderRadius("ellipse", 0, 1)).toBe("50%");
   });
 });
