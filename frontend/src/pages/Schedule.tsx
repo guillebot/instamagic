@@ -18,6 +18,7 @@ export function SchedulePage() {
   const [timezone, setTimezone] = useState("");
   const [maxPosts, setMaxPosts] = useState(2);
   const [minGap, setMinGap] = useState(4);
+  const [storyDefault, setStoryDefault] = useState(false);
 
   const saveConfig = useMutation({
     mutationFn: () =>
@@ -29,6 +30,7 @@ export function SchedulePage() {
           min_gap_hours: minGap,
           weekday_slots: config.data?.weekday_slots,
           paused: config.data?.paused,
+          story_share_default: storyDefault,
         }),
       }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["posting-schedule-config"] }),
@@ -56,6 +58,7 @@ export function SchedulePage() {
     setTimezone(config.data.timezone);
     setMaxPosts(config.data.max_posts_per_day);
     setMinGap(config.data.min_gap_hours);
+    setStoryDefault(config.data.story_share_default ?? false);
   }, [config.data]);
 
   const paused = config.data?.paused ?? false;
@@ -98,6 +101,16 @@ export function SchedulePage() {
               value={minGap}
               onChange={(e) => setMinGap(Number(e.target.value))}
             />
+          </label>
+        </div>
+        <div className="row">
+          <label>
+            <input
+              type="checkbox"
+              checked={storyDefault}
+              onChange={(e) => setStoryDefault(e.target.checked)}
+            />
+            Story default (also share new queue items to Story)
           </label>
         </div>
         <div className="row">

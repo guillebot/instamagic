@@ -11,6 +11,7 @@ from instamagic.models.enums import PublishTrigger
 from instamagic.services.factory import build_instagram
 from instamagic.services.instagram.client import InstagramClient
 from instamagic.services.instagram.publish import publish_queue_item
+from instamagic.services.instagram.story_publish import run_scheduled_story_tick
 from instamagic.services.posting.schedule_config import config_view, get_or_create_config
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -75,6 +76,7 @@ def run_scheduled_publish_tick(session: Session, settings: Settings, client: Ins
         except Exception as exc:
             err = str(getattr(exc, "detail", exc))
             log.info("scheduled_publish_failed", queue_item_id=str(item.id), error=err)
+    published += run_scheduled_story_tick(session, settings, client)
     return published
 
 

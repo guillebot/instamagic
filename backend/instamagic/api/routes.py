@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
-from instamagic.api.deps import db_dep, require_session, settings_dep
+from instamagic.api.deps import db_dep, require_lan_session, require_session, settings_dep
 from instamagic.auth import (
     COOKIE_NAME,
     OAUTH_NONCE_COOKIE,
@@ -42,6 +42,7 @@ from instamagic.models import (
     JobStatus,
     Library,
     ProcessingJob,
+    PublishAttempt,
     PublishingQueueItem,
     QueueState,
     RelatedAccount,
@@ -91,6 +92,7 @@ from instamagic.schemas.dto import (
     PublishIn,
     QueueIn,
     QueuesOut,
+    QueueStoryUpdateIn,
     RatingIn,
     RelatedAccountIn,
     ScheduleIn,
@@ -1209,6 +1211,40 @@ def publish_preview(
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
 
 
+@router.get("/api/images/{image_id}/story-preview")
+def story_preview(
+    image_id: UUID,
+    request: Request,
+    render_mode: str | None = Query(default=None, max_length=32),
+    border_color: str | None = Query(default=None, max_length=16),
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> FileResponse:
+    """LAN-only 9:16 story render from the same feed publish derivative (no Graph call)."""
+    del request
+    from instamagic.services.instagram.publish_derivative import ensure_publish_derivative
+    from instamagic.services.instagram.story_image import (
+        render_story_from_feed_file,
+        write_story_jpeg,
+    )
+    from instamagic.services.posting.schedule_config import get_or_create_config
+
+    image = _load_image(session, image_id)
+    approved = next((crop for crop in image.crops if crop.approved), None)
+    relative = ensure_publish_derivative(session, settings, image, approved)
+    session.commit()
+    feed_path = safe_join(settings.derivatives_root, relative)
+    cfg = get_or_create_config(session)
+    mode = (render_mode or cfg.story_render_mode_default or "blur_backdrop").strip().lower()
+    border = (border_color or cfg.story_border_color_default or "black").strip().lower()
+    story_rgb = render_story_from_feed_file(feed_path, mode=mode, border_color=border)
+    preview_path = settings.derivatives_root / f"{image.id}/publish/story-preview.jpg"
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    write_story_jpeg(story_rgb, preview_path)
+    return FileResponse(preview_path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
+
+
 @router.get("/api/derivatives/{image_id}/crops/{crop_id}")
 def crop_derivative(
     image_id: UUID,
@@ -1330,7 +1366,47 @@ def enqueue(
         crop_id=approved.id if approved else None,
         state=QueueState.CANDIDATE.value,
     )
+    from instamagic.services.posting.story_fields import apply_story_fields_from_payload
+
+    apply_story_fields_from_payload(
+        session,
+        item,
+        story_share_enabled=body.story_share_enabled,
+        story_render_mode=body.story_render_mode,
+        story_border_color=body.story_border_color,
+        story_timing_mode=body.story_timing_mode,
+        story_delay_hours=body.story_delay_hours,
+        is_new=True,
+    )
     session.add(item)
+    session.commit()
+    return _queue_out(session, item)
+
+
+@router.patch("/api/queue/{item_id}")
+def patch_queue_item(
+    item_id: UUID,
+    body: QueueStoryUpdateIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    item = session.get(PublishingQueueItem, item_id)
+    if item is None:
+        raise NotFound("Queue item was not found.")
+    if item.state == QueueState.PUBLISHING.value:
+        raise NotAllowed("Cannot edit story options while publishing.")
+    from instamagic.services.posting.story_fields import apply_story_fields_from_payload
+
+    apply_story_fields_from_payload(
+        session,
+        item,
+        story_share_enabled=body.story_share_enabled,
+        story_render_mode=body.story_render_mode,
+        story_border_color=body.story_border_color,
+        story_timing_mode=body.story_timing_mode,
+        story_delay_hours=body.story_delay_hours,
+        is_new=False,
+    )
     session.commit()
     return _queue_out(session, item)
 
@@ -1398,6 +1474,9 @@ def put_posting_schedule_config(
         max_posts_per_day=body.max_posts_per_day,
         min_gap_hours=body.min_gap_hours,
         paused=body.paused,
+        story_share_default=body.story_share_default,
+        story_render_mode_default=body.story_render_mode_default,
+        story_border_color_default=body.story_border_color_default,
     )
     return config_as_dict(view)
 
@@ -1916,7 +1995,16 @@ def send_curation_to_queue(
     session: Session = db_dep,
 ) -> list[dict[str, object]]:
     """Human last word: only selected picks enter the publish queue (still not published)."""
-    items = queue_picks(session, pick_ids=body.pick_ids, covering_blur_fn=_has_approved_covering_blur)
+    items = queue_picks(
+        session,
+        pick_ids=body.pick_ids,
+        covering_blur_fn=_has_approved_covering_blur,
+        story_share_enabled=body.story_share_enabled,
+        story_render_mode=body.story_render_mode,
+        story_border_color=body.story_border_color,
+        story_timing_mode=body.story_timing_mode,
+        story_delay_hours=body.story_delay_hours,
+    )
     return [_queue_out(session, item) for item in items]
 
 
@@ -2823,6 +2911,30 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
                 "image": _image_out(session, slide_image).model_dump(mode="json"),
             }
         )
+    from instamagic.models.enums import PublishAttemptKind
+    from instamagic.services.posting.story_options import effective_story_options
+
+    story_opts = effective_story_options(session, item)
+    story_attempt = session.scalar(
+        select(PublishAttempt)
+        .where(
+            PublishAttempt.queue_item_id == item.id,
+            PublishAttempt.kind == PublishAttemptKind.STORY.value,
+        )
+        .order_by(PublishAttempt.started_at.desc())
+    )
+    story_status = "off"
+    if story_opts.share_enabled and item.media_type != "CAROUSEL":
+        if item.story_published_at:
+            story_status = "published"
+        elif story_attempt and not story_attempt.success and story_attempt.error:
+            story_status = "failed"
+        elif item.story_scheduled_at and item.story_scheduled_at > datetime.now(UTC):
+            story_status = "scheduled"
+        elif item.state == QueueState.PUBLISHED.value and story_opts.share_enabled:
+            story_status = "pending"
+        else:
+            story_status = "enabled"
     return {
         "id": item.id,
         "state": item.state,
@@ -2839,6 +2951,17 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "permalink": ig_post.permalink if ig_post else None,
         "published_caption": published_caption,
         "slides": slides_payload,
+        "story_share_enabled": item.story_share_enabled,
+        "story_render_mode": story_opts.render_mode,
+        "story_border_color": story_opts.border_color,
+        "story_timing_mode": story_opts.timing_mode,
+        "story_delay_hours": story_opts.delay_hours,
+        "story_scheduled_at": item.story_scheduled_at,
+        "story_published_at": item.story_published_at,
+        "story_last_error": item.story_last_error,
+        "story_status": story_status,
+        "story_ig_media_id": story_attempt.ig_media_id if story_attempt and story_attempt.success else None,
+        "story_preview_url": f"/api/images/{image.id}/story-preview",
         "image": _image_out(session, image).model_dump(mode="json"),
     }
 

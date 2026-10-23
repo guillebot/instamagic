@@ -51,6 +51,14 @@ function setup(overrides: Record<string, unknown> = {}) {
     [`GET /api/images/${IMG}/captions`]: captions,
     "GET /api/instagram/status": { configured: true, token_configured: true, business_account_id_configured: true },
     "GET /api/health/status": { checks: [{ id: "instagram", status: "ok", detail: "" }] },
+    "GET /api/posting-schedule/config": {
+      timezone: "UTC",
+      weekday_slots: {},
+      max_posts_per_day: 2,
+      min_gap_hours: 4,
+      paused: false,
+      story_share_default: false,
+    },
     ...overrides,
   };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -97,6 +105,7 @@ describe("ClassifyPublishPanel Post now", () => {
     setup({
       "POST /api/queue": { id: "q1", state: "CANDIDATE" },
       "POST /api/queue/q1/approve": { id: "q1", state: "APPROVED" },
+      "PATCH /api/queue/q1": { id: "q1", state: "APPROVED" },
       "POST /api/queue/q1/publish": { id: "q1", state: "PUBLISHED", permalink: "https://www.instagram.com/p/abc/" },
     });
     const post = await screen.findByRole("button", { name: "Post now" });
@@ -109,7 +118,28 @@ describe("ClassifyPublishPanel Post now", () => {
     responses[`GET /api/images/${IMG}/publish-readiness`] = { ...readiness, queue_item_id: "q1", queue_state: "APPROVED" };
     fireEvent.click(screen.getByRole("button", { name: "Publish to @foto.sch" }));
     expect((await screen.findAllByRole("link", { name: "https://www.instagram.com/p/abc/" })).length).toBeGreaterThan(0);
-    expect(publishCalls().map((c) => c.path)).toEqual(["/api/queue", "/api/queue/q1/approve", "/api/queue/q1/publish"]);
+    expect(publishCalls().map((c) => c.path)).toEqual([
+      "/api/queue",
+      "/api/queue/q1/approve",
+      "/api/queue/q1/publish",
+    ]);
+  });
+
+  it("confirm dialog mentions Story when also share is enabled", async () => {
+    setup({
+      "GET /api/posting-schedule/config": {
+        timezone: "UTC",
+        weekday_slots: {},
+        max_posts_per_day: 2,
+        min_gap_hours: 4,
+        paused: false,
+        story_share_default: true,
+      },
+    });
+    const post = await screen.findByRole("button", { name: "Post now" });
+    await waitFor(() => expect((post as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(post);
+    expect(await screen.findByText(/will also publish an Instagram Story/)).toBeTruthy();
   });
 
   it("cancel sends nothing", async () => {
@@ -126,6 +156,7 @@ describe("ClassifyPublishPanel Post now", () => {
     const approvedReadiness = { ...readiness, queue_item_id: "q1", queue_state: "APPROVED" };
     setup({
       [`GET /api/images/${IMG}/publish-readiness`]: approvedReadiness,
+      "PATCH /api/queue/q1": { id: "q1", state: "APPROVED" },
       "POST /api/queue/q1/publish": new ApiError(409, "DO_NOT_POST requires verified blur unlock before publishing."),
     });
     const post = await screen.findByRole("button", { name: "Post now" });
