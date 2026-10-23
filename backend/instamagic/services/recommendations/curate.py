@@ -99,6 +99,35 @@ class EligibleCandidate:
     crop_aspect: str | None
 
 
+def _existing_captions(session: Session, image_ids: list[UUID]) -> dict[UUID, list[Caption]]:
+    if not image_ids:
+        return {}
+    rows = session.scalars(
+        select(Caption)
+        .where(Caption.image_id.in_(image_ids))
+        .where(Caption.status != CaptionStatus.REJECTED.value)
+        .order_by(Caption.created_at.asc())
+    ).all()
+    out: dict[UUID, list[Caption]] = {}
+    for row in rows:
+        out.setdefault(row.image_id, []).append(row)
+    # Prefer operator-touched captions (used/modified) over freshly generated ones.
+    rank = {CaptionStatus.MODIFIED.value: 0, CaptionStatus.USED.value: 1}
+    for rows_for_image in out.values():
+        rows_for_image.sort(key=lambda caption: rank.get(caption.status, 2))
+    return out
+
+
+def _images_with_captions(session: Session, image_ids: list[UUID]) -> set[UUID]:
+    return set(_existing_captions(session, image_ids))
+
+
+def _stored_hashtags(image: Image) -> list[str]:
+    from instamagic.services.recommendations.enrichment import stored_hashtags
+
+    return stored_hashtags(image)
+
+
 def collect_eligible(
     session: Session,
     *,
@@ -425,6 +454,7 @@ def execute_curation_batch(
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
     held_back = held_back_near_duplicate_count(len(eligible), len(shortlist))
+    ready_caption_ids = _images_with_captions(session, [item.image.id for item in shortlist])
     payloads = [
         CurationCandidatePayload(
             image_id=str(item.image.id),
@@ -440,6 +470,7 @@ def execute_curation_batch(
             mood=item.mood,
             safe_description=item.description,
             local_reasons=item.local_reasons,
+            captions_ready=item.image.id in ready_caption_ids,
         )
         for item in shortlist
     ]
@@ -567,13 +598,16 @@ def _execute_curation_gemini(
     audit.status = "succeeded"
     ordered_drafts = merge_chunked_drafts(chunk_results, payloads=payloads)
 
+    existing_by_image = _existing_captions(session, [UUID(d.image_id) for d in ordered_drafts])
     for index, draft in enumerate(ordered_drafts, start=1):
         item = by_id[draft.image_id]
-        captions = draft.captions or [
+        existing = existing_by_image.get(item.image.id) or []
+        captions = [] if existing else draft.captions or [
             CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
             for style, language in CURATION_CAPTION_STYLES
         ]
-        preferred: Caption | None = None
+        # Reuse pre-generated/user captions (background enrichment) instead of stacking new rows.
+        preferred: Caption | None = existing[0] if existing else None
         for caption_draft in captions[:6]:
             row = Caption(
                 image_id=item.image.id,
@@ -594,7 +628,9 @@ def _execute_curation_gemini(
             gemini_rank=draft.rank,
             local_score=item.local_score,
             reasons_json=json.dumps(draft.reasons[:8], ensure_ascii=False),
-            suggested_tags_json=json.dumps(draft.tags[:12], ensure_ascii=False),
+            suggested_tags_json=json.dumps(
+                (_stored_hashtags(item.image) or draft.tags)[:15], ensure_ascii=False
+            ),
             status=CurationPickStatus.SUGGESTED.value,
             preferred_caption_id=preferred.id if preferred else None,
         )
@@ -691,6 +727,7 @@ def run_curation(
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
     held_back = held_back_near_duplicate_count(len(eligible), len(shortlist))
+    ready_caption_ids = _images_with_captions(session, [item.image.id for item in shortlist])
     payloads = [
         CurationCandidatePayload(
             image_id=str(item.image.id),
@@ -706,6 +743,7 @@ def run_curation(
             mood=item.mood,
             safe_description=item.description,
             local_reasons=item.local_reasons,
+            captions_ready=item.image.id in ready_caption_ids,
         )
         for item in shortlist
     ]

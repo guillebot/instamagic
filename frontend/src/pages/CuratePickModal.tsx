@@ -92,7 +92,7 @@ export function CuratePickModal({
     mutationFn: () =>
       api<{ tags: string[] }>(`/api/images/${pick.image.id}/hashtags`, {
         method: "POST",
-        body: JSON.stringify({ confirmed: geminiPolicy !== "manual_only" }),
+        body: JSON.stringify({ confirmed: geminiPolicy !== "manual_only", refresh: true }),
       }),
     onMutate: () => {
       clearHashtagStatus();

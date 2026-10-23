@@ -41,6 +41,8 @@ class CurationCandidatePayload(BaseModel):
     mood: str = "unspecified"
     safe_description: str = "A photograph."
     local_reasons: list[str] = Field(default_factory=list)
+    # Background enrichment already stored captions for this image: return an empty captions list.
+    captions_ready: bool = False
 
 
 class CurationPickDraft(BaseModel):
@@ -110,7 +112,8 @@ def curation_request_text(*, candidates: list[CurationCandidatePayload], account
         f"Candidates (JSON): {json.dumps(payload, sort_keys=True)}\n"
         f"Rank every candidate. Required image_ids: {json.dumps(ids)}. "
         f"When JPEG parts follow, each is labeled with its image_id — match them to the JSON. "
-        f"For each ranked row provide reasons, up to 8 tags, and captions for: {styles}."
+        f"For each ranked row provide reasons, up to 8 tags, and captions for: {styles}. "
+        f"When a candidate has captions_ready=true, return an empty captions list for it."
     )
 
 

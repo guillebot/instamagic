@@ -78,10 +78,10 @@ def test_label_job_continues_after_apply_failure(client, app_env, monkeypatch) -
     fail_image_id = by_name["a.jpg"]["id"]
     original_apply = label_job_module._apply_label_result
 
-    def flaky_apply(session, image, result):
+    def flaky_apply(session, image, result, **kwargs):
         if str(image.id) == fail_image_id:
             raise RuntimeError("simulated persistence failure")
-        return original_apply(session, image, result)
+        return original_apply(session, image, result, **kwargs)
 
     monkeypatch.setattr(label_job_module, "_apply_label_result", flaky_apply)
 

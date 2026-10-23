@@ -10,7 +10,13 @@ from uuid import UUID
 
 from instamagic.config import get_settings
 from instamagic.db import session_factory
-from instamagic.errors import GeminiBlocked, GeminiEmpty, GeminiTruncated, NotConfigured
+from instamagic.errors import (
+    GeminiBlocked,
+    GeminiEmpty,
+    GeminiRateLimited,
+    GeminiTruncated,
+    NotConfigured,
+)
 from instamagic.logging_config import get_logger
 from instamagic.models import (
     Caption,
@@ -40,7 +46,7 @@ from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.gates import gemini_gate
 from instamagic.services.recommendations.gemini_derivatives import curation_derivative_bytes
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 __all__ = ["should_retry_label", "label_status_is_terminal"]
@@ -146,7 +152,7 @@ def resolve_label_targets(
     return targets, skip_counts
 
 
-def _apply_label_result(session: Session, image: Image, result) -> None:
+def _apply_label_result(session: Session, image: Image, result, *, add_captions: bool = True) -> None:
     for raw in result.tags:
         name = str(raw).strip().lstrip("#").lower().replace(" ", "")[:64]
         if not name:
@@ -161,7 +167,7 @@ def _apply_label_result(session: Session, image: Image, result) -> None:
         )
         if exists is None:
             session.add(ImageTag(image_id=image.id, tag_id=tag.id, source=TagSource.GEMINI.value))
-    for draft in result.captions:
+    for draft in result.captions if add_captions else []:
         session.add(
             Caption(
                 image_id=image.id,
@@ -204,6 +210,11 @@ def label_one_image(
     image.gemini_label_attempts = (image.gemini_label_attempts or 0) + 1
     approved = next((crop for crop in image.crops if crop.approved), None)
     covering = covering_blur_fn(session, image)
+    gate_kwargs = publishing_gate_kwargs(session, image)
+    # Never stack a second set of captions on an image that already has some (generated or user-edited).
+    has_captions = bool(
+        session.scalar(select(func.count()).select_from(Caption).where(Caption.image_id == image.id))
+    )
     tags = [link.tag.name for link in image.tags if link.tag is not None]
     mood_names = [tag for tag in tags if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}]
     composition = image.orientation or "unknown orientation"
@@ -226,6 +237,8 @@ def label_one_image(
             needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
             has_approved_crop=approved is not None,
             has_approved_covering_blur=covering,
+            has_approved_blur=bool(gate_kwargs["has_approved_blur"]),
+            do_not_post_blur_unlocked=bool(gate_kwargs["do_not_post_blur_unlocked"]),
             policy=policy,
             operator_confirmed=True,
             content_tags=tags,
@@ -249,6 +262,8 @@ def label_one_image(
         image.gemini_label_status = format_blocked_status(exc.reason)
         image.gemini_label_at = datetime.now(UTC)
         return "blocked"
+    except GeminiRateLimited:
+        raise
     except (GeminiEmpty, GeminiTruncated):
         image.gemini_label_status = "empty"
         image.gemini_label_at = datetime.now(UTC)
@@ -259,12 +274,12 @@ def label_one_image(
     except Exception:
         image.gemini_label_status = "error"
         return "error"
-    if not result.captions:
+    if not result.captions and not has_captions:
         image.gemini_label_status = "empty"
         image.gemini_label_at = datetime.now(UTC)
         return "empty"
     try:
-        _apply_label_result(session, image, result)
+        _apply_label_result(session, image, result, add_captions=not has_captions)
     except Exception:
         session.rollback()
         _record_label_error(session, image.id)

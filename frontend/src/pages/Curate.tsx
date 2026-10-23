@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
+import { EnrichmentStatusBar } from "../EnrichmentStatusBar";
 import {
   chunkGridRows,
   columnCountForWidth,
@@ -240,6 +241,7 @@ export function CuratePage() {
         Browse curation picks as thumbnails, tune caption and hashtags, then send to the publish queue. Nothing
         publishes until you approve on Queue.
       </p>
+      <EnrichmentStatusBar />
 
       <section className="panel curate-run-panel">
         <button type="button" className="ghost curate-run-toggle" onClick={() => setRunPanelOpen((open) => !open)}>

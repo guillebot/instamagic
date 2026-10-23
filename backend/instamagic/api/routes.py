@@ -77,6 +77,7 @@ from instamagic.schemas.dto import (
     CurationPickUpdate,
     CurationQueueIn,
     CurationReorderIn,
+    EnrichmentSettingsIn,
     FolderListing,
     GeminiLabelIn,
     HashtagIn,
@@ -155,7 +156,6 @@ from instamagic.services.instagram.hashtag_research import (
     HashtagResearchUnavailable,
     budget_status,
     research_hashtag,
-    suggest_tags_from_research,
 )
 from instamagic.services.instagram.insights_sync import (
     refresh_token_scopes,
@@ -208,6 +208,9 @@ from instamagic.services.posting.queue_schedule import (
 )
 from instamagic.services.posting.readiness import build_image_publish_readiness
 from instamagic.services.posting.schedule_config import config_as_dict, config_view, update_config
+from instamagic.services.posting.schedule_config import (
+    get_or_create_config as get_or_create_schedule_config,
+)
 from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, snapshot_queues
 from instamagic.services.recommendations.candidates_bulk import bulk_enqueue, bulk_reject
 from instamagic.services.recommendations.curate import (
@@ -218,6 +221,15 @@ from instamagic.services.recommendations.curate import (
     run_curation,
     undo_queued_pick,
 )
+from instamagic.services.recommendations.enrichment import (
+    enrichment_status,
+    stored_hashtags,
+    wake_enrichment,
+)
+from instamagic.services.recommendations.enrichment import (
+    generate_hashtags as generate_enrichment_hashtags,
+)
+from instamagic.services.recommendations.enrichment import retry_errors as retry_enrichment_errors
 from instamagic.services.recommendations.gates import publishing_gate
 from instamagic.services.recommendations.gemini_derivatives import (
     curation_derivative_bytes as _curation_derivative_bytes_impl,
@@ -244,6 +256,25 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 router = APIRouter()
+
+
+def _enrich_redis(settings: Settings):
+    """Redis for enrichment counters/locks; None in inline mode or when Redis is unreachable."""
+    if settings.pipeline_mode == "inline":
+        return None
+    try:
+        from redis import Redis
+
+        connection = Redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+        connection.ping()
+        return connection
+    except Exception:
+        return None
+
+
+def _wake_enrichment(settings: Settings) -> None:
+    if settings.pipeline_mode != "inline":
+        wake_enrichment(settings.redis_url)
 
 
 def _enqueue_worker_job(
@@ -396,6 +427,7 @@ def _image_out(session: Session, image: Image, *, settings: Settings | None = No
         gemini_label_at=image.gemini_label_at,
         gemini_description=image.gemini_description,
         gemini_mood=image.gemini_mood,
+        enrich_hashtags=stored_hashtags(image),
     )
 
 
@@ -875,6 +907,8 @@ def rate(
             image_ids=[image.id],
             all_eligible=False,
         )
+    if rating in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
+        _wake_enrichment(settings)
     return _image_out(session, _load_image(session, image_id))
 
 
@@ -2812,40 +2846,88 @@ def suggest_hashtags(
 ) -> dict[str, object]:
     _ = body.confirmed
     image = _load_image(session, image_id)
-    approved = next((crop for crop in image.crops if crop.approved), None)
-    covering_blur = _has_approved_covering_blur(session, image)
-    tags = list(
-        session.scalars(
-            select(ContentTag.name).join(ImageTag, ImageTag.tag_id == ContentTag.id).where(ImageTag.image_id == image.id)
-        ).all()
-    )
-    composition = image.orientation or "unknown orientation"
-    context = append_voice_to_context(
-        build_context(
-            attested=is_attested(session, image.library_id),
-            human_rating=image.human_rating,
-            model_state=image.model_state,
-            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-            has_approved_crop=approved is not None,
-            has_approved_covering_blur=covering_blur,
-            policy="text_only",
-            operator_confirmed=True,
-            content_tags=tags,
-            composition=composition,
-            mood="unspecified",
-            safe_description=f"A {composition} photograph.",
-            crop=None,
-        ),
-        account_voice=settings.account_voice,
-    )
+    stored = stored_hashtags(image)
+    if stored and not body.refresh:
+        return {"tags": stored, "gemini_tags": [], "research_tags": [], "stored": True}
     try:
-        suggestion = request.app.state.growth.suggest_hashtags(context, account_voice=settings.account_voice)
+        merged = generate_enrichment_hashtags(
+            session, request.app.state.growth, image, account_voice=settings.account_voice
+        )
     except (GeminiBlocked, NotConfigured):
         raise
     except Exception:
         raise NotConfigured("Gemini request failed.") from None
-    merged = suggest_tags_from_research(session, suggestion.tags)
-    return {"tags": merged, "gemini_tags": suggestion.tags, "research_tags": [t for t in merged if t not in suggestion.tags]}
+    image.enrich_hashtags_json = json.dumps(merged[:15], ensure_ascii=False)
+    image.enrich_status = "ok"
+    image.enrich_at = datetime.now(UTC)
+    session.commit()
+    return {"tags": merged, "gemini_tags": [], "research_tags": [], "stored": False}
+
+
+@router.get("/api/enrichment/status")
+def get_enrichment_status(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    status = enrichment_status(session, _enrich_redis(settings))
+    status["rpm"] = settings.enrich_rpm
+    status["concurrency"] = settings.enrich_concurrency
+    return status
+
+
+def _enrichment_config_update(session: Session, settings: Settings, **fields: object) -> dict[str, object]:
+    row = get_or_create_schedule_config(session)
+    for key, value in fields.items():
+        setattr(row, key, value)
+    session.commit()
+    _wake_enrichment(settings)
+    return get_enrichment_status(None, session, settings)  # type: ignore[arg-type]
+
+
+@router.post("/api/enrichment/pause")
+def pause_enrichment(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    return _enrichment_config_update(session, settings, enrichment_paused=True)
+
+
+@router.post("/api/enrichment/resume")
+def resume_enrichment(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    return _enrichment_config_update(session, settings, enrichment_paused=False)
+
+
+@router.put("/api/enrichment/settings")
+def update_enrichment_settings(
+    body: EnrichmentSettingsIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    if body.enabled is not None:
+        fields["enrichment_enabled"] = body.enabled
+    if body.daily_cap is not None:
+        fields["enrichment_daily_cap"] = body.daily_cap
+    return _enrichment_config_update(session, settings, **fields)
+
+
+@router.post("/api/enrichment/retry")
+def retry_enrichment(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    reset = retry_enrichment_errors(session)
+    status = _enrichment_config_update(session, settings)
+    status["reset"] = reset
+    return status
 
 
 def _crop_out(image: Image, crop: CropSuggestion) -> CropOut:

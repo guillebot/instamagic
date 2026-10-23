@@ -22,6 +22,10 @@ class GeminiResponseError(NotConfigured):
     """Gemini returned HTTP 200 but no usable model output."""
 
 
+class GeminiRateLimited(NotConfigured):
+    """Gemini answered HTTP 429 (after one retry). Callers back off instead of counting a failure."""
+
+
 class GeminiEmpty(GeminiResponseError):
     pass
 
