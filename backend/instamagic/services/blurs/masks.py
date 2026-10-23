@@ -86,31 +86,118 @@ def rasterize_polygon(size: tuple[int, int], polygon: np.ndarray) -> np.ndarray:
     return mask
 
 
+def _local_coords_grid(
+    size: tuple[int, int], cx: float, cy: float, theta_rad: float
+) -> tuple[np.ndarray, np.ndarray]:
+    width, height = size
+    yy, xx = np.mgrid[0:height, 0:width]
+    dx = xx.astype(np.float64) - cx
+    dy = yy.astype(np.float64) - cy
+    cos_t = math.cos(theta_rad)
+    sin_t = math.sin(theta_rad)
+    lx = dx * cos_t + dy * sin_t
+    ly = -dx * sin_t + dy * cos_t
+    return lx, ly
+
+
+def _feather_mask_from_normalized_dist(
+    dist: np.ndarray, feather: int, min_axis: float
+) -> np.ndarray:
+    """Build float mask: 1 in opaque core, cosine ring to boundary at dist==1, 0 outside."""
+    inner = max(0.0, 1.0 - feather / max(min_axis, 1e-6))
+    mask = np.zeros(dist.shape, dtype=np.float32)
+    solid = dist <= inner
+    ring = (dist > inner) & (dist <= 1.0)
+    mask[solid] = 1.0
+    if np.any(ring) and inner < 1.0:
+        t = (dist[ring] - inner) / (1.0 - inner)
+        mask[ring] = 0.5 * (1.0 + np.cos(math.pi * t))
+    return mask
+
+
+def _ellipse_normalized_dist(
+    size: tuple[int, int], window: BlurWindow
+) -> tuple[np.ndarray, float]:
+    cx, cy = window_center(window)
+    rx = max(window.width / 2, 1e-6)
+    ry = max(window.height / 2, 1e-6)
+    theta = math.radians(window.rotation_deg)
+    lx, ly = _local_coords_grid(size, cx, cy, theta)
+    dist = np.sqrt((lx / rx) ** 2 + (ly / ry) ** 2)
+    return dist.astype(np.float32), float(min(rx, ry))
+
+
+def _rectangle_normalized_dist(
+    size: tuple[int, int], window: BlurWindow
+) -> tuple[np.ndarray, float]:
+    cx, cy = window_center(window)
+    hw = max(window.width / 2, 1e-6)
+    hh = max(window.height / 2, 1e-6)
+    r = min(window.corner_radius, hw, hh)
+    theta = math.radians(window.rotation_deg)
+    lx, ly = _local_coords_grid(size, cx, cy, theta)
+    if r <= 0:
+        dist = np.maximum(np.abs(lx) / hw, np.abs(ly) / hh)
+        return dist.astype(np.float32), float(min(hw, hh))
+    qx = np.abs(lx) - (hw - r)
+    qy = np.abs(ly) - (hh - r)
+    outside = np.sqrt(np.maximum(qx, 0.0) ** 2 + np.maximum(qy, 0.0) ** 2)
+    inside = np.minimum(np.maximum(qx, qy), 0.0)
+    sdf = (outside + inside - r).astype(np.float32)
+    inscribed = max(min(hw, hh) - r, 1e-6)
+    dist = np.ones_like(sdf, dtype=np.float32)
+    interior = sdf <= 0
+    dist[interior] = 1.0 - (-sdf[interior] / inscribed)
+    dist[~interior] = np.maximum(dist[~interior], 1.0 + sdf[~interior] / inscribed)
+    return dist, float(min(hw, hh))
+
+
+def _normalized_shape_dist(size: tuple[int, int], window: BlurWindow) -> tuple[np.ndarray, float]:
+    if window.shape == "ellipse":
+        return _ellipse_normalized_dist(size, window)
+    return _rectangle_normalized_dist(size, window)
+
+
 def feathered_shape_mask(size: tuple[int, int], window: BlurWindow) -> Image.Image:
     """L mask with opaque core and cosine feather band (clipped to image bounds)."""
-    width, height = size
-    outer = rasterize_polygon(size, shape_polygon(window))
+    if (
+        window.shape == "ellipse"
+        and window.rotation_deg == 0.0
+        and window.corner_radius == 0.0
+    ):
+        from instamagic.services.blurs.generator import feathered_ellipse_mask
+
+        return feathered_ellipse_mask(
+            size,
+            x=window.x,
+            y=window.y,
+            width=window.width,
+            height=window.height,
+            feather=window.feather,
+        )
     feather = max(0, int(window.feather))
+    dist, min_axis = _normalized_shape_dist(size, window)
     if feather <= 0:
-        return Image.fromarray(outer, mode="L")
-    dist = cv2.distanceTransform(outer, cv2.DIST_L2, 5)
-    mask = np.zeros((height, width), dtype=np.float32)
-    solid = dist >= feather
-    ring = (dist > 0) & (dist < feather)
-    mask[solid] = 1.0
-    if np.any(ring):
-        mask[ring] = 0.5 * (1.0 + np.cos(math.pi * dist[ring] / feather))
+        mask = (dist <= 1.0).astype(np.float32)
+    else:
+        mask = _feather_mask_from_normalized_dist(dist, feather, min_axis)
     return Image.fromarray((mask * 255.0).astype(np.uint8), mode="L")
 
 
 def core_mask_array(size: tuple[int, int], window: BlurWindow) -> np.ndarray:
-    """Boolean core (opaque interior) for containment checks."""
-    outer = rasterize_polygon(size, shape_polygon(window))
+    """Boolean core (opaque interior) for containment and integrity checks."""
     feather = max(0, int(window.feather))
+    dist, min_axis = _normalized_shape_dist(size, window)
     if feather <= 0:
-        return outer > 0
-    dist = cv2.distanceTransform(outer, cv2.DIST_L2, 5)
-    return dist >= feather
+        return dist <= 1.0
+    inner = max(0.0, 1.0 - feather / max(min_axis, 1e-6))
+    return dist <= inner
+
+
+def interior_mask_array(size: tuple[int, int], window: BlurWindow) -> np.ndarray:
+    """Boolean mask for the full shape interior (normalized distance <= 1)."""
+    dist, _ = _normalized_shape_dist(size, window)
+    return dist <= 1.0
 
 
 def combined_coverage_mask(size: tuple[int, int], covers: list[BlurWindow]) -> np.ndarray:
