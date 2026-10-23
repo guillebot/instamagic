@@ -383,3 +383,33 @@ export type InstagramRefreshResult = InstagramConnectionStatus & {
   error: string | null;
   account: InstagramAccountDetails | null;
 };
+
+export type BlurCoverageRegion = {
+  label: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  coverage: number;
+  inside_outline: number;
+  covered: boolean;
+  missed_px: { top: number; bottom: number; left: number; right: number } | null;
+};
+
+export type BlurCoverageReport = {
+  min_coverage: number;
+  padding: number;
+  do_not_post: boolean;
+  regions: BlurCoverageRegion[];
+  all_covered: boolean;
+  coverage_check: "pass" | "fail" | "none" | "unknown";
+  verification: {
+    status: string;
+    effective: boolean;
+    current_geometry: boolean;
+    recheck: "pass" | "fail" | "not_run";
+    classifier_detections: Array<{ label: string; score?: number }>;
+    message?: string | null;
+  };
+};

@@ -5,6 +5,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -99,6 +100,7 @@ from instamagic.schemas.dto import (
     ScheduleIn,
     TagIn,
 )
+from instamagic.services.blurs.coverage_report import blur_coverage_report
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.blurs.generator import (
     BlurWindow,
@@ -1134,6 +1136,21 @@ def delete_blur(
     if image.model_state == SafetyState.DO_NOT_POST.value:
         reset_blur_unlock(image)
     session.commit()
+
+
+@router.get("/api/images/{image_id}/blur-coverage")
+def blur_coverage(
+    image_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, Any]:
+    """Live, read-only coverage of each flagged region by the covers as they are now.
+
+    Same regions, padding and threshold as the unlock gate's coverage check; it never
+    changes approval or unlock state.
+    """
+    image = _load_image(session, image_id)
+    return blur_coverage_report(session, image)
 
 
 @router.post("/api/images/{image_id}/blurs/approve", response_model=list[BlurOut])
