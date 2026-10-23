@@ -351,7 +351,7 @@ export function CandidatesPage() {
               <div className="candidate-thumb">
                 {candidate.image.thumbnail_url ? (
                   <Link
-                    to={`/?image=${id}`}
+                    to={`/?image=${id}&open=1`}
                     onClick={(event) => event.stopPropagation()}
                     title="Open in Review"
                   >
