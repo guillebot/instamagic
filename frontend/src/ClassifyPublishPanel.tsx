@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { ButtonSpinner, PendingButtonLabel } from "./actionButton";
 import { ActionLabel } from "./KeyHint";
 import { ApiError, api } from "./api";
 import {
@@ -366,7 +367,13 @@ export function ClassifyPublishPanel({
           disabled={!queueGate.ok || busy !== ""}
           onClick={() => void queueOnly()}
         >
-          {busy === "queue" ? "Queueing…" : <ActionLabel label="Queue" shortcut="Q" />}
+          {busy === "queue" ? (
+            <>
+              <ButtonSpinner /> Queueing…
+            </>
+          ) : (
+            <ActionLabel label="Queue" shortcut="Q" />
+          )}
         </button>
         <button
           type="button"
@@ -375,7 +382,7 @@ export function ClassifyPublishPanel({
           disabled={!approveGate.ok || busy !== ""}
           onClick={() => void queueAndApprove()}
         >
-          {busy === "approve" ? "Saving…" : "Queue & approve"}
+          <PendingButtonLabel pending={busy === "approve"} pendingLabel="Saving…" label="Queue & approve" />
         </button>
         <button
           type="button"
@@ -384,7 +391,11 @@ export function ClassifyPublishPanel({
           disabled={!scheduleGate.ok || busy !== ""}
           onClick={() => void scheduleAuto()}
         >
-          Schedule (auto)
+          <PendingButtonLabel
+            pending={busy === "schedule"}
+            pendingLabel="Scheduling…"
+            label="Schedule (auto)"
+          />
         </button>
         <button
           type="button"

@@ -119,7 +119,22 @@ a { color: inherit; }
   text-decoration: none;
 }
 .nav a.active, .button { background: #d7a15f; color: #1b140c; border-color: #d7a15f; }
-.ghost { background: transparent; }
+.ghost {
+  background: #161a1f;
+  color: #ece7df;
+  border-color: #4a5564;
+}
+.ghost:hover:not(:disabled) {
+  background: #232830;
+  border-color: #5c6675;
+}
+button:disabled,
+.button:disabled,
+.ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.action-status { margin: 0; }
 .page { padding: 16px 18px 32px; }
 .filters, .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .filters { margin-bottom: 12px; }

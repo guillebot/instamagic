@@ -8,6 +8,8 @@ import {
 } from "../curatePickUx";
 import { lifecycleLabel } from "../lifecycle";
 import { displayPreviewUrl, publishVariantLabel } from "../publishPresentation";
+import { ActionStatus, PendingButtonLabel, useBriefStatus } from "../actionButton";
+import { countNewHashtags, hashtagSuccessMessage } from "../hashtagFeedback";
 import { ActionLabel, KeyHint } from "../KeyHint";
 import type { CaptionItem, CurationPick, QueueItem } from "../types";
 
@@ -54,6 +56,7 @@ export function CuratePickModal({
   const [tags, setTags] = useState<string[]>(() => [...pick.suggested_tags]);
   const [tagInput, setTagInput] = useState("");
   const [error, setError] = useState("");
+  const { status: hashtagStatus, setStatus: setHashtagStatus, clearStatus: clearHashtagStatus } = useBriefStatus();
 
   useEffect(() => {
     setCaptionId(preferredCaptionId(pick));
@@ -61,8 +64,9 @@ export function CuratePickModal({
     setTags([...pick.suggested_tags]);
     setTagInput("");
     setError("");
+    clearHashtagStatus();
     dialogRef.current?.focus();
-  }, [pick.id]);
+  }, [pick.id, clearHashtagStatus]);
 
   const hashtagSuggest = useMutation({
     mutationFn: () =>
@@ -70,13 +74,19 @@ export function CuratePickModal({
         method: "POST",
         body: JSON.stringify({ confirmed: geminiPolicy !== "manual_only" }),
       }),
-    onSuccess: (body) => {
+    onMutate: () => {
+      clearHashtagStatus();
+      return { previousTags: tags };
+    },
+    onSuccess: (body, _vars, context) => {
       const merged = [...tags];
       for (const raw of body.tags ?? []) {
         const name = raw.trim().replace(/^#/, "").toLowerCase();
         if (name && !merged.includes(name)) merged.push(name);
       }
+      const added = countNewHashtags(context?.previousTags ?? tags, body.tags ?? []);
       setTags(merged.slice(0, 12));
+      setHashtagStatus(hashtagSuccessMessage(added));
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "Hashtag suggestion failed."),
   });
@@ -313,9 +323,14 @@ export function CuratePickModal({
                   disabled={hashtagSuggest.isPending}
                   onClick={() => hashtagSuggest.mutate()}
                 >
-                  Suggest
+                  <PendingButtonLabel
+                    pending={hashtagSuggest.isPending}
+                    pendingLabel="Suggesting…"
+                    label="Suggest"
+                  />
                 </button>
               </div>
+              {hashtagStatus ? <ActionStatus message={hashtagStatus} /> : null}
               <div className="curate-tag-chips">
                 {tags.map((tag) => (
                   <button

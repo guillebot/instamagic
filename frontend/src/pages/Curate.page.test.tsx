@@ -113,6 +113,7 @@ const LIBRARY: LibraryItem = {
 };
 
 let picksState: CurationPick[];
+let resolveCurateHashtags: ((value: { tags: string[] }) => void) | null = null;
 
 function installApiMock() {
   mockApi.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -150,6 +151,11 @@ function installApiMock() {
       picksState = picksState.map((row) => (row.id === pickId ? { ...row, status: "suggested" } : row));
       return picksState.find((row) => row.id === pickId);
     }
+    if (path.includes("/hashtags") && method === "POST") {
+      return new Promise((resolve) => {
+        resolveCurateHashtags = resolve;
+      });
+    }
     throw new Error(`Unhandled api path: ${path}`);
   });
 }
@@ -184,6 +190,7 @@ function curateDialog() {
 
 beforeEach(() => {
   picksState = BATCH.picks.map((row) => ({ ...row }));
+  resolveCurateHashtags = null;
   installApiMock();
 });
 
@@ -207,6 +214,20 @@ describe("Curate picks workspace", () => {
     expect(curateDialog()).not.toBeInTheDocument();
     await user.click(tile("b"));
     await waitFor(() => expect(curateDialog()).toBeInTheDocument());
+  });
+
+  it("shows Suggest hashtag loading state and result in the curate modal", async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    await waitFor(() => expect(tile("a")).toBeInTheDocument());
+    await user.click(tile("a"));
+    await waitFor(() => expect(curateDialog()).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Suggest" }));
+    const busy = await screen.findByRole("button", { name: /Suggesting/ });
+    expect(busy).toBeDisabled();
+    expect(busy.querySelector(".spinner")).toBeTruthy();
+    resolveCurateHashtags?.({ tags: ["newtag"] });
+    await waitFor(() => expect(screen.getByText("Added 1 hashtag")).toBeInTheDocument());
   });
 
   it("shows visible keyboard hints on curate modal actions", async () => {
