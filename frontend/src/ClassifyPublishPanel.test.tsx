@@ -136,3 +136,82 @@ describe("ClassifyPublishPanel Post now", () => {
     expect(alerts.length).toBeGreaterThan(0);
   });
 });
+
+describe("ClassifyPublishPanel Queue feedback", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => cleanup());
+
+  const blocked = {
+    ...readiness,
+    publishing_allowed: false,
+    publishing_reasons: ["A human safe or excellent rating is required."],
+  };
+
+  function renderPanel(image: Partial<ImageItem>, onStatus = vi.fn()) {
+    calls.length = 0;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = (img: Partial<ImageItem>) => (
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ClassifyPublishPanel
+            image={{ id: IMG, relative_path: "a.jpg", ...img } as ImageItem}
+            geminiPolicy="text_only"
+            onImageUpdated={() => undefined}
+            onStatus={onStatus}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const utils = render(view(image));
+    return { ...utils, onStatus, rerenderImage: (img: Partial<ImageItem>) => utils.rerender(view(img)) };
+  }
+
+  function baseResponses(ready: unknown) {
+    responses = {
+      [`GET /api/images/${IMG}/publish-readiness`]: ready,
+      [`GET /api/images/${IMG}/captions`]: captions,
+      "GET /api/instagram/status": { configured: true, token_configured: true, business_account_id_configured: true },
+      "GET /api/health/status": { checks: [{ id: "instagram", status: "ok", detail: "" }] },
+    };
+  }
+
+  it("shows why Queue is disabled inline and Q explains instead of doing nothing", async () => {
+    baseResponses(blocked);
+    const { onStatus } = renderPanel({ human_rating: null, model_state: "REVIEW", has_approved_blur: true });
+    const reason = await screen.findByText(/Queue unavailable: A human/);
+    expect(reason.textContent).toMatch(/Queue unavailable: A human safe or excellent rating is required/);
+    expect(reason.textContent).toMatch(/Rate 3 \(safe\) or 4 \(excellent\) first/);
+    expect((screen.getByRole("button", { name: "Queue" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(window, { key: "q" });
+    expect(onStatus).toHaveBeenCalledWith("Can't queue: A human safe or excellent rating is required.");
+    expect(screen.getByText("Can't queue: A human safe or excellent rating is required.")).toBeTruthy();
+    expect(publishCalls()).toHaveLength(0);
+  });
+
+  it("re-reads readiness when the rating or blur state changes, then Q queues with a toast", async () => {
+    baseResponses(blocked);
+    const { onStatus, rerenderImage } = renderPanel({ human_rating: null, model_state: "REVIEW" });
+    await screen.findByTestId("queue-reason");
+    responses[`GET /api/images/${IMG}/publish-readiness`] = readiness;
+    responses["POST /api/queue"] = { id: "q1", state: "CANDIDATE" };
+    rerenderImage({ human_rating: "safe", model_state: "REVIEW", has_approved_blur: true });
+    const queue = await screen.findByRole("button", { name: "Queue" });
+    await waitFor(() => expect((queue as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByTestId("queue-reason")).toBeNull();
+    fireEvent.keyDown(window, { key: "q" });
+    await waitFor(() => expect(onStatus).toHaveBeenCalledWith("Added to the publishing queue."));
+    expect(publishCalls().map((c) => c.path)).toEqual(["/api/queue"]);
+  });
+
+  it("shows the exact backend refusal when queueing fails", async () => {
+    baseResponses(readiness);
+    responses["POST /api/queue"] = new ApiError(409, "DO_NOT_POST requires verified blur unlock before publishing.");
+    renderPanel({ human_rating: "safe", model_state: "DO_NOT_POST" });
+    const queue = await screen.findByRole("button", { name: "Queue" });
+    await waitFor(() => expect((queue as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(queue);
+    expect(
+      await screen.findByText("Blocked (409): DO_NOT_POST requires verified blur unlock before publishing."),
+    ).toBeTruthy();
+  });
+});
