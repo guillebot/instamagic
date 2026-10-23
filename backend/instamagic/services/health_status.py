@@ -36,6 +36,9 @@ from sqlalchemy import select, text
 
 HealthLevel = Literal["ok", "warning", "down", "unknown"]
 _CHECK_TIMEOUT = 0.9
+# The Instagram check runs a live Graph probe (cached 5 min); a cold probe takes ~1-2s.
+_CHECK_TIMEOUT_OVERRIDES: dict[str, float] = {"instagram": 4.0}
+_MAX_CHECK_TIMEOUT = max([_CHECK_TIMEOUT, *_CHECK_TIMEOUT_OVERRIDES.values()])
 _CACHE_SECONDS = 25
 
 _cache_lock = threading.Lock()
@@ -496,11 +499,11 @@ def _check_data_disk(settings: Settings) -> HealthCheck:
         )
 
 
-def _run_bounded(fn, *args) -> HealthCheck:
+def _run_bounded(fn, *args, timeout: float = _CHECK_TIMEOUT) -> HealthCheck:
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(fn, *args)
         try:
-            return future.result(timeout=_CHECK_TIMEOUT)
+            return future.result(timeout=timeout)
         except FuturesTimeoutError:
             return HealthCheck(
                 id=getattr(fn, "__name__", "check").removeprefix("_check_"),
@@ -530,7 +533,9 @@ def _run_check(fn, settings: Settings) -> HealthCheck:
         "data_disk": "Data disk",
     }
     try:
-        result = _run_bounded(fn, settings)
+        result = _run_bounded(
+            fn, settings, timeout=_CHECK_TIMEOUT_OVERRIDES.get(check_id, _CHECK_TIMEOUT)
+        )
         if result.id == "check" and check_id:
             return HealthCheck(id=check_id, label=labels.get(check_id, check_id), status=result.status, detail=result.detail)
         return result
@@ -567,7 +572,7 @@ def build_health_status(settings: Settings, *, bypass_cache: bool = False) -> di
     with ThreadPoolExecutor(max_workers=len(check_fns)) as pool:
         futures = [pool.submit(_run_check, fn, settings) for fn in check_fns]
         for future in futures:
-            checks.append(future.result(timeout=_CHECK_TIMEOUT + 0.2))
+            checks.append(future.result(timeout=_MAX_CHECK_TIMEOUT + 0.2))
 
     overall = _worst([check.status for check in checks])
     payload = {
