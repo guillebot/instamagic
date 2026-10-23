@@ -166,6 +166,15 @@ describe("Review classify modal", () => {
     expect(router.state.location.search).toContain("image=img2");
   });
 
+  it("shows visible keyboard hints on classify modal actions", async () => {
+    renderReview("/?image=img2&open=1");
+    await waitFor(() => expect(classifyDialog()).toBeInTheDocument());
+    const dialog = classifyDialog()!;
+    const shortcuts = Array.from(dialog.querySelectorAll("kbd.key-hint")).map((el) => el.textContent);
+    expect(shortcuts).toEqual(expect.arrayContaining(["1", "2", "3", "4", "C", "B", "Q", "Esc", "←", "→"]));
+    expect(dialog.querySelector(".modal-shortcut-legend")).toBeTruthy();
+  });
+
   it("stays closed after close when the grid items refresh", async () => {
     const user = userEvent.setup();
     renderReview("/?image=img1");

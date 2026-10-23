@@ -8,6 +8,9 @@ import {
 } from "../curatePickUx";
 import { lifecycleLabel } from "../lifecycle";
 import { displayPreviewUrl, publishVariantLabel } from "../publishPresentation";
+import { ActionStatus, PendingButtonLabel, useBriefStatus } from "../actionButton";
+import { countNewHashtags, hashtagSuccessMessage } from "../hashtagFeedback";
+import { ActionLabel, KeyHint } from "../KeyHint";
 import {
   defaultStoryShareValue,
   StoryShareControls,
@@ -58,6 +61,7 @@ export function CuratePickModal({
   const [tags, setTags] = useState<string[]>(() => [...pick.suggested_tags]);
   const [tagInput, setTagInput] = useState("");
   const [error, setError] = useState("");
+  const { status: hashtagStatus, setStatus: setHashtagStatus, clearStatus: clearHashtagStatus } = useBriefStatus();
   const scheduleDefaults = useQuery({
     queryKey: ["posting-schedule-config"],
     queryFn: () => api<PostingScheduleConfig>("/api/posting-schedule/config"),
@@ -71,6 +75,7 @@ export function CuratePickModal({
     setTags([...pick.suggested_tags]);
     setTagInput("");
     setError("");
+    clearHashtagStatus();
     if (scheduleDefaults.data) {
       setStoryShare(
         defaultStoryShareValue({
@@ -81,7 +86,7 @@ export function CuratePickModal({
       );
     }
     dialogRef.current?.focus();
-  }, [pick.id, scheduleDefaults.data]);
+  }, [pick.id, scheduleDefaults.data, clearHashtagStatus]);
 
   const hashtagSuggest = useMutation({
     mutationFn: () =>
@@ -89,13 +94,19 @@ export function CuratePickModal({
         method: "POST",
         body: JSON.stringify({ confirmed: geminiPolicy !== "manual_only" }),
       }),
-    onSuccess: (body) => {
+    onMutate: () => {
+      clearHashtagStatus();
+      return { previousTags: tags };
+    },
+    onSuccess: (body, _vars, context) => {
       const merged = [...tags];
       for (const raw of body.tags ?? []) {
         const name = raw.trim().replace(/^#/, "").toLowerCase();
         if (name && !merged.includes(name)) merged.push(name);
       }
+      const added = countNewHashtags(context?.previousTags ?? tags, body.tags ?? []);
       setTags(merged.slice(0, 12));
+      setHashtagStatus(hashtagSuccessMessage(added));
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "Hashtag suggestion failed."),
   });
@@ -238,6 +249,8 @@ export function CuratePickModal({
     setCaptionText(caption.text);
   }
 
+  const prevPickId = neighborPickId(orderedPicks, pick.id, -1);
+  const nextPickId = neighborPickId(orderedPicks, pick.id, 1);
   const previewUrl = displayPreviewUrl(pick.image, false);
   const safetyLine =
     pick.image.blur_unlock_message ??
@@ -260,11 +273,26 @@ export function CuratePickModal({
             #{pick.sort_order} · Gemini #{pick.gemini_rank} · local {pick.local_score}
             {navIndex >= 0 ? ` · ${navIndex + 1}/${orderedPicks.length}` : ""}
           </p>
-          <p className="muted curate-shortcuts">
-            ← → prev/next · Q queue · R reject · S skip · Esc close
-          </p>
+          <div className="curate-modal-nav">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || !prevPickId}
+              onClick={() => prevPickId && onNavigateToPick(prevPickId)}
+            >
+              <ActionLabel label="Prev" shortcut="←" />
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || !nextPickId}
+              onClick={() => nextPickId && onNavigateToPick(nextPickId)}
+            >
+              <ActionLabel label="Next" shortcut="→" />
+            </button>
+          </div>
           <button type="button" className="ghost" onClick={onClose}>
-            Close
+            <ActionLabel label="Close" shortcut="Esc" />
           </button>
         </div>
         <div className="curate-modal-body">
@@ -315,9 +343,14 @@ export function CuratePickModal({
                   disabled={hashtagSuggest.isPending}
                   onClick={() => hashtagSuggest.mutate()}
                 >
-                  Suggest
+                  <PendingButtonLabel
+                    pending={hashtagSuggest.isPending}
+                    pendingLabel="Suggesting…"
+                    label="Suggest"
+                  />
                 </button>
               </div>
+              {hashtagStatus ? <ActionStatus message={hashtagStatus} /> : null}
               <div className="curate-tag-chips">
                 {tags.map((tag) => (
                   <button
@@ -357,7 +390,7 @@ export function CuratePickModal({
                 disabled={busy || !isPendingCuratePick(pick)}
                 onClick={() => void runQueue()}
               >
-                {busy ? "Working…" : "Send to queue"}
+                {busy ? "Working…" : <ActionLabel label="Send to queue" shortcut="Q" />}
               </button>
               <button
                 type="button"
@@ -365,14 +398,37 @@ export function CuratePickModal({
                 disabled={busy || !isPendingCuratePick(pick)}
                 onClick={() => void runReject()}
               >
-                Reject
+                <ActionLabel label="Reject" shortcut="R" />
               </button>
               <button type="button" className="ghost" disabled={busy} onClick={runSkip}>
-                Skip
+                <ActionLabel label="Skip" shortcut="S" />
               </button>
             </div>
           </div>
         </div>
+        <p className="modal-shortcut-legend" aria-label="Keyboard shortcuts">
+          <span className="legend-item">
+            <KeyHint>←</KeyHint>
+            <KeyHint>→</KeyHint>
+            prev/next
+          </span>
+          <span className="legend-item">
+            <KeyHint>Q</KeyHint>
+            queue
+          </span>
+          <span className="legend-item">
+            <KeyHint>R</KeyHint>
+            reject
+          </span>
+          <span className="legend-item">
+            <KeyHint>S</KeyHint>
+            skip
+          </span>
+          <span className="legend-item">
+            <KeyHint>Esc</KeyHint>
+            close
+          </span>
+        </p>
       </div>
     </div>
   );

@@ -119,7 +119,34 @@ a { color: inherit; }
   text-decoration: none;
 }
 .nav a.active, .button { background: #d7a15f; color: #1b140c; border-color: #d7a15f; }
-.ghost { background: transparent; }
+/* Secondary action: outlined in the accent colour so it reads as intentional next to the
+   filled orange primary (.button), never as a stray black default button. */
+.ghost {
+  background: transparent;
+  color: #e9c48f;
+  border-color: #d7a15f;
+  cursor: pointer;
+}
+.ghost:hover:not(:disabled) {
+  background: rgba(215, 161, 95, 0.14);
+  color: #f3d7ae;
+  border-color: #e9b877;
+}
+.ghost:focus-visible {
+  outline: 2px solid #d7a15f;
+  outline-offset: 2px;
+}
+.ghost .key-hint {
+  border-color: rgba(215, 161, 95, 0.45);
+  color: #e9c48f;
+}
+button:disabled,
+.button:disabled,
+.ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.action-status { margin: 0; }
 .page { padding: 16px 18px 32px; }
 .filters, .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .filters { margin-bottom: 12px; }
@@ -809,7 +836,59 @@ input, select, textarea {
   align-items: center;
   justify-content: space-between;
 }
-.curate-shortcuts { font-size: 11px; margin: 0; }
+.key-hint {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 650;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  line-height: 1.25;
+  border-radius: 5px;
+  border: 1px solid #4a5564;
+  background: #14181e;
+  color: #ece7df;
+  vertical-align: middle;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+.button .key-hint,
+.button.active-rating .key-hint {
+  background: rgba(27, 20, 12, 0.22);
+  border-color: rgba(27, 20, 12, 0.35);
+  color: #1b140c;
+  box-shadow: none;
+}
+.button.danger .key-hint {
+  background: rgba(0, 0, 0, 0.28);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #f5ebe3;
+}
+.modal-shortcut-legend {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid #343b45;
+  font-size: 12px;
+  color: #b7b1a8;
+}
+.modal-shortcut-legend .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.modal-shortcut-legend .key-hint {
+  margin-left: 0;
+}
+.curate-modal-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
 .curate-modal-body {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);

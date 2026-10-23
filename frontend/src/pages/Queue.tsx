@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { ActionStatus, PendingButtonLabel, useBriefStatus } from "../actionButton";
 import { ApiError, api } from "../api";
+import { countNewHashtags, hashtagSuccessMessage } from "../hashtagFeedback";
 import { lifecycleLabel } from "../lifecycle";
 import { publishConfirmPreviewUrl } from "../publishPresentation";
 import {
@@ -162,7 +164,7 @@ function QueueCard({
   instagramReady: boolean;
   carouselPick: string[];
   onToggleCarouselPick: (imageId: string) => void;
-  onApprove: () => void;
+  onApprove: () => void | Promise<void>;
   onChanged: () => void;
 }) {
   const [selectedCaptionId, setSelectedCaptionId] = useState<string | null>(item.caption_id ?? null);
@@ -170,6 +172,10 @@ function QueueCard({
   const [confirmed, setConfirmed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+  const [approveBusy, setApproveBusy] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
+  const { status: hashtagStatus, setStatus: setHashtagStatus, clearStatus: clearHashtagStatus } = useBriefStatus();
   const [storyShare, setStoryShare] = useState(() => storyShareFromQueueItem(item));
 
   useEffect(() => {
@@ -201,6 +207,17 @@ function QueueCard({
         method: "POST",
         body: JSON.stringify({ confirmed: true }),
       }),
+    onMutate: () => {
+      clearHashtagStatus();
+      setError("");
+      return { previousTags: suggestedTags };
+    },
+    onSuccess: (body, _vars, context) => {
+      const tags = body.tags ?? [];
+      setSuggestedTags(tags);
+      const added = countNewHashtags(context?.previousTags ?? [], tags);
+      setHashtagStatus(hashtagSuccessMessage(added));
+    },
     onError: (err) => setError(err instanceof ApiError ? err.message : "Hashtag request failed."),
   });
 
@@ -241,12 +258,21 @@ function QueueCard({
   });
 
   async function saveEdit(caption: CaptionItem) {
-    await api(`/api/captions/${caption.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: "modified", text: editText }),
-    });
-    setEditingId(null);
-    await captions.refetch();
+    if (saveBusy) return;
+    setSaveBusy(true);
+    setError("");
+    try {
+      await api(`/api/captions/${caption.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "modified", text: editText }),
+      });
+      setEditingId(null);
+      await captions.refetch();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not save caption.");
+    } finally {
+      setSaveBusy(false);
+    }
   }
 
   const canPublish =
@@ -316,17 +342,48 @@ function QueueCard({
             </label>
           ) : null}
           {item.state === "CANDIDATE" ? (
-            <button className="button" onClick={onApprove}>
-              Approve for publish
+            <button
+              type="button"
+              className="button"
+              disabled={approveBusy}
+              onClick={() => {
+                if (approveBusy) return;
+                setApproveBusy(true);
+                void Promise.resolve(onApprove()).finally(() => setApproveBusy(false));
+              }}
+            >
+              <PendingButtonLabel
+                pending={approveBusy}
+                pendingLabel="Approving…"
+                label="Approve for publish"
+              />
             </button>
           ) : null}
           {item.state !== "PUBLISHED" && item.state !== "PUBLISHING" ? (
             <>
-              <button className="button" onClick={() => generate.mutate()} disabled={generate.isPending}>
-                {generate.isPending ? "Generating…" : "Generate captions"}
+              <button
+                type="button"
+                className="button"
+                onClick={() => generate.mutate()}
+                disabled={generate.isPending}
+              >
+                <PendingButtonLabel
+                  pending={generate.isPending}
+                  pendingLabel="Generating…"
+                  label="Generate captions"
+                />
               </button>
-              <button className="ghost" onClick={() => hashtags.mutate()} disabled={hashtags.isPending}>
-                Suggest hashtags
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => hashtags.mutate()}
+                disabled={hashtags.isPending}
+              >
+                <PendingButtonLabel
+                  pending={hashtags.isPending}
+                  pendingLabel="Suggesting…"
+                  label="Suggest hashtags"
+                />
               </button>
             </>
           ) : null}
@@ -339,6 +396,7 @@ function QueueCard({
                 </figure>
               ) : null}
               <button
+                type="button"
                 className="button"
                 disabled={publish.isPending}
                 onClick={() => {
@@ -356,7 +414,11 @@ function QueueCard({
                   publish.mutate(selectedCaptionId);
                 }}
               >
-                {publish.isPending ? "Publishing…" : "Publish to Instagram"}
+                <PendingButtonLabel
+                  pending={publish.isPending}
+                  pendingLabel="Publishing…"
+                  label="Publish to Instagram"
+                />
               </button>
             </>
           ) : null}
@@ -367,7 +429,11 @@ function QueueCard({
               disabled={scheduleAuto.isPending}
               onClick={() => scheduleAuto.mutate()}
             >
-              Add to auto-slot schedule
+              <PendingButtonLabel
+                pending={scheduleAuto.isPending}
+                pendingLabel="Scheduling…"
+                label="Add to auto-slot schedule"
+              />
             </button>
           ) : null}
           {item.scheduled_at ? (
@@ -400,8 +466,9 @@ function QueueCard({
           </label>
         ) : null}
         {error ? <p className="error">{error}</p> : null}
-        {hashtags.data?.tags?.length ? (
-          <p className="muted">#{hashtags.data.tags.map((tag) => tag).join(" #")}</p>
+        {hashtagStatus ? <ActionStatus message={hashtagStatus} /> : null}
+        {suggestedTags.length ? (
+          <p className="muted">#{suggestedTags.map((tag) => tag).join(" #")}</p>
         ) : null}
         <div className="caption-pick">
           {captions.data?.map((caption) => (
@@ -423,8 +490,13 @@ function QueueCard({
                 )}
                 <span className="row">
                   {editingId === caption.id ? (
-                    <button className="ghost" type="button" onClick={() => void saveEdit(caption)}>
-                      Save
+                    <button
+                      className="ghost"
+                      type="button"
+                      disabled={saveBusy}
+                      onClick={() => void saveEdit(caption)}
+                    >
+                      <PendingButtonLabel pending={saveBusy} pendingLabel="Saving…" label="Save" />
                     </button>
                   ) : (
                     <button
