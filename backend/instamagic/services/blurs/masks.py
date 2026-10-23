@@ -100,6 +100,24 @@ def _local_coords_grid(
     return lx, ly
 
 
+def _antialias_width_norm(min_axis: float, pixels: float = 1.5) -> float:
+    return pixels / max(min_axis, 1e-6)
+
+
+def _hard_mask_from_normalized_dist(dist: np.ndarray, min_axis: float) -> np.ndarray:
+    """Uniform 1.0 inside shape; ~1px linear antialias at the boundary only."""
+    aa = _antialias_width_norm(min_axis)
+    mask = np.zeros(dist.shape, dtype=np.float32)
+    inner = 1.0 - aa
+    solid = dist <= inner
+    ring = (dist > inner) & (dist <= 1.0 + aa)
+    mask[solid] = 1.0
+    if np.any(ring):
+        t = (dist[ring] - inner) / max(2.0 * aa, 1e-6)
+        mask[ring] = np.clip(1.0 - t, 0.0, 1.0)
+    return mask
+
+
 def _feather_mask_from_normalized_dist(
     dist: np.ndarray, feather: int, min_axis: float
 ) -> np.ndarray:
@@ -160,6 +178,11 @@ def _normalized_shape_dist(size: tuple[int, int], window: BlurWindow) -> tuple[n
 
 def feathered_shape_mask(size: tuple[int, int], window: BlurWindow) -> Image.Image:
     """L mask with opaque core and cosine feather band (clipped to image bounds)."""
+    edge_mode = getattr(window, "edge_mode", "soft") or "soft"
+    if edge_mode == "hard":
+        dist, min_axis = _normalized_shape_dist(size, window)
+        mask = _hard_mask_from_normalized_dist(dist, min_axis)
+        return Image.fromarray((mask * 255.0).astype(np.uint8), mode="L")
     if (
         window.shape == "ellipse"
         and window.rotation_deg == 0.0
@@ -186,8 +209,12 @@ def feathered_shape_mask(size: tuple[int, int], window: BlurWindow) -> Image.Ima
 
 def core_mask_array(size: tuple[int, int], window: BlurWindow) -> np.ndarray:
     """Boolean core (opaque interior) for containment and integrity checks."""
-    feather = max(0, int(window.feather))
+    edge_mode = getattr(window, "edge_mode", "soft") or "soft"
     dist, min_axis = _normalized_shape_dist(size, window)
+    if edge_mode == "hard":
+        aa = _antialias_width_norm(min_axis, pixels=2.0)
+        return dist <= (1.0 - aa)
+    feather = max(0, int(window.feather))
     if feather <= 0:
         return dist <= 1.0
     inner = max(0.0, 1.0 - feather / max(min_axis, 1e-6))
@@ -275,6 +302,7 @@ def translate_window(window: BlurWindow, dx: float, dy: float) -> BlurWindow:
         strength=window.strength,
         rotation_deg=window.rotation_deg,
         corner_radius=window.corner_radius,
+        edge_mode=window.edge_mode,
     )
 
 
