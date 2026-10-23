@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from instamagic.config import get_settings
-from instamagic.db import session_factory
+from instamagic.db import dispose_engine, session_factory
 from instamagic.logging_config import get_logger
 from instamagic.models import JobStatus, ProcessingJob
 from instamagic.models.enums import JobKind
@@ -31,6 +31,41 @@ log = get_logger("worker.tasks")
 
 INSIGHTS_RESCHEDULE_SECONDS = int(timedelta(hours=6).total_seconds())
 
+_SCAN_DB_FAILURE_MESSAGE = (
+    "Library scan failed after a database connection error. "
+    "Start a new scan to continue; files already ingested are kept."
+)
+
+
+def _scan_failure_message(exc: BaseException) -> str:
+    from instamagic.services.db_errors import is_db_connection_error
+
+    if is_db_connection_error(exc):
+        return _SCAN_DB_FAILURE_MESSAGE
+    return "Library scan failed."
+
+
+def _mark_scan_job_failed(job_id: str, message: str, *, allow_failed_overwrite: bool = False) -> None:
+    dispose_engine(close=False)
+    session = session_factory()()
+    try:
+        job = session.get(ProcessingJob, UUID(job_id))
+        if job is None:
+            return
+        if job.status not in (JobStatus.RUNNING.value, JobStatus.QUEUED.value):
+            if not (allow_failed_overwrite and job.status == JobStatus.FAILED.value):
+                return
+        job.status = JobStatus.FAILED.value
+        job.error = message
+        job.detail = message[:512]
+        job.finished_at = datetime.now(UTC)
+        job.current_stage = None
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+
 
 def run_scan_job(library_id: str, job_id: str) -> None:
     settings = get_settings()
@@ -45,8 +80,20 @@ def run_scan_job(library_id: str, job_id: str) -> None:
             UUID(job_id),
         )
         log.info("scan_finished", library_id=library_id, job_id=job_id)
-    except Exception:
+    except Exception as exc:
         log.info("scan_failed", library_id=library_id, job_id=job_id)
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        from instamagic.services.db_errors import is_db_connection_error
+
+        db_error = is_db_connection_error(exc)
+        _mark_scan_job_failed(
+            job_id,
+            _scan_failure_message(exc),
+            allow_failed_overwrite=db_error,
+        )
         raise
     finally:
         session.close()
