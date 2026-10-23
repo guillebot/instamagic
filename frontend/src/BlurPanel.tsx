@@ -58,6 +58,12 @@ function blurToRect(blur: BlurItem): BlurRect {
   };
 }
 
+/** CSS border-radius for a cover overlay (saved cover or the in-progress draft). */
+export function coverBorderRadius(shape: string | null | undefined, cornerRadius: number | null | undefined, scale: number): string {
+  if (shape === "rectangle") return `${Math.max(0, (cornerRadius ?? 0) * scale)}px`;
+  return "50%";
+}
+
 export function blurVerificationLabel(
   image: Pick<ImageItem, "model_state" | "blur_unlock_status" | "blur_unlock_message">,
   {
@@ -726,10 +732,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
               : { x: blur.x, y: blur.y, width: blur.width, height: blur.height, rotation_deg: blur.rotation_deg ?? 0 };
           const css = cropToCss({ x: live.x, y: live.y, width: live.width, height: live.height }, layout);
           const rot = live.rotation_deg;
-          const radiusPx =
-            blur.shape === "ellipse"
-              ? "50%"
-              : `${Math.max(0, (blur.corner_radius ?? 0) * layout.scale)}px`;
+          const radiusPx = coverBorderRadius(blur.shape, blur.corner_radius, layout.scale);
           const selected = selectedId === blur.id;
           const handles: BlurResizeMode[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
           const liveSigma = Math.max(4, Math.round((blur.radius ?? 12) * layout.scale));
@@ -784,12 +787,20 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
         })}
         {draftCss ? (
           <div
-            className="blur-ellipse draft"
+            className={`blur-ellipse draft ${shapeMode}`}
+            data-testid="blur-draft"
+            data-shape={shapeMode}
             style={{
               left: draftCss.left,
               top: draftCss.top,
               width: draftCss.width,
               height: draftCss.height,
+              // The draft must preview the selected shape, not the default ellipse CSS.
+              borderRadius: coverBorderRadius(
+                shapeMode,
+                shapeMode === "rectangle" ? cornerRadius : 0,
+                layout?.scale ?? 1,
+              ),
             }}
           />
         ) : null}
