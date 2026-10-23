@@ -158,3 +158,18 @@ def test_instagram_username_mismatch_is_down(client, monkeypatch) -> None:
     assert "other.user" in ig["detail"]
     get_settings.cache_clear()
     reset_health_cache()
+
+
+def test_instagram_check_gets_longer_timeout_than_default(monkeypatch) -> None:
+    import time as _time
+
+    from instamagic.services import health_status as hs
+
+    def slow_instagram(_settings):
+        _time.sleep(hs._CHECK_TIMEOUT + 0.3)
+        return hs.HealthCheck(id="instagram", label="Instagram", status="ok", detail="@foto.sch (live)")
+
+    slow_instagram.__name__ = "_check_instagram"
+    result = hs._run_check(slow_instagram, None)
+    assert result.status == "ok"
+    assert result.detail == "@foto.sch (live)"
