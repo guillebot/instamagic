@@ -510,6 +510,9 @@ def execute_curation_batch(
         pixels_by_id=pixels_by_id,
         thinking_budget=thinking_budget,
         held_back=held_back,
+        eligible_ids=list(by_id),
+        covering_blur_fn=covering_blur_fn,
+        scope_image_ids=image_ids,
     )
 
 
@@ -528,6 +531,9 @@ def _execute_curation_gemini(
     pixels_by_id: dict[str, bytes],
     thinking_budget: int,
     held_back: int = 0,
+    eligible_ids: list[str] | None = None,
+    covering_blur_fn=None,
+    scope_image_ids: list[UUID] | None = None,
 ) -> CurationBatch:
     chunk_results: list[CurationResult] = []
     blocked_ids: list[str] = []
@@ -593,6 +599,20 @@ def _execute_curation_gemini(
             preferred_caption_id=preferred.id if preferred else None,
         )
         session.add(pick)
+
+    if covering_blur_fn is not None:
+        from instamagic.services.recommendations.curate_skipped import record_skipped
+
+        record_skipped(
+            session,
+            batch,
+            eligible_ids=eligible_ids if eligible_ids is not None else list(by_id),
+            shortlist_ids=[str(item.image.id) for item in shortlist],
+            picked_ids=[draft.image_id for draft in ordered_drafts],
+            blocked_ids=blocked_ids,
+            covering_blur_fn=covering_blur_fn,
+            image_ids=scope_image_ids,
+        )
 
     batch.status = CurationBatchStatus.READY.value
     batch.finished_at = datetime.now(UTC)
@@ -773,6 +793,9 @@ def run_curation(
         pixels_by_id=pixels_by_id,
         thinking_budget=thinking_budget,
         held_back=held_back,
+        eligible_ids=list(by_id),
+        covering_blur_fn=covering_blur_fn,
+        scope_image_ids=image_ids,
     )
 
 

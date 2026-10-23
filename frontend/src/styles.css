@@ -864,6 +864,13 @@ input, select, textarea {
 .curate-batch-row { flex-wrap: wrap; margin-bottom: 12px; }
 .curate-tabs { flex-wrap: wrap; margin-bottom: 8px; align-items: center; }
 .curate-held-back { margin-left: auto; font-size: 12px; }
+.curate-sort { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.curate-since-line { margin: 4px 0; font-weight: 600; }
+.curate-why-items { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.curate-why-item { display: flex; gap: 12px; align-items: center; }
+.curate-why-thumb { width: 72px; height: 72px; flex: none; overflow: hidden; border-radius: 6px; display: flex; }
+.curate-why-thumb img, .curate-why-thumb .tile-empty { width: 100%; height: 100%; object-fit: cover; }
+.curate-why-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .curate-grid-scroll { height: calc(100vh - 340px); min-height: 280px; }
 .curate-grid-row {
   display: grid;

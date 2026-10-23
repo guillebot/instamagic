@@ -52,7 +52,7 @@ from instamagic.models import (
     SafetyState,
     TagSource,
 )
-from instamagic.models.enums import JobKind
+from instamagic.models.enums import CurationBatchStatus, JobKind
 from instamagic.schemas.dto import (
     AttestIn,
     BlurCreateIn,
@@ -212,6 +212,7 @@ from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, snapshot_queues
 from instamagic.services.recommendations.candidates_bulk import bulk_enqueue, bulk_reject
 from instamagic.services.recommendations.curate import (
     active_curation_in_flight,
+    collect_eligible,
     queue_picks,
     reconcile_stale_curation_batches,
     run_curation,
@@ -3150,7 +3151,9 @@ def _curation_batch_summary(batch: CurationBatch) -> dict[str, object]:
     }
 
 
-def _curation_pick_out(session: Session, pick: CurationPick) -> dict[str, object]:
+def _curation_pick_out(
+    session: Session, pick: CurationPick, rated_at: dict[str, datetime] | None = None
+) -> dict[str, object]:
     try:
         reasons = json.loads(pick.reasons_json or "[]")
     except json.JSONDecodeError:
@@ -3173,6 +3176,7 @@ def _curation_pick_out(session: Session, pick: CurationPick) -> dict[str, object
         "suggested_tags": tags,
         "status": pick.status,
         "preferred_caption_id": pick.preferred_caption_id,
+        "rated_at": (rated_at or {}).get(str(pick.image_id)),
         "image": _image_out(session, image).model_dump(mode="json"),
         "captions": [_caption_out(row) for row in captions],
     }
@@ -3182,10 +3186,72 @@ def _curation_batch_out(session: Session, batch: CurationBatch) -> dict[str, obj
     picks = session.scalars(
         select(CurationPick).where(CurationPick.batch_id == batch.id).order_by(CurationPick.sort_order.asc())
     ).all()
+    from instamagic.services.recommendations.curate_skipped import latest_rating_times
+
+    rated_at = latest_rating_times(session, [pick.image_id for pick in picks])
     summary = _curation_batch_summary(batch)
     summary["pick_count"] = len(picks)
-    summary["picks"] = [_curation_pick_out(session, pick) for pick in picks]
+    summary["picks"] = [_curation_pick_out(session, pick, rated_at) for pick in picks]
+    summary["skipped"] = _curation_skipped_out(session, batch, picks)
     return summary
+
+
+def _skipped_thumbnail_url(image: Image | None) -> str | None:
+    """Thumbnail for the why-not list: flagged images only ever get the blurred render."""
+    if image is None:
+        return None
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        if not image.blurs:
+            return None  # never the original for a DO_NOT_POST image
+        thumb_v = _image_blur_version(image, "blurs/thumb.jpg")
+        return f"/api/derivatives/{image.id}/blurred-thumbnail?v={thumb_v}"
+    if any(blur.approved for blur in image.blurs or []):
+        thumb_v = _image_blur_version(image, "blurs/thumb.jpg")
+        return f"/api/derivatives/{image.id}/blurred-thumbnail?v={thumb_v}"
+    return f"/api/derivatives/{image.id}/thumbnail" if image.thumbnail_path else None
+
+
+def _curation_skipped_out(
+    session: Session, batch: CurationBatch, picks: list[CurationPick]
+) -> dict[str, object] | None:
+    from instamagic.services.recommendations.curate_skipped import load_skipped, record_skipped
+
+    data = load_skipped(batch)
+    if data is None and batch.status == CurationBatchStatus.READY.value:
+        latest_id = session.scalar(select(CurationBatch.id).order_by(CurationBatch.created_at.desc()).limit(1))
+        if latest_id == batch.id:
+            # Batches created before this feature: explain once, against today's state.
+            eligible = collect_eligible(
+                session,
+                library_id=batch.library_id,
+                folder=batch.folder,
+                image_ids=None,
+                covering_blur_fn=_has_approved_covering_blur,
+            )
+            picked = [str(pick.image_id) for pick in picks]
+            record_skipped(
+                session,
+                batch,
+                eligible_ids=[str(item.image.id) for item in eligible],
+                shortlist_ids=picked,
+                picked_ids=picked,
+                covering_blur_fn=_has_approved_covering_blur,
+            )
+            data = load_skipped(batch)
+            if data is not None:
+                data["computed_later"] = True
+                batch.skipped_json = json.dumps(data, ensure_ascii=False, default=str)
+                session.commit()
+    if data is None:
+        return None
+    for item in data.get("items", []):
+        try:
+            image = session.get(Image, UUID(str(item.get("image_id"))))
+        except ValueError:
+            image = None
+        item["thumbnail_url"] = _skipped_thumbnail_url(image)
+        item["filename"] = image.relative_path.rsplit("/", 1)[-1] if image and image.relative_path else None
+    return data
 
 
 def _curation_derivative_bytes(session: Session, settings: Settings, image: Image) -> bytes | None:

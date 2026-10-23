@@ -203,8 +203,38 @@ export type CurationPick = {
   suggested_tags: string[];
   status: string;
   preferred_caption_id: string | null;
+  rated_at?: string | null;
   image: ImageItem;
   captions: CaptionItem[];
+};
+
+/** One safe-rated image that a curation run did not pick, with a plain reason (read-only). */
+export type CurationSkippedItem = {
+  image_id: string;
+  code: string;
+  reason: string;
+  rating: string | null;
+  model_state: string | null;
+  rated_at: string | null;
+  since_last_run: boolean;
+  duplicate_of: string | null;
+  queue_note: string | null;
+  blur_editor: boolean;
+  coverage_percent?: number;
+  coverage_threshold_percent?: number;
+  thumbnail_url: string | null;
+  filename: string | null;
+};
+
+export type CurationSkipped = {
+  since: string | null;
+  since_rated: number;
+  since_picked: number;
+  since_skipped: number;
+  total: number;
+  truncated: boolean;
+  computed_later?: boolean;
+  items: CurationSkippedItem[];
 };
 
 export type CurationBatchSummary = {
@@ -223,6 +253,7 @@ export type CurationBatchSummary = {
 
 export type CurationBatch = CurationBatchSummary & {
   picks: CurationPick[];
+  skipped?: CurationSkipped | null;
 };
 
 export type QueueSlide = {

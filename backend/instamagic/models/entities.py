@@ -630,6 +630,8 @@ class CurationBatch(Base):
     detail: Mapped[str | None] = mapped_column(String(512), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    # Read-only "why not picked" explanation computed when the run finished (JSON).
+    skipped_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     picks: Mapped[list[CurationPick]] = relationship(back_populates="batch", order_by="CurationPick.sort_order")
