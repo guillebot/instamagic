@@ -217,6 +217,7 @@ export type CurationBatchSummary = {
   created_at: string;
   finished_at: string | null;
   pick_count: number;
+  held_back?: number;
 };
 
 export type CurationBatch = CurationBatchSummary & {
