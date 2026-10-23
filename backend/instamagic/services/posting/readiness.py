@@ -23,6 +23,9 @@ def _window_from_blur(blur) -> BlurWindow:
         reason=blur.reason,
         covers_unsafe=blur.covers_unsafe,
         strength=blur.strength,
+        rotation_deg=blur.rotation_deg,
+        corner_radius=blur.corner_radius,
+        edge_mode=blur.edge_mode,
     )
 
 

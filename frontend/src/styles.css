@@ -446,6 +446,20 @@ input, select, textarea {
   overflow: visible;
   cursor: crosshair;
 }
+.blur-sharp-source {
+  opacity: 0;
+  pointer-events: none;
+}
+.blur-live-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  background: #0d0f12;
+}
 .blur-ellipse.draft {
   border-style: dashed;
   border-color: #a8d4e8;

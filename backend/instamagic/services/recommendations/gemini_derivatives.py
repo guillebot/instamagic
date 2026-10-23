@@ -31,6 +31,7 @@ def _window_from_row(blur: BlurCover) -> BlurWindow:
         covers_unsafe=blur.covers_unsafe,
         rotation_deg=blur.rotation_deg,
         corner_radius=blur.corner_radius,
+        edge_mode=blur.edge_mode,
     )
 
 

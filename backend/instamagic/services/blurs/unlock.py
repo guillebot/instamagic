@@ -59,6 +59,7 @@ def blur_geometry_hash(blurs: list[BlurCover]) -> str:
             "strength": blur.strength,
             "rotation_deg": round(blur.rotation_deg, 4),
             "corner_radius": round(blur.corner_radius, 4),
+            "edge_mode": blur.edge_mode,
         }
         for blur in approved
     ]
