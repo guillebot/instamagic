@@ -16,8 +16,6 @@ type Props = {
   pick: CurationPick;
   orderedPicks: CurationPick[];
   geminiPolicy: string;
-  scheduleAfterQueue: boolean;
-  onScheduleAfterQueueChange: (value: boolean) => void;
   busy: boolean;
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
@@ -41,8 +39,6 @@ export function CuratePickModal({
   pick,
   orderedPicks,
   geminiPolicy,
-  scheduleAfterQueue,
-  onScheduleAfterQueueChange,
   busy,
   onClose,
   onBusyChange,
@@ -113,19 +109,11 @@ export function CuratePickModal({
     setError("");
     try {
       await saveDraft();
-      const queued = await api<QueueItem[]>("/api/curation/queue", {
+      // Only adds a CANDIDATE queue row; approving/scheduling/publishing stays a separate human step.
+      await api<QueueItem[]>("/api/curation/queue", {
         method: "POST",
         body: JSON.stringify({ pick_ids: [pick.id] }),
       });
-      if (scheduleAfterQueue && queued[0]) {
-        await api(`/api/queue/${queued[0].id}/schedule`, {
-          method: "POST",
-          body: JSON.stringify({
-            mode: "auto_slot",
-            caption_id: captionId,
-          }),
-        });
-      }
       onPickPatched({ ...pick, status: "queued", suggested_tags: tags });
       onToast("Sent to publish queue", async () => {
         const undone = await api<CurationPick>(`/api/curation/picks/${pick.id}/undo-queue`, {
@@ -340,14 +328,6 @@ export function CuratePickModal({
                 </button>
               </div>
             </div>
-            <label className="row curate-schedule-opt">
-              <input
-                type="checkbox"
-                checked={scheduleAfterQueue}
-                onChange={(event) => onScheduleAfterQueueChange(event.target.checked)}
-              />
-              Add to auto-slot schedule after sending
-            </label>
             {error ? <p className="error">{error}</p> : null}
             <div className="curate-modal-actions">
               <button

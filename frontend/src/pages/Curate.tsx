@@ -334,7 +334,6 @@ export function CurationPicksWorkspace({
   const [filterTab, setFilterTab] = useState<CurateFilterTab>("pending");
   const [modalPickId, setModalPickId] = useState<string | null>(null);
   const [modalBusy, setModalBusy] = useState(false);
-  const [scheduleAfterQueue, setScheduleAfterQueue] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
   const scrollSnapshotRef = useRef(0);
@@ -507,7 +506,13 @@ export function CurationPicksWorkspace({
               type="button"
               className="ghost"
               onClick={() => {
-                void toast.undo?.().then(() => setToast(null));
+                void toast.undo?.().then(
+                  () => setToast(null),
+                  (err: unknown) =>
+                    setToast({
+                      message: err instanceof Error && err.message ? `Undo failed: ${err.message}` : "Undo failed.",
+                    }),
+                );
               }}
             >
               Undo
@@ -520,8 +525,6 @@ export function CurationPicksWorkspace({
           pick={modalPick}
           orderedPicks={filtered}
           geminiPolicy={geminiPolicy}
-          scheduleAfterQueue={scheduleAfterQueue}
-          onScheduleAfterQueueChange={setScheduleAfterQueue}
           busy={modalBusy}
           onClose={closeModal}
           onBusyChange={setModalBusy}

@@ -22,7 +22,9 @@ from instamagic.models import (
     HumanRating,
     Image,
     ImageTag,
+    InstagramPost,
     ProcessingJob,
+    PublishAttempt,
     PublishingQueueItem,
     QueueState,
     SafetyState,
@@ -878,6 +880,16 @@ def undo_queued_pick(session: Session, pick: CurationPick) -> CurationPick:
         return pick
     if item.state != QueueState.CANDIDATE.value:
         raise NotAllowed("Queue item is already approved or published; cannot undo send.")
+    if item.scheduled_at is not None or item.approved_at is not None or item.published_at is not None:
+        raise NotAllowed("Queue item was already scheduled or approved; cannot undo send.")
+    has_attempts = session.scalar(
+        select(func.count()).select_from(PublishAttempt).where(PublishAttempt.queue_item_id == item.id)
+    )
+    has_post = session.scalar(
+        select(func.count()).select_from(InstagramPost).where(InstagramPost.queue_item_id == item.id)
+    )
+    if has_attempts or has_post:
+        raise NotAllowed("Queue item has publish history; cannot undo send.")
     session.delete(item)
     pick.status = CurationPickStatus.ACCEPTED.value
     session.commit()
