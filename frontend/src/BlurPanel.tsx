@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api";
 import {
@@ -49,7 +49,39 @@ function blurToRect(blur: BlurItem): BlurRect {
   };
 }
 
+export function blurVerificationLabel(
+  image: Pick<ImageItem, "model_state" | "blur_unlock_status" | "blur_unlock_message">,
+  { verifying, hasCovers, approved }: { verifying: boolean; hasCovers: boolean; approved: boolean },
+): { tone: "ok" | "pending" | "error" | "info"; text: string } | null {
+  if (verifying) return { tone: "pending", text: "Verifying blurred render…" };
+  if (image.model_state === "DO_NOT_POST") {
+    switch (image.blur_unlock_status) {
+      case "verified":
+        // The server only reports SAFE · BLURRED while the verified geometry still matches.
+        if ((image.blur_unlock_message ?? "").startsWith("SAFE · BLURRED")) {
+          return { tone: "ok", text: "SAFE · BLURRED (verified) — only the blurred version can be published." };
+        }
+        return { tone: "error", text: "Covers changed since verification — approve (Enter/A) to re-verify. Still blocked." };
+      case "pending":
+        return { tone: "pending", text: "Verifying blurred render…" };
+      case "failed":
+        return {
+          tone: "error",
+          text: `Verification failed — ${image.blur_unlock_message || "flagged areas are not covered"}. Still blocked.`,
+        };
+      default:
+        return hasCovers
+          ? { tone: "info", text: "Not verified yet — approve (Enter/A) to verify the blurred render." }
+          : { tone: "info", text: "Blocked (DO_NOT_POST) — add covers over the flagged areas, then approve to verify." };
+    }
+  }
+  if (approved) return { tone: "ok", text: "Covers approved — only the blurred version will be published." };
+  if (hasCovers) return { tone: "info", text: "Covers not approved yet — Enter/A approves the set." };
+  return null;
+}
+
 export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Props) {
+  const queryClient = useQueryClient();
   const blurs = useQuery({
     queryKey: ["blurs", image.id],
     queryFn: () => api<BlurItem[]>(`/api/images/${image.id}/blurs`),
@@ -79,6 +111,12 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   const previewUrl = items.find((item) => item.preview_url)?.preview_url ?? null;
   const approved = items.some((item) => item.approved);
   const isDoNotPost = image.model_state === "DO_NOT_POST";
+  const [verifying, setVerifying] = useState(false);
+
+  function notifyChanged() {
+    void queryClient.invalidateQueries({ queryKey: ["publish-readiness", image.id] });
+    onChanged?.(image.id);
+  }
 
   useEffect(() => {
     setDraft(null);
@@ -119,7 +157,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       });
       setStrength(next);
       await blurs.refetch();
-      onChanged?.(image.id);
+      notifyChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not update blur strength.");
     } finally {
@@ -129,11 +167,12 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
 
   async function approve() {
     setBusy(true);
+    setVerifying(isDoNotPost);
     setError("");
     try {
       await api(`/api/images/${image.id}/blurs/approve`, { method: "POST" });
       await blurs.refetch();
-      onChanged?.(image.id);
+      notifyChanged();
       onStatus?.(
         isDoNotPost
           ? image.blur_unlock_message ?? "Blur verification finished — check result and rate safe when ready."
@@ -142,6 +181,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not approve blur covers.");
     } finally {
+      setVerifying(false);
       setBusy(false);
     }
   }
@@ -155,7 +195,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
         body: JSON.stringify({ strength }),
       });
       await blurs.refetch();
-      onChanged?.(image.id);
+      notifyChanged();
       onStatus?.("Suggested covers from local model — review and approve.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not suggest blur covers.");
@@ -203,7 +243,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     try {
       await api(`/api/images/${image.id}/blurs/${blurId}`, { method: "PATCH", body: JSON.stringify(patch) });
       await blurs.refetch();
-      onChanged?.(image.id);
+      notifyChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not update blur region.");
     } finally {
@@ -218,7 +258,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       await api(`/api/images/${image.id}/blurs/${blurId}`, { method: "DELETE" });
       setSelectedId(null);
       await blurs.refetch();
-      onChanged?.(image.id);
+      notifyChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not delete blur region.");
     } finally {
@@ -257,7 +297,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       });
       setDraft(null);
       await blurs.refetch();
-      onChanged?.(image.id);
+      notifyChanged();
       onStatus?.("Blur region added — approve when covers look right.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not add a blur region.");
@@ -504,9 +544,19 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             Enter/A approves the set.
           </p>
         )}
-        {image.blur_unlock_message ? (
-          <p className={image.blur_unlock_status === "verified" ? "help" : "error"}>{image.blur_unlock_message}</p>
-        ) : null}
+        {(() => {
+          const label = blurVerificationLabel(image, { verifying, hasCovers: items.length > 0, approved });
+          if (!label) return null;
+          return (
+            <p
+              className={label.tone === "error" ? "error blur-verify-state" : "help blur-verify-state"}
+              data-testid="blur-verify-state"
+              role={label.tone === "error" ? "alert" : "status"}
+            >
+              <strong>{label.text}</strong>
+            </p>
+          );
+        })()}
         <div className="row">
           <label>
             Shape{" "}

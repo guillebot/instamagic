@@ -69,7 +69,17 @@ export function ClassifyPublishPanel({
 }) {
   const queryClient = useQueryClient();
   const readiness = useQuery({
-    queryKey: ["publish-readiness", image.id],
+    // Gate inputs are part of the key so a rating, blur approve/verify or crop approve
+    // always re-reads server readiness instead of keeping a stale "blocked" answer.
+    queryKey: [
+      "publish-readiness",
+      image.id,
+      image.human_rating ?? null,
+      image.model_state ?? null,
+      image.blur_unlock_status ?? null,
+      image.has_approved_blur ?? null,
+      image.has_approved_crop ?? null,
+    ],
     queryFn: () => api<ImagePublishReadiness>(`/api/images/${image.id}/publish-readiness`),
   });
   const captions = useQuery({
@@ -162,12 +172,22 @@ export function ClassifyPublishPanel({
       const targetEl = event.target as HTMLElement | null;
       if (targetEl && ["INPUT", "TEXTAREA", "SELECT"].includes(targetEl.tagName)) return;
       event.preventDefault();
-      if (queueGate.ok && busy === "") void queueOnly();
+      if (busy !== "") {
+        onStatus("Still working on the previous action…");
+        return;
+      }
+      if (!queueGate.ok) {
+        const message = `Can't queue: ${queueGate.reason}`;
+        setError(message);
+        onStatus(message);
+        return;
+      }
+      void queueOnly();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image.id, queueGate.ok, busy, confirmPostOpen]);
+  }, [image.id, queueGate.ok, queueGate.reason, busy, confirmPostOpen]);
 
   async function refreshAll() {
     await Promise.all([
@@ -202,7 +222,9 @@ export function ClassifyPublishPanel({
       onStatus("Added to the publishing queue.");
       await refreshAll();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not queue.");
+      const message = describeError(err, "Could not queue");
+      setError(message);
+      onStatus(message);
     } finally {
       setBusy("");
     }
@@ -368,6 +390,7 @@ export function ClassifyPublishPanel({
           type="button"
           className="button"
           title={queueGate.reason || "Queue (Q)"}
+          aria-describedby={queueGate.ok ? undefined : `queue-reason-${image.id}`}
           disabled={!queueGate.ok || busy !== ""}
           onClick={() => void queueOnly()}
         >
@@ -402,6 +425,14 @@ export function ClassifyPublishPanel({
           Post now
         </button>
       </div>
+      {ready && !queueGate.ok && queueGate.reason ? (
+        <p className="help classify-gate-reason" id={`queue-reason-${image.id}`} data-testid="queue-reason">
+          Queue unavailable: {queueGate.reason}
+          {!image.human_rating && !ready.published_at
+            ? " Rate 3 (safe) or 4 (excellent) first — rating moves to the next photo; ← comes back."
+            : ""}
+        </p>
+      ) : null}
       {!connectivity.ok && !connectivity.loading ? (
         <p className="error classify-ig-disconnected" role="alert">
           {connectivity.reason}{" "}
