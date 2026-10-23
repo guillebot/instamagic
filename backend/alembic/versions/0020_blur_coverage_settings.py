@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0019_blur_coverage_settings"
-down_revision = "0018_story_publish"
+revision = "0020_blur_coverage_settings"
+down_revision = "0019_blur_edge_mode"
 branch_labels = None
 depends_on = None
 

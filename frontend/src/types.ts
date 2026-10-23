@@ -77,6 +77,7 @@ export type BlurItem = {
   rotation_deg?: number;
   corner_radius?: number;
   feather: number;
+  edge_mode?: "hard" | "soft";
   radius: number;
   strength: string;
   reason: string;

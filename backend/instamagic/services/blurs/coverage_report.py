@@ -46,6 +46,7 @@ def window_from_cover(blur: BlurCover) -> BlurWindow:
         covers_unsafe=blur.covers_unsafe,
         rotation_deg=blur.rotation_deg,
         corner_radius=blur.corner_radius,
+        edge_mode=getattr(blur, "edge_mode", None) or "soft",
     )
 
 

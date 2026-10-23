@@ -10,6 +10,7 @@ import {
   resizeBlur,
   snapRotation,
 } from "./blurGeometry";
+import { defaultEdgeMode } from "./blurEdgeMode";
 import { containedLayout, cropToCss, type ContainedLayout, type CropRect } from "./cropGeometry";
 import type {
   BlurCoverageRegion,
@@ -419,7 +420,11 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   }, [captureKeys, isDoNotPost, image.id, saveQueue]);
 
   /** Optimistically apply an edit and queue a latest-wins save (debounced unless delayMs=0). */
-  function patchBlur(blurId: string, patch: Partial<BlurRect>, delayMs?: number) {
+  function patchBlur(
+    blurId: string,
+    patch: Partial<BlurRect> & { edge_mode?: "hard" | "soft" },
+    delayMs?: number,
+  ) {
     setError("");
     // Drop any in-flight list refetch so an older server snapshot can't overwrite this edit.
     void queryClient.cancelQueries({ queryKey: ["blurs", image.id] });
@@ -474,6 +479,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           shape: shapeMode,
           corner_radius: shapeMode === "rectangle" ? cornerRadius : 0,
           rotation_deg: 0,
+          edge_mode: defaultEdgeMode(shapeMode),
           reason: shapeMode === "rectangle" ? "Manual rectangle cover." : "Manual ellipse cover.",
         }),
       });
@@ -634,6 +640,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   const displaySrc = !dirty && previewUrl ? previewUrl : baseSrc;
   const renderCurrent = !dirty && Boolean(previewUrl) && loadedSrc === previewUrl;
   const liveBlur = items.length > 0 && !renderCurrent;
+  const selectedBlur = selectedId ? items.find((row) => row.id === selectedId) : null;
 
   useEffect(() => {
     if (items.length === 0 || editDraft !== null || saving) return;
@@ -879,6 +886,22 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
               />
             </label>
           ) : null}
+          {selectedBlur ? (
+            <label>
+              Edge{" "}
+              <select
+                value={selectedBlur.edge_mode ?? defaultEdgeMode(selectedBlur.shape)}
+                disabled={busy}
+                onChange={(event) => {
+                  const next = event.target.value as "hard" | "soft";
+                  patchBlur(selectedBlur.id, { edge_mode: next }, 0);
+                }}
+              >
+                <option value="hard">Hard edge</option>
+                <option value="soft">Soft edge</option>
+              </select>
+            </label>
+          ) : null}
           <label>
             Strength{" "}
             <select
@@ -920,7 +943,8 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           <ul className="blur-list">
             {items.map((blur) => (
               <li key={blur.id}>
-                {blur.shape} · σ {blur.radius.toFixed(1)} · feather {blur.feather}px
+                {blur.shape} · {blur.edge_mode ?? defaultEdgeMode(blur.shape)} · σ {blur.radius.toFixed(1)} · feather{" "}
+                {blur.feather}px
                 {blur.covers_unsafe ? " · covers unsafe" : " · manual"}
                 {blur.approved ? " · approved" : ""}
               </li>

@@ -153,3 +153,15 @@ def test_recheck_failure_is_named(client, app_env) -> None:
     report = client.get(f"/api/images/{image_id}/blur-coverage").json()
     assert report["verification"]["recheck"] == "fail"
     assert report["coverage_check"] == "pass"
+
+
+def test_hard_cover_counts_fully_in_coverage() -> None:
+    from dataclasses import replace
+
+    box = Box(100, 100, 120, 120)
+    soft = _window(80, 80, 160, 160, feather=29)
+    hard = replace(soft, edge_mode="hard")
+    soft_cov = region_coverage_rows([soft], [box], (400, 400))[0]["coverage"]
+    hard_cov = region_coverage_rows([hard], [box], (400, 400))[0]["coverage"]
+    assert hard_cov >= 0.99
+    assert hard_cov > soft_cov

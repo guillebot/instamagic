@@ -8,6 +8,11 @@ from instamagic.services.geometry import Box
 from PIL import Image, ImageFilter
 
 STRENGTHS = ("subtle", "standard", "strong")
+EDGE_MODES = ("hard", "soft")
+
+
+def default_edge_mode(shape: str) -> str:
+    return "hard" if shape == "rectangle" else "soft"
 
 # Sigma scales with the shorter side of the cover. Floor values stay high enough
 # that detail inside the region is not recognizable (not a beauty soft-focus).
@@ -37,6 +42,7 @@ class BlurWindow:
     strength: str = "standard"
     rotation_deg: float = 0.0
     corner_radius: float = 0.0
+    edge_mode: str = "soft"
 
     def as_box(self) -> Box:
         return Box(self.x, self.y, self.width, self.height)
@@ -68,6 +74,7 @@ def manual_blur(
     shape: str = "ellipse",
     rotation_deg: float = 0.0,
     corner_radius: float = 0.0,
+    edge_mode: str | None = None,
 ) -> BlurWindow:
     from instamagic.services.blurs.validate import validate_blur_geometry
 
@@ -76,6 +83,9 @@ def manual_blur(
     if box.width < 2 or box.height < 2:
         raise ValueError("Blur region is too small.")
     feather = _feather_for(box.width, box.height)
+    mode = edge_mode if edge_mode is not None else default_edge_mode(shape)
+    if mode not in EDGE_MODES:
+        raise ValueError("edge_mode must be hard or soft.")
     window = BlurWindow(
         x=box.x,
         y=box.y,
@@ -89,6 +99,7 @@ def manual_blur(
         strength=strength,
         rotation_deg=rotation_deg,
         corner_radius=corner_radius,
+        edge_mode=mode,
     )
     validate_blur_geometry(image_width, image_height, window)
     return window
@@ -117,6 +128,7 @@ def with_strength(window: BlurWindow, strength: str) -> BlurWindow:
         strength=strength,
         rotation_deg=window.rotation_deg,
         corner_radius=window.corner_radius,
+        edge_mode=window.edge_mode,
     )
 
 
@@ -196,8 +208,14 @@ def apply_blur_covers(image: Image.Image, covers: list[BlurWindow]) -> Image.Ima
     if not covers:
         return rgb.copy()
     pad = int(max(cover.radius for cover in covers) * 4) + max(cover.feather for cover in covers) + 8
-    padded = Image.new("RGB", (rgb.width + 2 * pad, rgb.height + 2 * pad))
-    padded.paste(rgb, (pad, pad))
+    use_reflect = any(getattr(cover, "edge_mode", "soft") == "hard" for cover in covers)
+    if use_reflect:
+        rgb_arr = np.asarray(rgb, dtype=np.uint8)
+        padded_arr = np.pad(rgb_arr, ((pad, pad), (pad, pad), (0, 0)), mode="reflect")
+        padded = Image.fromarray(padded_arr, mode="RGB")
+    else:
+        padded = Image.new("RGB", (rgb.width + 2 * pad, rgb.height + 2 * pad))
+        padded.paste(rgb, (pad, pad))
     result = padded.copy()
     by_radius: dict[float, list[BlurWindow]] = {}
     for cover in covers:
@@ -219,6 +237,7 @@ def apply_blur_covers(image: Image.Image, covers: list[BlurWindow]) -> Image.Ima
                 strength=cover.strength,
                 rotation_deg=cover.rotation_deg,
                 corner_radius=cover.corner_radius,
+                edge_mode=cover.edge_mode,
             )
             mask = feathered_shape_mask(padded.size, shifted)
             combined = _lighter_mask(combined, mask)
@@ -285,6 +304,7 @@ def _cover_for_unsafe(
             strength=strength,
             rotation_deg=0.0,
             corner_radius=0.0,
+            edge_mode="soft",
         )
         if covers_unsafe_boxes([candidate], [box], image_size=(image_width, image_height)):
             return candidate

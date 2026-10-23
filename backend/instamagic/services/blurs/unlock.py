@@ -58,6 +58,8 @@ def blur_geometry_hash(blurs: list[BlurCover]) -> str:
             "strength": blur.strength,
             "rotation_deg": round(blur.rotation_deg, 4),
             "corner_radius": round(blur.corner_radius, 4),
+            # Only non-default modes join the hash so existing (soft) unlock hashes stay valid.
+            **({"edge_mode": blur.edge_mode} if (blur.edge_mode or "soft") != "soft" else {}),
         }
         for blur in approved
     ]
@@ -87,6 +89,7 @@ def _approved_windows(image: Image) -> list[BlurWindow]:
             covers_unsafe=blur.covers_unsafe,
             rotation_deg=blur.rotation_deg,
             corner_radius=blur.corner_radius,
+            edge_mode=blur.edge_mode or "soft",
         )
         for blur in image.blurs
         if blur.approved

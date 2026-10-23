@@ -7,8 +7,8 @@ from typing import Any
 
 from instamagic.config import Settings
 from instamagic.models import BlurCover, Image, Library
-from instamagic.services.blurs.generator import BlurWindow, apply_blur_covers
 from instamagic.services.blurs import unlock as blur_unlock
+from instamagic.services.blurs.generator import BlurWindow, apply_blur_covers
 from instamagic.services.images.derivatives import oriented_rgb, read_image
 from instamagic.services.images.paths import safe_join
 from sqlalchemy.orm import Session
@@ -29,6 +29,7 @@ def _windows_from_blurs(blurs: list[BlurCover]) -> list[BlurWindow]:
             covers_unsafe=blur.covers_unsafe,
             rotation_deg=blur.rotation_deg,
             corner_radius=blur.corner_radius,
+            edge_mode=blur.edge_mode or "soft",
         )
         for blur in blurs
     ]
