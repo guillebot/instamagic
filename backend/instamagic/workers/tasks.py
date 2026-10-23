@@ -13,6 +13,7 @@ from instamagic.services.factory import (
     build_classifier,
     build_face_detector,
     build_gemini,
+    build_growth,
     build_instagram,
 )
 from instamagic.services.instagram.comment_inbox import sync_inbox_comments
@@ -166,6 +167,44 @@ def run_gemini_label_job_entry(processing_job_id: str) -> None:
         raise
     finally:
         session.close()
+
+
+def run_enrichment_batch_job() -> None:
+    """One background-enrichment batch on the gemini lane; always releases the kick lock."""
+    from instamagic.services.recommendations import enrichment
+
+    settings = get_settings()
+    connection = Redis.from_url(settings.redis_url)
+    session = session_factory()()
+    try:
+        deps = enrichment.EnrichmentDeps(
+            session_factory=session_factory,
+            label_provider=build_gemini(settings),
+            growth_provider=build_growth(settings),
+            preview_bytes_fn=lambda s, image: curation_derivative_bytes(s, settings, image),
+            policy=settings.gemini_image_policy,
+            account_voice=settings.account_voice,
+            thinking_budget=settings.gemini_label_thinking_budget,
+            max_output_tokens=settings.gemini_label_max_output_tokens,
+        )
+        summary = enrichment.run_enrichment_batch(
+            session,
+            deps,
+            redis=connection,
+            concurrency=settings.enrich_concurrency,
+            rpm=settings.enrich_rpm,
+            batch_size=settings.enrich_batch_size,
+        )
+        connection.set(enrichment.LAST_KEY, json.dumps(summary), ex=7 * 24 * 3600)
+    except Exception:
+        log.info("enrichment_batch_failed")
+        raise
+    finally:
+        session.close()
+        try:
+            connection.delete(enrichment.LOCK_KEY)
+        except Exception:
+            pass
 
 
 def sync_instagram_comments_job() -> None:

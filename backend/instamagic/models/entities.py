@@ -117,6 +117,10 @@ class Image(Base):
     gemini_label_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     gemini_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     gemini_mood: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    enrich_hashtags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enrich_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enrich_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    enrich_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blur_unlock_status: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
     blur_unlock_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blur_unlock_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -367,6 +371,9 @@ class PostingScheduleConfig(Base):
     story_border_color_default: Mapped[str] = mapped_column(String(16), default="black", server_default="black")
     blur_coverage_threshold: Mapped[int] = mapped_column(Integer, default=95, server_default="95")
     blur_region_padding_px: Mapped[int] = mapped_column(Integer, default=6, server_default="6")
+    enrichment_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    enrichment_paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    enrichment_daily_cap: Mapped[int] = mapped_column(Integer, default=400, server_default="400")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )

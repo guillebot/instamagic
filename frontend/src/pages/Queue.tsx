@@ -174,7 +174,7 @@ function QueueCard({
   const [editText, setEditText] = useState("");
   const [approveBusy, setApproveBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
+  const [suggestedTags, setSuggestedTags] = useState<string[]>(item.image.enrich_hashtags ?? []);
   const { status: hashtagStatus, setStatus: setHashtagStatus, clearStatus: clearHashtagStatus } = useBriefStatus();
   const [storyShare, setStoryShare] = useState(() => storyShareFromQueueItem(item));
 
@@ -205,7 +205,7 @@ function QueueCard({
     mutationFn: () =>
       api<{ tags: string[] }>(`/api/images/${item.image.id}/hashtags`, {
         method: "POST",
-        body: JSON.stringify({ confirmed: true }),
+        body: JSON.stringify({ confirmed: true, refresh: true }),
       }),
     onMutate: () => {
       clearHashtagStatus();

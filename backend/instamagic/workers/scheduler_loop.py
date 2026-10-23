@@ -24,6 +24,15 @@ def _run_scheduler_tick() -> int:
         return run_scheduler_job()
 
 
+def _kick_enrichment() -> None:
+    """Queue the next background-enrichment batch on the gemini lane (never blocks this thread)."""
+    from instamagic.config import get_settings
+    from instamagic.services.recommendations.enrichment import kick_enrichment
+
+    if kick_enrichment(get_settings().redis_url):
+        log.info("enrichment_kicked")
+
+
 def _run_forever() -> None:
     while True:
         try:
@@ -32,6 +41,10 @@ def _run_forever() -> None:
                 log.info("scheduled_publish_tick", published=count)
         except Exception:
             log.exception("scheduled_publish_tick_failed")
+        try:
+            _kick_enrichment()
+        except Exception:
+            log.info("enrichment_kick_failed")
         time.sleep(_INTERVAL_SECONDS)
 
 

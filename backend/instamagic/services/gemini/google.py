@@ -4,6 +4,7 @@ import httpx
 from instamagic.errors import (
     GeminiBlocked,
     GeminiEmpty,
+    GeminiRateLimited,
     GeminiTruncated,
     NotConfigured,
 )
@@ -185,6 +186,8 @@ class GoogleGeminiProvider:
                 response = httpx.post(url, headers=headers, json=body, timeout=self._timeout)
         except httpx.HTTPError:
             raise NotConfigured("Gemini request failed.") from None
+        if response.status_code == 429:
+            raise GeminiRateLimited("Gemini rate limit reached.")
         if response.status_code >= 400:
             raise NotConfigured("Gemini request failed.")
         return _extract_text(response.json())

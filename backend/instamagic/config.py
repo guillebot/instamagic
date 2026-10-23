@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     gemini_label_thinking_budget: int = 128
     gemini_curation_thinking_budget: int = 128
     gemini_label_max_output_tokens: int = 4096
+    # Background enrichment (labels + captions + hashtags for safe photos) on the gemini lane.
+    enrich_concurrency: int = 2
+    enrich_rpm: int = 30
+    enrich_batch_size: int = 12
     # Fail-closed: false by default. True only with AUTO_PUBLISH_ACK exact phrase.
     # Phase 2 still expects human Publish clicks; auto-fire is reserved and documented.
     auto_publish: bool = False
