@@ -5,10 +5,13 @@ import { ApiError, api } from "../api";
 import {
   chunkGridRows,
   columnCountForWidth,
+  curateSinceLastRunLine,
   curateTabCounts,
   filterCuratePicks,
   pickTileBadge,
+  sortCuratePicks,
   type CurateFilterTab,
+  type CuratePendingSort,
 } from "../curatePickUx";
 import { displayThumbnailUrl } from "../publishPresentation";
 import { acquireThumbSlot } from "../thumbQueue";
@@ -17,6 +20,7 @@ import type {
   CurationBatch,
   CurationBatchSummary,
   CurationPick,
+  CurationSkipped,
   JobItem,
   LibraryItem,
 } from "../types";
@@ -71,6 +75,57 @@ function CurateGridThumb({ src }: { src: string }) {
       onLoad={finish}
       onError={finish}
     />
+  );
+}
+
+function formatRatedAt(value: string | null): string {
+  if (!value) return "rating time unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `rated ${date.toLocaleString()}`;
+}
+
+/** Read-only list of safe-rated images this run did not pick, one plain reason each. */
+export function WhyNotPicked({ skipped }: { skipped: CurationSkipped | null | undefined }) {
+  if (!skipped) {
+    return <p className="muted">No explanation recorded for this batch. Run curation again to see why images were skipped.</p>;
+  }
+  if (skipped.items.length === 0) {
+    return <p className="muted">Every safe-rated image in scope was picked.</p>;
+  }
+  return (
+    <div className="curate-why-list" aria-label="Why not picked">
+      <p className="muted">
+        Explanation only — nothing here changes ratings, safety checks or the queue.
+        {skipped.computed_later ? " (Worked out after this run, against the current state.)" : ""}
+        {skipped.truncated ? ` Showing ${skipped.items.length} of ${skipped.total}.` : ""}
+      </p>
+      <ul className="curate-why-items">
+        {skipped.items.map((item) => (
+          <li key={item.image_id} className="curate-why-item" data-code={item.code}>
+            <span className="curate-why-thumb">
+              {item.thumbnail_url ? (
+                <CurateGridThumb src={item.thumbnail_url} />
+              ) : (
+                <span className="tile-empty" title="No blurred preview yet" />
+              )}
+            </span>
+            <span className="curate-why-text">
+              <strong>{item.reason}</strong>
+              <span className="muted">
+                {item.filename ?? item.image_id.slice(0, 8)} · {item.rating ?? "?"}
+                {item.model_state ? ` · ${item.model_state}` : ""} · {formatRatedAt(item.rated_at)}
+                {item.since_last_run ? " · new since last run" : ""}
+                {item.queue_note ? ` · ${item.queue_note}` : ""}
+              </span>
+              {item.blur_editor ? (
+                <a href={`/?image=${item.image_id}&open=1`}>Open blur editor</a>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -331,7 +386,8 @@ export function CurationPicksWorkspace({
   serverPickCount: number;
 }) {
   const [picks, setPicks] = useState<CurationPick[]>(() => [...batch.picks]);
-  const [filterTab, setFilterTab] = useState<CurateFilterTab>("pending");
+  const [filterTab, setFilterTab] = useState<CurateFilterTab | "why">("pending");
+  const [pendingSort, setPendingSort] = useState<CuratePendingSort>("score");
   const [modalPickId, setModalPickId] = useState<string | null>(null);
   const [modalBusy, setModalBusy] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -343,7 +399,13 @@ export function CurationPicksWorkspace({
     () => [...picks].sort((a, b) => a.sort_order - b.sort_order),
     [picks],
   );
-  const filtered = useMemo(() => filterCuratePicks(ordered, filterTab), [ordered, filterTab]);
+  const filtered = useMemo(() => {
+    if (filterTab === "why") return [];
+    const rows = filterCuratePicks(ordered, filterTab);
+    return filterTab === "pending" ? sortCuratePicks(rows, pendingSort) : rows;
+  }, [ordered, filterTab, pendingSort]);
+  const skipped = batch.skipped ?? null;
+  const sinceLine = curateSinceLastRunLine(skipped);
   const counts = useMemo(() => curateTabCounts(ordered), [ordered]);
   const modalPick = modalPickId ? ordered.find((row) => row.id === modalPickId) ?? null : null;
 
@@ -440,6 +502,26 @@ export function CurationPicksWorkspace({
             {label} ({counts[tab]})
           </button>
         ))}
+        <button
+          type="button"
+          className={filterTab === "why" ? "button" : "ghost"}
+          onClick={() => setFilterTab("why")}
+        >
+          Why not picked ({skipped ? skipped.total : 0})
+        </button>
+        {filterTab === "pending" ? (
+          <label className="curate-sort">
+            Sort{" "}
+            <select
+              aria-label="Sort pending picks"
+              value={pendingSort}
+              onChange={(event) => setPendingSort(event.target.value as CuratePendingSort)}
+            >
+              <option value="score">By score</option>
+              <option value="rated">Most recently rated</option>
+            </select>
+          </label>
+        ) : null}
         {heldBack > 0 ? <span className="muted curate-held-back">{heldBack} held back (near-duplicates)</span> : null}
       </div>
       {pendingNewCount > 0 ? (
@@ -450,8 +532,11 @@ export function CurationPicksWorkspace({
           </button>
         </div>
       ) : null}
+      {sinceLine ? <p className="curate-since-line">{sinceLine}</p> : null}
       {batch.detail ? <p className="muted">{batch.detail}</p> : null}
-      {filtered.length === 0 ? (
+      {filterTab === "why" ? (
+        <WhyNotPicked skipped={skipped} />
+      ) : filtered.length === 0 ? (
         <p className="muted">No picks in this tab.</p>
       ) : (
         <div className="grid-scroll curate-grid-scroll" ref={parentRef}>

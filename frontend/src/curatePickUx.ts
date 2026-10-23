@@ -1,4 +1,4 @@
-import type { CurationPick } from "./types";
+import type { CurationPick, CurationSkipped } from "./types";
 
 export type CurateFilterTab = "pending" | "queued" | "rejected" | "all";
 
@@ -72,4 +72,26 @@ export function chunkGridRows<T>(items: T[], columnCount: number): T[][] {
 
 export function columnCountForWidth(width: number, minTileWidth = 132): number {
   return Math.max(2, Math.floor(width / minTileWidth));
+}
+
+export type CuratePendingSort = "score" | "rated";
+
+/** Score order is the batch's own sort_order; "rated" puts the most recently rated first. */
+export function sortCuratePicks(picks: CurationPick[], mode: CuratePendingSort): CurationPick[] {
+  const rows = [...picks];
+  if (mode === "rated") {
+    return rows.sort((a, b) => {
+      const left = a.rated_at ?? "";
+      const right = b.rated_at ?? "";
+      if (left !== right) return left < right ? 1 : -1;
+      return a.sort_order - b.sort_order;
+    });
+  }
+  return rows.sort((a, b) => a.sort_order - b.sort_order);
+}
+
+/** "5 safe-rated since last run: 3 picked, 2 skipped" (null before the first run). */
+export function curateSinceLastRunLine(skipped: CurationSkipped | null | undefined): string | null {
+  if (!skipped || !skipped.since) return null;
+  return `${skipped.since_rated} safe-rated since last run: ${skipped.since_picked} picked, ${skipped.since_skipped} skipped`;
 }
