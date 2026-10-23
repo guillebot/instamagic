@@ -104,9 +104,33 @@ def test_curation_drafts_then_human_queues(client, app_env) -> None:
     queue = client.get("/api/queue").json()
     assert any(item["image"]["id"] == first["image"]["id"] for item in queue)
 
+    undone = client.post(f"/api/curation/picks/{first['id']}/undo-queue")
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["status"] in {"suggested", "accepted"}
+    refreshed_after_undo = client.get(f"/api/curation/{batch['id']}").json()
+    assert next(pick for pick in refreshed_after_undo["picks"] if pick["id"] == first["id"])["status"] in {
+        "suggested",
+        "accepted",
+    }
+    queue_after = client.get("/api/queue").json()
+    assert not any(item["image"]["id"] == first["image"]["id"] for item in queue_after)
+
+    # Once the queue row is approved, undo must refuse and keep the row.
+    requeued = client.post("/api/curation/queue", json={"pick_ids": [first["id"]]})
+    assert requeued.status_code == 200, requeued.text
+    item_id = requeued.json()[0]["id"]
+    approved = client.post(f"/api/queue/{item_id}/approve")
+    assert approved.status_code == 200, approved.text
+    refused = client.post(f"/api/curation/picks/{first['id']}/undo-queue")
+    assert refused.status_code == 409, refused.text
+    assert any(item["id"] == item_id for item in client.get("/api/queue").json())
+
 
 def test_curation_requires_auth(client) -> None:
     assert client.get("/api/curation").status_code == 401
+    assert (
+        client.post("/api/curation/picks/00000000-0000-0000-0000-000000000000/undo-queue").status_code == 401
+    )
     assert client.post("/api/curation", json={"limit": 4}).status_code == 401
 
 

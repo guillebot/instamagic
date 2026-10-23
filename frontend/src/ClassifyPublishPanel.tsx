@@ -1,20 +1,54 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, api } from "./api";
 import {
   canApproveFromReadiness,
   canPublishNowFromReadiness,
   canQueueFromReadiness,
   canScheduleFromReadiness,
+  instagramConnectivity,
   instagramHandle,
   pickDefaultCaption,
+  type HealthCheckLite,
+  type InstagramStatusLite,
 } from "./reviewPublish";
 import type { CaptionItem, ImageItem, ImagePublishReadiness, QueueItem } from "./types";
 
 type PublishOutcome = {
-  permalink?: string;
-  published_caption?: string;
+  permalink?: string | null;
+  published_caption?: string | null;
 };
+
+type PostPhase = "idle" | "queueing" | "approving" | "checking" | "publishing" | "done" | "error";
+
+const PHASE_LABEL: Record<PostPhase, string> = {
+  idle: "",
+  queueing: "Adding to the publishing queue…",
+  approving: "Approving queue item…",
+  checking: "Re-checking safety gates…",
+  publishing: "Publishing to Instagram… (this can take up to a minute)",
+  done: "Published.",
+  error: "",
+};
+
+function describeError(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    const kind =
+      err.status === 409 || err.status === 403
+        ? "Blocked"
+        : err.status === 401
+          ? "Session expired — sign in again"
+          : err.status === 422
+            ? "Invalid request"
+            : err.status >= 500
+              ? "Server error"
+              : "Failed";
+    return `${kind} (${err.status}): ${err.message}`;
+  }
+  if (err instanceof Error && err.message) return `${fallback}: ${err.message}`;
+  return fallback;
+}
 
 export function ClassifyPublishPanel({
   image,
@@ -43,6 +77,28 @@ export function ClassifyPublishPanel({
   const [scheduleAt, setScheduleAt] = useState("");
   const [confirmPostOpen, setConfirmPostOpen] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishOutcome | null>(null);
+  const [postPhase, setPostPhase] = useState<PostPhase>("idle");
+  const [postError, setPostError] = useState("");
+  const confirmRef = useRef<HTMLDivElement | null>(null);
+  const igStatus = useQuery({
+    queryKey: ["instagram-status"],
+    queryFn: () => api<InstagramStatusLite>("/api/instagram/status"),
+    staleTime: 20_000,
+    retry: 1,
+  });
+  const health = useQuery({
+    queryKey: ["health-status"],
+    queryFn: () => api<{ checks: HealthCheckLite[] }>("/api/health/status"),
+    staleTime: 20_000,
+    retry: 1,
+  });
+
+  useEffect(() => {
+    setConfirmPostOpen(false);
+    setPublishResult(null);
+    setPostPhase("idle");
+    setPostError("");
+  }, [image.id]);
 
   useEffect(() => {
     setSelectedCaptionId(pickDefaultCaption(captions.data));
@@ -51,13 +107,38 @@ export function ClassifyPublishPanel({
   const ready = readiness.data;
   const queueGate = canQueueFromReadiness(ready);
   const approveGate = canApproveFromReadiness(ready);
-  const scheduleGate = canScheduleFromReadiness(ready, selectedCaptionId);
-  const publishGate = canPublishNowFromReadiness(ready, selectedCaptionId);
+  const connectivity = instagramConnectivity(igStatus.data, health.data?.checks, {
+    statusError: igStatus.isError && !igStatus.data,
+  });
+  const scheduleBase = canScheduleFromReadiness(ready, selectedCaptionId);
+  const scheduleGate =
+    scheduleBase.ok && !connectivity.ok ? { ok: false, reason: connectivity.reason } : scheduleBase;
+  const publishGate = canPublishNowFromReadiness(ready, selectedCaptionId, connectivity);
   const target = instagramHandle(ready);
+  const posting = ["queueing", "approving", "checking", "publishing"].includes(postPhase);
+
+  // While the confirm step is open, Review hotkeys (1–4 rate+advance, arrows, Q, Esc close)
+  // must not fire underneath it. Capture on window runs before the bubbling handlers.
+  useEffect(() => {
+    if (!confirmPostOpen) return;
+    function onKeyCapture(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!posting) setConfirmPostOpen(false);
+        return;
+      }
+      if (event.key === "Tab" || event.key === "Enter" || event.key === " ") return;
+      event.stopPropagation();
+    }
+    window.addEventListener("keydown", onKeyCapture, true);
+    confirmRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    return () => window.removeEventListener("keydown", onKeyCapture, true);
+  }, [confirmPostOpen, posting]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key.toLowerCase() !== "q") return;
+      if (event.key.toLowerCase() !== "q" || confirmPostOpen) return;
       const targetEl = event.target as HTMLElement | null;
       if (targetEl && ["INPUT", "TEXTAREA", "SELECT"].includes(targetEl.tagName)) return;
       event.preventDefault();
@@ -66,12 +147,13 @@ export function ClassifyPublishPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image.id, queueGate.ok, busy]);
+  }, [image.id, queueGate.ok, busy, confirmPostOpen]);
 
   async function refreshAll() {
     await Promise.all([
       readiness.refetch(),
       captions.refetch(),
+      igStatus.refetch(),
       queryClient.invalidateQueries({ queryKey: ["queue"] }),
     ]);
   }
@@ -186,34 +268,54 @@ export function ClassifyPublishPanel({
     }
   }
 
+  function openPostConfirm() {
+    setPostError("");
+    setPostPhase("idle");
+    setPublishResult(null);
+    setConfirmPostOpen(true);
+  }
+
   async function publishNow() {
-    if (!ready?.queue_item_id || !selectedCaptionId) return;
+    if (!ready || !selectedCaptionId || !publishGate.ok) return;
     setBusy("publish");
     setError("");
+    setPostError("");
     try {
       let itemId = ready.queue_item_id;
-      if (ready.queue_state === "CANDIDATE") {
+      let state = ready.queue_state;
+      if (!itemId || state === "CANDIDATE") {
+        setPostPhase("queueing");
         const item = await ensureQueueItem();
         itemId = item.id;
-        await api(`/api/queue/${itemId}/approve`, { method: "POST" });
-      } else if (ready.queue_state !== "APPROVED" && ready.queue_state !== "FAILED") {
-        throw new ApiError(409, "Approve the queue item before publishing.");
+        state = item.state;
       }
-      const result = await api<QueueItem & { permalink?: string; published_caption?: string }>(
+      if (state === "CANDIDATE") {
+        setPostPhase("approving");
+        await api(`/api/queue/${itemId}/approve`, { method: "POST" });
+        state = "APPROVED";
+      }
+      // Re-read server gates right before publishing (blur/DO_NOT_POST may have changed).
+      setPostPhase("checking");
+      const fresh = (await readiness.refetch()).data;
+      const recheck = canPublishNowFromReadiness(fresh, selectedCaptionId, connectivity);
+      if (!recheck.ok) throw new ApiError(409, recheck.reason);
+      setPostPhase("publishing");
+      const result = await api<QueueItem & { permalink?: string | null; published_caption?: string | null }>(
         `/api/queue/${itemId}/publish`,
-        {
-        method: "POST",
-        body: JSON.stringify({ caption_id: selectedCaptionId }),
-      });
+        { method: "POST", body: JSON.stringify({ caption_id: selectedCaptionId }) },
+      );
       setPublishResult({ permalink: result.permalink, published_caption: result.published_caption });
-      onStatus("Published to Instagram.");
+      setPostPhase("done");
+      onStatus(result.permalink ? `Published to ${target}: ${result.permalink}` : `Published to ${target}.`);
       onImageUpdated({ id: image.id, queued: true, queue_state: "PUBLISHED" });
-      setConfirmPostOpen(false);
-      await refreshAll();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Publish failed.");
+      const message = describeError(err, "Publish failed");
+      setPostError(message);
+      setError(message);
+      setPostPhase("error");
     } finally {
       setBusy("");
+      void refreshAll().catch(() => undefined);
     }
   }
 
@@ -263,13 +365,26 @@ export function ClassifyPublishPanel({
         <button
           type="button"
           className="button"
-          title={publishGate.reason || "Post now"}
+          title={publishGate.reason || `Post now to ${target}`}
+          aria-describedby={publishGate.ok ? undefined : `post-now-reason-${image.id}`}
           disabled={!publishGate.ok || busy !== ""}
-          onClick={() => setConfirmPostOpen(true)}
+          onClick={openPostConfirm}
         >
           Post now
         </button>
       </div>
+      {!connectivity.ok && !connectivity.loading ? (
+        <p className="error classify-ig-disconnected" role="alert">
+          {connectivity.reason}{" "}
+          <Link to="/instagram" className="button">
+            Reconnect Instagram
+          </Link>
+        </p>
+      ) : !publishGate.ok && publishGate.reason ? (
+        <p className="help classify-gate-reason" id={`post-now-reason-${image.id}`}>
+          Post now unavailable: {publishGate.reason}
+        </p>
+      ) : null}
       <div className="row classify-publish-schedule">
         <input
           type="datetime-local"
@@ -330,22 +445,83 @@ export function ClassifyPublishPanel({
         </p>
       ) : null}
       {confirmPostOpen ? (
-        <div className="classify-post-confirm" role="dialog" aria-modal="true" aria-label="Confirm post">
-          <div className="classify-post-confirm-body">
-            <h3>Post now to {target}?</h3>
+        <div
+          className="overlay classify-post-confirm-overlay"
+          role="presentation"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!posting) setConfirmPostOpen(false);
+          }}
+        >
+          <div
+            ref={confirmRef}
+            className="dialog classify-post-confirm"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={`post-confirm-title-${image.id}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id={`post-confirm-title-${image.id}`}>Post now to {target}?</h3>
+            {postPhase !== "done" ? (
+              <p className="banner">
+                This publishes immediately and publicly to <strong>{target}</strong>. It cannot be undone from here.
+              </p>
+            ) : null}
             {previewSrc ? <img src={previewSrc} alt="" className="classify-post-preview" /> : null}
             <p className="classify-meta">
               {image.relative_path}
               {ready?.uses_approved_crop ? " · approved crop derivative" : " · full preview"}
+              {!ready?.queue_item_id ? " · will be queued and approved first" : ""}
             </p>
-            <p>{selectedCaption?.text ?? "No caption selected."}</p>
+            <p className="classify-post-caption">{selectedCaption?.text ?? "No caption selected."}</p>
+            {posting ? (
+              <p className="help" role="status" aria-live="polite">
+                <span className="spinner" aria-hidden="true" /> {PHASE_LABEL[postPhase]}
+              </p>
+            ) : null}
+            {postPhase === "done" ? (
+              <p className="classify-post-success" role="status">
+                Published to {target}.{" "}
+                {publishResult?.permalink ? (
+                  <a href={publishResult.permalink} target="_blank" rel="noreferrer">
+                    {publishResult.permalink}
+                  </a>
+                ) : (
+                  <span className="muted">Permalink not returned yet — check the Queue page.</span>
+                )}
+              </p>
+            ) : null}
+            {postPhase === "error" && postError ? (
+              <p className="error" role="alert">
+                {postError}
+              </p>
+            ) : null}
             <div className="row">
-              <button type="button" className="ghost" disabled={busy === "publish"} onClick={() => setConfirmPostOpen(false)}>
-                Cancel
-              </button>
-              <button type="button" className="button" disabled={busy === "publish"} onClick={() => void publishNow()}>
-                {busy === "publish" ? "Publishing…" : `Publish to ${target}`}
-              </button>
+              {postPhase === "done" ? (
+                <button type="button" className="button" data-autofocus onClick={() => setConfirmPostOpen(false)}>
+                  Close
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="ghost"
+                    data-autofocus
+                    disabled={posting}
+                    onClick={() => setConfirmPostOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={posting || !publishGate.ok}
+                    onClick={() => void publishNow()}
+                  >
+                    {posting ? "Publishing…" : postPhase === "error" ? `Retry publish to ${target}` : `Publish to ${target}`}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
