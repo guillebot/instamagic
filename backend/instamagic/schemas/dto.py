@@ -115,6 +115,8 @@ class PostingScheduleConfigIn(BaseModel):
     story_share_default: bool | None = None
     story_render_mode_default: str | None = Field(default=None, max_length=32)
     story_border_color_default: str | None = Field(default=None, max_length=16)
+    blur_coverage_threshold: int | None = Field(default=None, ge=60, le=100)
+    blur_region_padding_px: int | None = Field(default=None, ge=0, le=20)
 
 
 class RelatedAccountIn(BaseModel):

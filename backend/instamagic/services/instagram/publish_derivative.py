@@ -244,7 +244,7 @@ def ensure_publish_derivative(
     carousel_slide: bool = False,
 ) -> str:
     """Return a derivatives-relative JPEG path suitable for Meta to fetch."""
-    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(image):
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(session, image):
         raise NotAllowed("DO_NOT_POST requires verified blur unlock before publishing.")
     pending = blur_drawn_not_approved_reason(image)
     if pending:

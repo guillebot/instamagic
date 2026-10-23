@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { coverageCheckLines, missedHint } from "./BlurPanel";
-import type { BlurCoverageReport } from "./types";
+import { coverageCheckLines, coverageVsOriginalLine, detectorProbeLine, missedHint } from "./BlurPanel";
+import type { BlurCoverageReport, BlurDetectorProbe } from "./types";
 
 const base = (over: Partial<BlurCoverageReport> = {}): BlurCoverageReport => ({
   min_coverage: 0.95,
+  coverage_threshold_percent: 95,
   padding: 6,
   do_not_post: true,
   all_covered: false,
@@ -45,28 +46,51 @@ const base = (over: Partial<BlurCoverageReport> = {}): BlurCoverageReport => ({
   ...over,
 });
 
+const probePass: BlurDetectorProbe = {
+  passed: true,
+  top_score: 0.26,
+  detections: [],
+  model_name: "test",
+  detector_available: true,
+};
+
 describe("coverage feedback", () => {
-  it("names the coverage check, the percentage and the side to extend", () => {
-    const lines = coverageCheckLines(base());
-    expect(lines[0].tone).toBe("error");
-    expect(lines[0].text).toMatch(/Coverage check ✗ — 1 of 2 flagged areas under 95%: breast 64% \(extend ~27px up\)/);
-    expect(lines[1]).toEqual({ tone: "ok", text: expect.stringMatching(/Re-check on the blurred render ✓/) });
+  it("summarizes coverage vs original flagged areas with required percent", () => {
+    expect(coverageVsOriginalLine(base()).text).toMatch(/Coverage vs original flagged areas: 1\/2 ✗ \(needs 95%\)/);
+    const allOk = base({
+      regions: base().regions.map((row) => ({ ...row, covered: true, coverage: 0.99 })),
+    });
+    expect(coverageVsOriginalLine(allOk).text).toBe("Coverage vs original flagged areas: 2/2 ✓ (needs 95%)");
   });
 
-  it("names the re-check when the classifier still detects exposure on the blurred render", () => {
+  it("formats detector probe pass and fail lines", () => {
+    expect(detectorProbeLine(probePass, false).text).toBe("Detector on blurred image: PASS (top score 0.26)");
+    const fail: BlurDetectorProbe = {
+      ...probePass,
+      passed: false,
+      detections: [{ label: "FEMALE_BREAST_EXPOSED", score: 0.91, x: 0, y: 0, width: 10, height: 10 }],
+    };
+    expect(detectorProbeLine(fail, false).text).toMatch(/FAIL: breast 91%/);
+  });
+
+  it("names uncovered regions in the detail line", () => {
+    const lines = coverageCheckLines(base());
+    expect(lines[0].tone).toBe("error");
+    expect(lines[0].text).toMatch(/needs 95%/);
+    expect(lines[0].text).toMatch(/breast 64%/);
+  });
+
+  it("names the re-check when the classifier still detects exposure on approve", () => {
     const report = base({
       regions: base().regions.map((row) => ({ ...row, covered: true, coverage: 0.99 })),
       verification: { ...base().verification, recheck: "fail", classifier_detections: [{ label: "FEMALE_BREAST_EXPOSED" }] },
     });
     const lines = coverageCheckLines(report);
-    expect(lines[0].tone).toBe("ok");
-    expect(lines[1].text).toMatch(/Re-check on the blurred render ✗ — classifier still detects breast/);
+    expect(lines[1].text).toMatch(/Last approve re-check ✗/);
   });
 
-  it("never reports a re-check result for unsaved or unverified geometry", () => {
-    expect(coverageCheckLines(base(), true)[1].text).toMatch(/runs when you approve/);
-    const stale = base({ verification: { ...base().verification, current_geometry: false } });
-    expect(coverageCheckLines(stale)[1].text).toMatch(/runs when you approve/);
+  it("never reports a re-check result for unsaved geometry", () => {
+    expect(coverageCheckLines(base(), true)[1].text).toMatch(/Formal unlock/);
   });
 
   it("explains a thin core when no whole edge strip is missed", () => {

@@ -8,6 +8,12 @@ from datetime import datetime
 from typing import Any
 
 from instamagic.models import PostingScheduleConfig
+from instamagic.services.blurs.coverage_settings import (
+    DEFAULT_COVERAGE_THRESHOLD_PERCENT,
+    DEFAULT_REGION_PADDING_PX,
+    validate_padding_px,
+    validate_threshold_percent,
+)
 from sqlalchemy.orm import Session
 
 DEFAULT_TIMEZONE = "America/Buenos_Aires"
@@ -34,6 +40,8 @@ class ScheduleConfigView:
     story_share_default: bool
     story_render_mode_default: str
     story_border_color_default: str
+    blur_coverage_threshold: int
+    blur_region_padding_px: int
     updated_at: datetime | None
 
 
@@ -67,6 +75,8 @@ def get_or_create_config(session: Session) -> PostingScheduleConfig:
             story_share_default=False,
             story_render_mode_default="blur_backdrop",
             story_border_color_default="black",
+            blur_coverage_threshold=DEFAULT_COVERAGE_THRESHOLD_PERCENT,
+            blur_region_padding_px=DEFAULT_REGION_PADDING_PX,
         )
         session.add(row)
         session.commit()
@@ -88,6 +98,8 @@ def config_view(session: Session) -> ScheduleConfigView:
         story_share_default=bool(row.story_share_default),
         story_render_mode_default=row.story_render_mode_default,
         story_border_color_default=row.story_border_color_default,
+        blur_coverage_threshold=int(row.blur_coverage_threshold or DEFAULT_COVERAGE_THRESHOLD_PERCENT),
+        blur_region_padding_px=int(row.blur_region_padding_px or DEFAULT_REGION_PADDING_PX),
         updated_at=row.updated_at,
     )
 
@@ -103,6 +115,8 @@ def update_config(
     story_share_default: bool | None = None,
     story_render_mode_default: str | None = None,
     story_border_color_default: str | None = None,
+    blur_coverage_threshold: int | None = None,
+    blur_region_padding_px: int | None = None,
 ) -> ScheduleConfigView:
     row = get_or_create_config(session)
     if timezone is not None:
@@ -122,6 +136,10 @@ def update_config(
     if story_border_color_default is not None:
         color = story_border_color_default.strip().lower()
         row.story_border_color_default = color if color in {"black", "white"} else "black"
+    if blur_coverage_threshold is not None:
+        row.blur_coverage_threshold = validate_threshold_percent(blur_coverage_threshold)
+    if blur_region_padding_px is not None:
+        row.blur_region_padding_px = validate_padding_px(blur_region_padding_px)
     session.commit()
     return config_view(session)
 
@@ -136,5 +154,7 @@ def config_as_dict(view: ScheduleConfigView) -> dict[str, Any]:
         "story_share_default": view.story_share_default,
         "story_render_mode_default": view.story_render_mode_default,
         "story_border_color_default": view.story_border_color_default,
+        "blur_coverage_threshold": view.blur_coverage_threshold,
+        "blur_region_padding_px": view.blur_region_padding_px,
         "updated_at": view.updated_at,
     }

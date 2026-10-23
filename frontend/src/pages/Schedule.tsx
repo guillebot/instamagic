@@ -19,6 +19,8 @@ export function SchedulePage() {
   const [maxPosts, setMaxPosts] = useState(2);
   const [minGap, setMinGap] = useState(4);
   const [storyDefault, setStoryDefault] = useState(false);
+  const [blurCoverageThreshold, setBlurCoverageThreshold] = useState(95);
+  const [blurRegionPadding, setBlurRegionPadding] = useState(6);
 
   const saveConfig = useMutation({
     mutationFn: () =>
@@ -31,6 +33,8 @@ export function SchedulePage() {
           weekday_slots: config.data?.weekday_slots,
           paused: config.data?.paused,
           story_share_default: storyDefault,
+          blur_coverage_threshold: blurCoverageThreshold,
+          blur_region_padding_px: blurRegionPadding,
         }),
       }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["posting-schedule-config"] }),
@@ -59,6 +63,8 @@ export function SchedulePage() {
     setMaxPosts(config.data.max_posts_per_day);
     setMinGap(config.data.min_gap_hours);
     setStoryDefault(config.data.story_share_default ?? false);
+    setBlurCoverageThreshold(config.data.blur_coverage_threshold ?? 95);
+    setBlurRegionPadding(config.data.blur_region_padding_px ?? 6);
   }, [config.data]);
 
   const paused = config.data?.paused ?? false;
@@ -113,6 +119,35 @@ export function SchedulePage() {
             Story default (also share new queue items to Story)
           </label>
         </div>
+        <section className="blur-gate-settings">
+          <h3>Blur unlock gates</h3>
+          <p className="help">
+            Each flagged area on the original must be at least the coverage threshold under the blur (grown by
+            padding). The re-check on the blurred image is always required when approving covers.
+          </p>
+          <div className="row">
+            <label>
+              Coverage threshold (%)
+              <input
+                type="number"
+                min={60}
+                max={100}
+                value={blurCoverageThreshold}
+                onChange={(e) => setBlurCoverageThreshold(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              Flagged-area padding (px)
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={blurRegionPadding}
+                onChange={(e) => setBlurRegionPadding(Number(e.target.value))}
+              />
+            </label>
+          </div>
+        </section>
         <div className="row">
           <button className="button" type="button" onClick={() => saveConfig.mutate()} disabled={saveConfig.isPending}>
             Save settings

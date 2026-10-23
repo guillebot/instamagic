@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
+import { createProbeQueue } from "./blurDetectorQueue";
 import { createSaveQueue } from "./blurSaveQueue";
 import {
   type BlurRect,
@@ -10,7 +11,13 @@ import {
   snapRotation,
 } from "./blurGeometry";
 import { containedLayout, cropToCss, type ContainedLayout, type CropRect } from "./cropGeometry";
-import type { BlurCoverageRegion, BlurCoverageReport, BlurItem, ImageItem } from "./types";
+import type {
+  BlurCoverageRegion,
+  BlurCoverageReport,
+  BlurDetectorProbe,
+  BlurItem,
+  ImageItem,
+} from "./types";
 
 type Props = {
   image: ImageItem;
@@ -115,37 +122,67 @@ export function missedHint(region: Pick<BlurCoverageRegion, "missed_px">): strin
   return parts.length ? `extend ${parts.join(", ")}` : "solid core too thin here — enlarge or lower feather";
 }
 
-/** Per-check lines for the editor: which check passes/fails for the covers on screen. */
+function thresholdPercent(report: BlurCoverageReport): number {
+  return report.coverage_threshold_percent ?? Math.round(report.min_coverage * 100);
+}
+
+/** Summary line for the coverage gate vs original flagged boxes. */
+export function coverageVsOriginalLine(
+  report: BlurCoverageReport,
+): { tone: "ok" | "error" | "info"; text: string } {
+  const need = thresholdPercent(report);
+  const total = report.regions.length;
+  if (total === 0) {
+    return { tone: "info", text: "Coverage vs original flagged areas: none from local model." };
+  }
+  const ok = report.regions.filter((row) => row.covered).length;
+  if (ok === total) {
+    return { tone: "ok", text: `Coverage vs original flagged areas: ${ok}/${total} ✓ (needs ${need}%)` };
+  }
+  const detail = report.regions
+    .filter((row) => !row.covered)
+    .map((row) => `${prettyLabel(row.label)} ${pct(row.coverage)} (${missedHint(row)})`)
+    .join("; ");
+  return {
+    tone: "error",
+    text: `Coverage vs original flagged areas: ${ok}/${total} ✗ (needs ${need}%) — ${detail}`,
+  };
+}
+
+/** Live detector probe line (read-only; unlock still requires approve). */
+export function detectorProbeLine(
+  result: BlurDetectorProbe | null | undefined,
+  probing: boolean,
+): { tone: "ok" | "error" | "info" | "pending"; text: string } {
+  if (probing) return { tone: "pending", text: "Detector on blurred image: running…" };
+  if (!result) return { tone: "info", text: "Detector on blurred image: not run yet." };
+  if (result.passed) {
+    return { tone: "ok", text: `Detector on blurred image: PASS (top score ${result.top_score.toFixed(2)})` };
+  }
+  const detail = result.detections
+    .map((row) => `${prettyLabel(row.label)} ${(row.score * 100).toFixed(0)}%`)
+    .join(", ");
+  return { tone: "error", text: `Detector on blurred image: FAIL: ${detail}` };
+}
+
+/** Per-check lines for the editor (coverage detail + stored verification on approve). */
 export function coverageCheckLines(
   report: BlurCoverageReport,
   dirty = false,
 ): Array<{ tone: "ok" | "error" | "info"; text: string }> {
-  const lines: Array<{ tone: "ok" | "error" | "info"; text: string }> = [];
-  const min = pct(report.min_coverage);
-  const uncovered = report.regions.filter((row) => !row.covered);
-  if (report.regions.length === 0) {
-    lines.push({ tone: "info", text: "Coverage check: no flagged areas from the local model." });
-  } else if (uncovered.length === 0) {
-    lines.push({
-      tone: "ok",
-      text: `Coverage check ✓ — all ${report.regions.length} flagged areas ≥${min} under the blur.`,
-    });
-  } else {
-    const detail = uncovered.map((row) => `${prettyLabel(row.label)} ${pct(row.coverage)} (${missedHint(row)})`);
-    lines.push({
-      tone: "error",
-      text: `Coverage check ✗ — ${uncovered.length} of ${report.regions.length} flagged areas under ${min}: ${detail.join("; ")}.`,
-    });
-  }
+  const lines: Array<{ tone: "ok" | "error" | "info"; text: string }> = [coverageVsOriginalLine(report)];
   const verification = report.verification;
   if (!report.do_not_post) return lines;
   if (dirty || !verification.current_geometry || verification.recheck === "not_run") {
-    lines.push({ tone: "info", text: "Re-check on the blurred render: runs when you approve (Enter/A)." });
+    lines.push({
+      tone: "info",
+      text: "Formal unlock: approve (Enter/A) runs coverage + detector together for SAFE · BLURRED.",
+    });
   } else if (verification.recheck === "fail") {
     const labels = Array.from(new Set(verification.classifier_detections.map((row) => prettyLabel(row.label))));
-    lines.push({ tone: "error", text: `Re-check on the blurred render ✗ — classifier still detects ${labels.join(", ")}.` });
+    lines.push({ tone: "error", text: `Last approve re-check ✗ — classifier still detects ${labels.join(", ")}.` });
   } else {
-    lines.push({ tone: "ok", text: "Re-check on the blurred render ✓ — classifier no longer detects exposure." });
+    lines.push({ tone: "ok", text: "Last approve re-check ✓ — classifier passed on the blurred render." });
   }
   return lines;
 }
@@ -188,6 +225,8 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   const allApproved = items.length > 0 && items.every((item) => item.approved);
   const [verifying, setVerifying] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [detectorResult, setDetectorResult] = useState<BlurDetectorProbe | null>(null);
+  const [detectorBusy, setDetectorBusy] = useState(false);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const itemsRef = useRef<BlurItem[]>(items);
   itemsRef.current = items;
@@ -204,6 +243,21 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
 
   // One latest-wins save queue per image: geometry edits are applied optimistically,
   // persisted one request at a time, and server state is re-read only once all settle.
+  const probeQueue = useMemo(() => {
+    const imageId = image.id;
+    return createProbeQueue({
+      delayMs: 400,
+      onBusyChange: setDetectorBusy,
+      run: async () => {
+        const data = await api<BlurDetectorProbe>(`/api/images/${imageId}/blur-detector-probe`, { method: "POST" });
+        setDetectorResult(data);
+      },
+    });
+  }, [image.id]);
+
+  const probeQueueRef = useRef(probeQueue);
+  probeQueueRef.current = probeQueue;
+
   const saveQueue = useMemo(() => {
     const imageId = image.id;
     return createSaveQueue<Partial<BlurRect>>({
@@ -216,6 +270,9 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
       onIdle: async () => {
         await queryClient.invalidateQueries({ queryKey: ["blurs", imageId] });
         notifyRef.current();
+        if (itemsLenRef.current > 0) {
+          probeQueueRef.current.schedule();
+        }
       },
       onError: (err) => {
         setError(err instanceof ApiError ? err.message : "Could not update blur region.");
@@ -228,8 +285,13 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     return () => {
       // Persist anything still pending when leaving this image, then stop timers.
       void saveQueue.flush().finally(() => saveQueue.dispose());
+      probeQueue.dispose();
     };
-  }, [saveQueue]);
+  }, [saveQueue, probeQueue]);
+
+  useEffect(() => {
+    setDetectorResult(null);
+  }, [image.id]);
 
   useEffect(() => {
     setDraft(null);
@@ -574,6 +636,11 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
   const liveBlur = items.length > 0 && !renderCurrent;
 
   useEffect(() => {
+    if (items.length === 0 || editDraft !== null || saving) return;
+    probeQueue.schedule(300);
+  }, [items.length, editDraft, saving, previewUrl, probeQueue]);
+
+  useEffect(() => {
     const img = imgRef.current;
     if (img && img.complete && img.naturalWidth > 0 && img.getAttribute("src") === displaySrc) {
       setLoadedSrc(displaySrc);
@@ -609,7 +676,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
                   ...row,
                   tag: row.covered
                     ? `✓ ${pct(row.coverage)}`
-                    : `cover this — ${pct(row.coverage)} (needs ${pct(report.min_coverage)})`,
+                    : `cover this — ${pct(row.coverage)} (needs ${thresholdPercent(report)}%)`,
                 }))
               : (image.blur_unlock_highlights ?? [])
                   .filter((row) => row.kind !== "detection")
@@ -632,6 +699,18 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             );
           });
         })()}
+        {detectorResult?.detections.map((region, index) => {
+          if (!layout) return null;
+          const css = cropToCss({ x: region.x, y: region.y, width: region.width, height: region.height }, layout);
+          return (
+            <div
+              key={`det-${index}`}
+              className="flag-region detection"
+              data-testid="detector-region"
+              style={{ left: css.left, top: css.top, width: css.width, height: css.height }}
+            />
+          );
+        })}
         {items.map((blur) => {
           if (!image.width || !image.height || !layout) return null;
           const live =
@@ -739,20 +818,41 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
           );
         })()}
         {coverage.data && (coverage.data.regions.length > 0 || coverage.data.do_not_post) ? (
-          <ul className="coverage-checks" data-testid="coverage-checks">
-            {coverageCheckLines(coverage.data, dirty).map((line, index) => (
-              <li key={index} className={`coverage-${line.tone}`}>
-                {line.text}
-              </li>
-            ))}
-            {coverage.data.regions.some((row) => !row.covered) ? (
-              <li className="coverage-hint">
-                Red dashed boxes are the flagged areas (from the original photo); each needs ≥
-                {pct(coverage.data.min_coverage)} under the blur. Soft feathered edges only count partly, so
-                the solid part of the cover must reach past the red box — enlarge the cover or lower feather.
-              </li>
+          <div className="blur-gate-panel" data-testid="blur-gate-panel">
+            <div className="blur-gate-summary" data-testid="blur-gate-summary">
+              <p className={`coverage-${coverageVsOriginalLine(coverage.data).tone}`}>
+                {coverageVsOriginalLine(coverage.data).text}
+              </p>
+              <p className={`coverage-${detectorProbeLine(detectorResult, detectorBusy).tone}`}>
+                {detectorProbeLine(detectorResult, detectorBusy).text}
+              </p>
+            </div>
+            {isDoNotPost ? (
+              <button
+                type="button"
+                className="button secondary"
+                data-testid="blur-detector-probe"
+                disabled={busy || saving || items.length === 0 || detectorBusy}
+                onClick={() => void probeQueue.runNow()}
+              >
+                {detectorBusy ? "Testing blurred image…" : "Test blurred image with detector"}
+              </button>
             ) : null}
-          </ul>
+            <ul className="coverage-checks" data-testid="coverage-checks">
+              {coverageCheckLines(coverage.data, dirty).map((line, index) => (
+                <li key={index} className={`coverage-${line.tone}`}>
+                  {line.text}
+                </li>
+              ))}
+              {coverage.data.regions.some((row) => !row.covered) ? (
+                <li className="coverage-hint">
+                  Red dashed boxes are the flagged areas (from the original photo); each needs ≥
+                  {thresholdPercent(coverage.data)}% under the blur. Soft feathered edges only count partly, so
+                  the solid part of the cover must reach past the red box — enlarge the cover or lower feather.
+                </li>
+              ) : null}
+            </ul>
+          </div>
         ) : null}
         <div className="row">
           <label>

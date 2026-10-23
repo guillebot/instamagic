@@ -101,6 +101,7 @@ from instamagic.schemas.dto import (
     TagIn,
 )
 from instamagic.services.blurs.coverage_report import blur_coverage_report
+from instamagic.services.blurs.detector_probe import probe_blurred_detector
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.blurs.generator import (
     BlurWindow,
@@ -336,7 +337,7 @@ def _image_out(session: Session, image: Image) -> ImageOut:
         has_approved_blur=has_approved_blur,
     )
     variant_label = publish_variant_label(variant)
-    unlock_message = unlock_summary_message(image)
+    unlock_message = unlock_summary_message(session, image)
     if unlock_message and unlock_message.startswith("SAFE"):
         variant_label = unlock_message
     highlights: list[dict[str, object]] = []
@@ -1153,6 +1154,22 @@ def blur_coverage(
     return blur_coverage_report(session, image)
 
 
+@router.post("/api/images/{image_id}/blur-detector-probe")
+def blur_detector_probe(
+    image_id: UUID,
+    request: Request,
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Run the safety classifier on the blurred render for the covers saved now (read-only)."""
+    image = _load_image(session, image_id)
+    try:
+        return probe_blurred_detector(session, settings, image, request.app.state.classifier)
+    except ValueError as exc:
+        raise NotAllowed(str(exc)) from exc
+
+
 @router.post("/api/images/{image_id}/blurs/approve", response_model=list[BlurOut])
 def approve_blurs(
     image_id: UUID,
@@ -1521,6 +1538,8 @@ def put_posting_schedule_config(
         story_share_default=body.story_share_default,
         story_render_mode_default=body.story_render_mode_default,
         story_border_color_default=body.story_border_color_default,
+        blur_coverage_threshold=body.blur_coverage_threshold,
+        blur_region_padding_px=body.blur_region_padding_px,
     )
     return config_as_dict(view)
 
@@ -3164,13 +3183,14 @@ def _preview_bytes(session: Session, settings: Settings, image: Image, approved:
 
 
 def _derivative_bytes_for_gemini(
+    session: Session,
     settings: Settings,
     image: Image,
     approved: CropSuggestion | None,
     *,
     require_policy: bool,
 ) -> bytes | None:
-    return derivative_bytes_for_gemini(settings, image, approved, require_policy=require_policy)
+    return derivative_bytes_for_gemini(session, settings, image, approved, require_policy=require_policy)
 
 
 def _encode_cursor(image: Image) -> str:

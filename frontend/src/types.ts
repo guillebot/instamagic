@@ -284,6 +284,8 @@ export type PostingScheduleConfig = {
   story_share_default?: boolean;
   story_render_mode_default?: string;
   story_border_color_default?: string;
+  blur_coverage_threshold?: number;
+  blur_region_padding_px?: number;
   updated_at?: string | null;
 };
 
@@ -397,8 +399,24 @@ export type BlurCoverageRegion = {
   missed_px: { top: number; bottom: number; left: number; right: number } | null;
 };
 
+export type BlurDetectorProbe = {
+  passed: boolean;
+  top_score: number;
+  detections: Array<{
+    label: string;
+    score: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
+  model_name: string;
+  detector_available: boolean;
+};
+
 export type BlurCoverageReport = {
   min_coverage: number;
+  coverage_threshold_percent?: number;
   padding: number;
   do_not_post: boolean;
   regions: BlurCoverageRegion[];

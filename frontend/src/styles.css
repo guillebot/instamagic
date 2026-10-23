@@ -601,8 +601,24 @@ input, select, textarea {
   color: #ff9b9b;
 }
 .coverage-info,
-.coverage-hint {
+.coverage-hint,
+.coverage-pending {
   color: #a9b3c4;
+}
+.coverage-pending {
+  color: #c9d4e8;
+}
+.blur-gate-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px 16px;
+  margin: 6px 0 8px;
+  font-size: 13px;
+}
+.flag-region.detection {
+  border: 2px solid #ffb84d;
+  box-shadow: inset 0 0 10px rgba(255, 184, 77, 0.35);
+  z-index: 4;
 }
 .blur-list {
   list-style: none;
