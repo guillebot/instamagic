@@ -10,18 +10,15 @@ from instamagic.errors import InstagramNotConfigured, NotAllowed, NotConfigured,
 from instamagic.models import Image, PublishAttempt, PublishingQueueItem, QueueState
 from instamagic.models.enums import PublishAttemptKind, PublishTrigger, StoryTimingMode
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
-from instamagic.services.images.derivatives import oriented_rgb, read_image
 from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
 from instamagic.services.instagram.client import InstagramClient
 from instamagic.services.instagram.publish_derivative import (
-    _approved_blur_windows,
-    _load_original_rgb,
-    assert_publish_blur_integrity,
     blur_drawn_not_approved_reason,
-    has_any_approved_blur,
+    ensure_publish_derivative,
 )
 from instamagic.services.instagram.story_image import (
+    assert_story_file_matches_feed,
     assert_story_uses_feed_source,
     render_story_from_feed_file,
     write_story_jpeg,
@@ -66,6 +63,13 @@ def ensure_story_derivative(
 ) -> str:
     if not item.feed_publish_relative_path:
         raise NotConfigured("Feed publish asset path is missing; cannot render story.")
+    # Re-run the feed derivative pipeline: it re-applies the DO_NOT_POST / verified-unlock and
+    # "blur drawn but not approved" gates and the blur integrity check against the original
+    # (with the correct crop box), before the file is resized for Instagram.
+    approved = next((crop for crop in image.crops if crop.approved), None)
+    current_feed = ensure_publish_derivative(session, settings, image, approved)
+    if current_feed != item.feed_publish_relative_path:
+        raise NotAllowed("Blur or crop changed since the feed post; story was not published.")
     feed_path = safe_join(settings.derivatives_root, item.feed_publish_relative_path)
     opts = effective_story_options(session, item)
     story_rgb = render_story_from_feed_file(
@@ -74,20 +78,15 @@ def ensure_story_derivative(
         border_color=opts.border_color,
     )
     assert_story_uses_feed_source(feed_path, story_rgb, opts.render_mode)
-    if has_any_approved_blur(image):
-        feed_rgb = oriented_rgb(read_image(feed_path))
-        original_rgb = _load_original_rgb(session, settings, image)
-        windows = _approved_blur_windows(image)
-        assert_publish_blur_integrity(
-            original_rgb=original_rgb,
-            publish_rgb=feed_rgb,
-            windows=windows,
-            crop_box=None,
-        )
     relative = _story_relative_path(image.id)
     dest = settings.derivatives_root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
     write_story_jpeg(story_rgb, dest)
+    try:
+        assert_story_file_matches_feed(dest, feed_path, mode=opts.render_mode, border_color=opts.border_color)
+    except NotAllowed:
+        dest.unlink(missing_ok=True)
+        raise
     return relative
 
 
@@ -110,7 +109,10 @@ def publish_story_for_queue_item(
         return None
     if item.story_published_at is not None:
         return None
-    if item.story_scheduled_at and item.story_scheduled_at > datetime.now(UTC):
+    scheduled = item.story_scheduled_at
+    if scheduled is not None and scheduled.tzinfo is None:
+        scheduled = scheduled.replace(tzinfo=UTC)
+    if scheduled and scheduled > datetime.now(UTC):
         return None
 
     image = session.get(
@@ -128,6 +130,7 @@ def publish_story_for_queue_item(
             reasons.append(blur_pending)
         msg = " ".join(reasons)
         item.story_last_error = msg
+        item.story_scheduled_at = None
         session.commit()
         raise NotAllowed(msg)
 
@@ -151,6 +154,7 @@ def publish_story_for_queue_item(
             attempt.success = False
             attempt.error = msg
             item.story_last_error = msg
+            item.story_scheduled_at = None
             session.commit()
             return attempt
     except Exception:
@@ -165,6 +169,7 @@ def publish_story_for_queue_item(
         attempt.success = False
         attempt.error = err
         item.story_last_error = err
+        item.story_scheduled_at = None
         session.commit()
         raise
 
@@ -183,6 +188,7 @@ def publish_story_for_queue_item(
         attempt.success = False
         attempt.error = err
         item.story_last_error = err
+        item.story_scheduled_at = None
         session.commit()
         raise NotConfigured(err) from exc
 

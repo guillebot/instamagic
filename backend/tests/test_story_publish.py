@@ -50,6 +50,8 @@ def test_story_render_modes_dimensions(app_env, tmp_path: Path) -> None:
         out = tmp_path / f"story-{mode.value}.jpg"
         write_story_jpeg(story, out)
         assert out.stat().st_size < 8 * 1024 * 1024
+        with Image.open(out) as written:
+            assert written.size == (STORY_WIDTH, STORY_HEIGHT)
 
 
 def test_story_publishes_after_feed_with_fake_client(client, app_env, monkeypatch) -> None:
@@ -72,7 +74,7 @@ def test_story_publishes_after_feed_with_fake_client(client, app_env, monkeypatc
     assert res.status_code == 200, res.text
     row = next(item for item in client.get("/api/queue").json() if item["id"] == queue["id"])
     assert row["state"] == "PUBLISHED"
-    assert row.get("story_published_at") is not None
+    assert row.get("story_published_at") is not None, row.get("story_last_error")
     assert row.get("story_status") == "published"
 
 
@@ -135,3 +137,140 @@ def test_story_preview_requires_auth(client, app_env) -> None:
         headers={"X-Forwarded-For": "127.0.0.1"},
     )
     assert preview.status_code == 200
+
+
+def _checker(size: tuple[int, int]) -> Image.Image:
+    image = Image.new("RGB", size, (40, 40, 40))
+    draw = ImageDraw.Draw(image)
+    for x in range(0, size[0], 8):
+        for y in range(0, size[1], 8):
+            if (x // 8 + y // 8) % 2 == 0:
+                draw.rectangle((x, y, x + 7, y + 7), fill=(240, 240, 240))
+    return image
+
+
+def test_final_story_file_check_passes_for_feed_render(app_env, tmp_path: Path) -> None:
+    from instamagic.services.instagram.story_image import assert_story_file_matches_feed
+
+    feed = tmp_path / "feed.jpg"
+    _marked(feed, (30, 80, 120))
+    for mode in StoryRenderMode:
+        out = tmp_path / f"story-{mode.value}.jpg"
+        write_story_jpeg(render_story_from_feed_file(feed, mode=mode.value, border_color="white"), out)
+        assert_story_file_matches_feed(out, feed, mode=mode.value, border_color="white")
+
+
+def test_final_story_file_check_rejects_unblurred_source(app_env, tmp_path: Path) -> None:
+    import pytest
+    from instamagic.errors import NotAllowed
+    from instamagic.services.instagram.story_image import assert_story_file_matches_feed
+    from PIL import ImageFilter
+
+    original = _checker((800, 1000))
+    original_path = tmp_path / "original.jpg"
+    original.save(original_path, format="JPEG", quality=95)
+    blurred = original.copy()
+    region = (200, 300, 600, 700)
+    blurred.paste(original.crop(region).filter(ImageFilter.GaussianBlur(30)), region[:2])
+    feed = tmp_path / "feed.jpg"
+    blurred.save(feed, format="JPEG", quality=95)
+    for mode in StoryRenderMode:
+        out = tmp_path / f"leak-{mode.value}.jpg"
+        write_story_jpeg(render_story_from_feed_file(original_path, mode=mode.value, border_color="black"), out)
+        with pytest.raises(NotAllowed):
+            assert_story_file_matches_feed(out, feed, mode=mode.value, border_color="black")
+
+
+def _blurred_published_with_delayed_story(client, app_env, name: str) -> tuple[str, str]:
+    library: Path = app_env["library"]
+    path = library / "session" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _checker((800, 1000)).save(path, format="JPEG", quality=92)
+    login(client)
+    library_id = _library(client, library)
+    items = client.get("/api/images", params={"library_id": library_id}).json()["items"]
+    image_id = items[0]["id"]
+    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "excellent"}).status_code == 200
+    manual = client.post(
+        f"/api/images/{image_id}/blurs",
+        json={"x": 200, "y": 250, "width": 400, "height": 400, "strength": "standard", "reason": "Cover."},
+    )
+    assert manual.status_code == 201, manual.text
+    assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
+    captions = client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).json()
+    queue = client.post(
+        "/api/queue",
+        json={
+            "image_id": image_id,
+            "story_share_enabled": True,
+            "story_timing_mode": "delay_hours",
+            "story_delay_hours": 1,
+        },
+    )
+    assert queue.status_code == 201, queue.text
+    queue_id = queue.json()["id"]
+    assert client.post(f"/api/queue/{queue_id}/approve").status_code == 200
+    res = client.post(f"/api/queue/{queue_id}/publish", json={"caption_id": captions[0]["id"]})
+    assert res.status_code == 200, res.text
+    return image_id, queue_id
+
+
+def test_blurred_story_uses_verified_feed_and_full_size(client, app_env) -> None:
+    from uuid import UUID
+
+    from instamagic.config import get_settings
+    from instamagic.db import session_factory
+    from instamagic.models import PublishingQueueItem
+    from instamagic.services.instagram.story_publish import publish_story_for_queue_item
+
+    image_id, queue_id = _blurred_published_with_delayed_story(client, app_env, "blurred.jpg")
+    session = session_factory()()
+    try:
+        item = session.get(PublishingQueueItem, UUID(queue_id))
+        assert item.feed_publish_relative_path.endswith("/publish/from-blur.jpg")
+        assert item.story_published_at is None
+        assert item.story_scheduled_at is not None
+        item.story_scheduled_at = datetime.now(UTC) - timedelta(minutes=1)
+        session.commit()
+        attempt = publish_story_for_queue_item(
+            session, get_settings(), client.app.state.instagram, item_id=item.id
+        )
+        assert attempt is not None and attempt.success, item.story_last_error
+        story = app_env["derivatives"] / f"{image_id}/publish/story.jpg"
+        with Image.open(story) as written:
+            assert written.size == (STORY_WIDTH, STORY_HEIGHT)
+    finally:
+        session.close()
+
+
+def test_story_refused_and_unscheduled_when_blur_changes_after_feed(client, app_env) -> None:
+    from uuid import UUID
+
+    import pytest
+    from instamagic.config import get_settings
+    from instamagic.db import session_factory
+    from instamagic.models import PublishingQueueItem
+    from instamagic.services.instagram.story_publish import publish_story_for_queue_item
+
+    image_id, queue_id = _blurred_published_with_delayed_story(client, app_env, "changed.jpg")
+    extra = client.post(
+        f"/api/images/{image_id}/blurs",
+        json={"x": 20, "y": 20, "width": 100, "height": 100, "strength": "standard", "reason": "More."},
+    )
+    assert extra.status_code == 201, extra.text
+    session = session_factory()()
+    try:
+        due = session.get(PublishingQueueItem, UUID(queue_id))
+        due.story_scheduled_at = datetime.now(UTC) - timedelta(minutes=1)
+        session.commit()
+        with pytest.raises(Exception):
+            publish_story_for_queue_item(
+                session, get_settings(), client.app.state.instagram, item_id=UUID(queue_id)
+            )
+        session.expire_all()
+        item = session.get(PublishingQueueItem, UUID(queue_id))
+        assert item.story_published_at is None
+        assert item.story_scheduled_at is None
+        assert item.story_last_error
+    finally:
+        session.close()

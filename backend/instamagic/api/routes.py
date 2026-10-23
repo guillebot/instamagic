@@ -2929,7 +2929,11 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
             story_status = "published"
         elif story_attempt and not story_attempt.success and story_attempt.error:
             story_status = "failed"
-        elif item.story_scheduled_at and item.story_scheduled_at > datetime.now(UTC):
+        elif item.story_scheduled_at and (
+            item.story_scheduled_at
+            if item.story_scheduled_at.tzinfo
+            else item.story_scheduled_at.replace(tzinfo=UTC)
+        ) > datetime.now(UTC):
             story_status = "scheduled"
         elif item.state == QueueState.PUBLISHED.value and story_opts.share_enabled:
             story_status = "pending"

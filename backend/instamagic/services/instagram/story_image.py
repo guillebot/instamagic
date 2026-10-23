@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 from instamagic.errors import NotAllowed, NotConfigured
 from instamagic.models.enums import StoryRenderMode
 from instamagic.services.images.derivatives import oriented_rgb, read_image, save_derivative
@@ -106,7 +107,7 @@ def render_story_from_feed_file(
 def write_story_jpeg(image: Image.Image, dest: Path) -> None:
     quality = IG_FEED_JPEG_QUALITY
     while quality >= 60:
-        save_derivative(image, dest, STORY_WIDTH, quality=quality, optimize=True)
+        save_derivative(image, dest, STORY_HEIGHT, quality=quality, optimize=True)
         if dest.stat().st_size <= IG_FEED_MAX_BYTES:
             return
         quality -= 5
@@ -138,3 +139,64 @@ def assert_story_uses_feed_source(feed_path: Path, story_image: Image.Image, mod
     region = story_image.crop((x, y, x + inner.width, y + inner.height))
     if list(region.getdata()) != list(inner.getdata()):
         raise NotAllowed("Story foreground does not match the feed publish derivative.")
+
+
+# Final-file check. Encoding noise is high-frequency and JPEG removes detail rather than adding it,
+# so compare (a) low-passed content per tile and (b) per-tile sharpness, which must never exceed
+# the verified render's. A sharper / unblurred source inside a blurred cover fails (b); a
+# different picture fails (a).
+_STORY_DOWNSCALE = 4
+_STORY_TILE = 8  # in downscaled pixels (32 px at full size)
+_STORY_MAX_TILE_MEAN_ABS_DIFF = 10.0
+_STORY_MAX_GLOBAL_MEAN_ABS_DIFF = 6.0
+_STORY_SHARPNESS_RATIO = 1.25
+_STORY_SHARPNESS_MARGIN = 3.0
+
+
+def _gray(image: Image.Image) -> np.ndarray:
+    return np.asarray(image.convert("L"), dtype=np.float32)
+
+
+def _tile_mean(values: np.ndarray, tile: int) -> np.ndarray:
+    rows = values.shape[0] // tile
+    cols = values.shape[1] // tile
+    return values[: rows * tile, : cols * tile].reshape(rows, tile, cols, tile).mean(axis=(1, 3))
+
+
+def _laplacian_abs(gray: np.ndarray) -> np.ndarray:
+    lap = np.zeros_like(gray)
+    lap[1:-1, 1:-1] = np.abs(
+        4 * gray[1:-1, 1:-1] - gray[:-2, 1:-1] - gray[2:, 1:-1] - gray[1:-1, :-2] - gray[1:-1, 2:]
+    )
+    return lap
+
+
+def assert_story_file_matches_feed(
+    story_path: Path,
+    feed_path: Path,
+    *,
+    mode: str,
+    border_color: str = "black",
+) -> None:
+    """Verify the FINAL encoded story JPEG is the render of the verified feed publish file.
+
+    The feed publish file was blur-integrity-verified against the original; this proves the
+    uploaded story pixels (foreground and backdrop) come from it and contain nothing sharper.
+    """
+    expected = render_story_from_feed_file(feed_path, mode=mode, border_color=border_color).convert("RGB")
+    story = oriented_rgb(read_image(story_path)).convert("RGB")
+    if story.size != expected.size:
+        raise NotAllowed("Story file size does not match the expected 9:16 render.")
+    small = (expected.width // _STORY_DOWNSCALE, expected.height // _STORY_DOWNSCALE)
+    got_low = np.asarray(story.resize(small, Image.Resampling.BOX), dtype=np.float32)
+    want_low = np.asarray(expected.resize(small, Image.Resampling.BOX), dtype=np.float32)
+    diff = np.abs(got_low - want_low).mean(axis=2)
+    if float(diff.mean()) > _STORY_MAX_GLOBAL_MEAN_ABS_DIFF:
+        raise NotAllowed("Story file does not match the verified feed publish derivative.")
+    if float(_tile_mean(diff, _STORY_TILE).max()) > _STORY_MAX_TILE_MEAN_ABS_DIFF:
+        raise NotAllowed("Story file does not match the verified feed publish derivative in some areas.")
+    full_tile = _STORY_TILE * _STORY_DOWNSCALE
+    got_sharp = _tile_mean(_laplacian_abs(_gray(story)), full_tile)
+    want_sharp = _tile_mean(_laplacian_abs(_gray(expected)), full_tile)
+    if bool((got_sharp > want_sharp * _STORY_SHARPNESS_RATIO + _STORY_SHARPNESS_MARGIN).any()):
+        raise NotAllowed("Story file is sharper than the verified feed derivative; refusing to upload.")
