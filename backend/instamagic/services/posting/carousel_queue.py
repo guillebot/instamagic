@@ -7,6 +7,7 @@ from uuid import UUID
 from instamagic.errors import NotAllowed, NotFound
 from instamagic.models import Image, PublishingQueueItem, PublishingQueueSlide, QueueState
 from instamagic.models.enums import QueueMediaType
+from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.instagram.publish_derivative import blur_drawn_not_approved_reason
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.gates import publishing_gate
@@ -15,16 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 
 
 def _gate_image(session: Session, image: Image) -> None:
-    approved = next((crop for crop in image.crops if crop.approved), None)
-    covering_blur = any(blur.approved and blur.covers_unsafe for blur in image.blurs)
-    gate = publishing_gate(
-        attested=is_attested(session, image.library_id),
-        human_rating=image.human_rating,
-        model_state=image.model_state,
-        needs_crop=image.model_state == "SAFE_AFTER_CROP",
-        has_approved_crop=approved is not None,
-        has_approved_covering_blur=covering_blur,
-    )
+    gate = publishing_gate(attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image))
     blur_pending = blur_drawn_not_approved_reason(image)
     if not gate.allowed or blur_pending:
         reasons = list(gate.reasons)

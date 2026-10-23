@@ -1,0 +1,243 @@
+"""Blur-to-unlock verification for DO_NOT_POST images."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+from instamagic.config import Settings
+from instamagic.models import BlurCover, Image, Library
+from instamagic.models.enums import BlurUnlockStatus, SafetyState
+from instamagic.services.blurs.generator import (
+    BlurWindow,
+    apply_blur_covers,
+    region_coverages,
+)
+from instamagic.services.images.derivatives import oriented_rgb, read_image
+from instamagic.services.images.paths import safe_join
+from instamagic.services.pipeline import (
+    clear_exposed_boxes,
+    render_blur_derivative,
+    unsafe_model_regions,
+)
+from instamagic.services.safety.signals import SafetySignals
+from PIL import Image as PilImage
+from sqlalchemy.orm import Session
+
+_COVERAGE_MIN = 0.95
+_REGION_PADDING = 6
+
+
+@dataclass(frozen=True)
+class UnlockVerification:
+    status: BlurUnlockStatus
+    geometry_hash: str | None
+    details: dict[str, Any]
+    message: str
+
+
+def blur_geometry_hash(blurs: list[BlurCover]) -> str:
+    approved = sorted(
+        [blur for blur in blurs if blur.approved],
+        key=lambda row: (row.x, row.y, row.width, row.height, str(row.id)),
+    )
+    payload = [
+        {
+            "x": blur.x,
+            "y": blur.y,
+            "width": blur.width,
+            "height": blur.height,
+            "shape": blur.shape,
+            "feather": blur.feather,
+            "radius": round(blur.radius, 4),
+            "strength": blur.strength,
+        }
+        for blur in approved
+    ]
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def reset_blur_unlock(image: Image) -> None:
+    image.blur_unlock_status = BlurUnlockStatus.PENDING.value
+    image.blur_unlock_verified_at = None
+    image.blur_unlock_geometry_hash = None
+    image.blur_unlock_details_json = None
+
+
+def blur_unlock_effective(image: Image) -> bool:
+    if image.model_state != SafetyState.DO_NOT_POST.value:
+        return False
+    if image.blur_unlock_status != BlurUnlockStatus.VERIFIED.value:
+        return False
+    if not image.blur_unlock_geometry_hash:
+        return False
+    if not any(blur.approved for blur in image.blurs):
+        return False
+    return blur_geometry_hash(image.blurs) == image.blur_unlock_geometry_hash
+
+
+def unlock_summary_message(image: Image) -> str | None:
+    if image.model_state != SafetyState.DO_NOT_POST.value:
+        return None
+    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_unlock_effective(image):
+        return "SAFE · BLURRED (verified)"
+    if image.blur_unlock_status == BlurUnlockStatus.FAILED.value and image.blur_unlock_details_json:
+        try:
+            details = json.loads(image.blur_unlock_details_json)
+        except json.JSONDecodeError:
+            return "Blur unlock verification failed."
+        return details.get("message") or unlock_summary_message_from_parts(
+            details.get("uncovered_regions") or [],
+            details.get("classifier_detections") or [],
+        )
+    if image.blurs and image.blur_unlock_status == BlurUnlockStatus.PENDING.value:
+        return "Blur unlock pending verification."
+    return None
+
+
+def unlock_summary_message_from_parts(uncovered: list[dict], detections: list[dict]) -> str:
+    parts: list[str] = []
+    if uncovered:
+        parts.append(f"{len(uncovered)} regions uncovered")
+    if detections:
+        labels = ", ".join(sorted({row["label"] for row in detections}))
+        parts.append(f"classifier still detects {labels}")
+    if not parts:
+        return "Blur unlock verification failed."
+    return "Still unsafe: " + " / ".join(parts)
+
+
+def _classify_render(rgb: PilImage.Image, classifier: object) -> SafetySignals:
+    bgr = cv2.cvtColor(np.asarray(rgb.convert("RGB")), cv2.COLOR_RGB2BGR)
+    height, width = bgr.shape[:2]
+    longest = max(height, width)
+    max_edge = 1280
+    if longest > max_edge:
+        scale = longest / max_edge
+        bgr = cv2.resize(bgr, (int(width / scale), int(height / scale)))
+    return classifier.classify(bgr, hint="")  # type: ignore[attr-defined]
+
+
+def verify_blur_unlock(
+    session: Session,
+    settings: Settings,
+    image: Image,
+    classifier: object,
+) -> UnlockVerification:
+    if image.model_state != SafetyState.DO_NOT_POST.value:
+        raise ValueError("Blur unlock applies only to DO_NOT_POST images.")
+    if not image.blurs or not all(blur.approved for blur in image.blurs):
+        raise ValueError("All blur covers must be approved before verification.")
+
+    library = session.get(Library, image.library_id)
+    if library is None:
+        raise ValueError("Library was not found.")
+    source = safe_join(Path(library.root_path), image.relative_path)
+    if not source.is_file():
+        raise ValueError("Original image was not found.")
+    if image.width is None or image.height is None:
+        raise ValueError("Image dimensions are unknown.")
+
+    original_rgb = oriented_rgb(read_image(source))
+    windows = [
+        BlurWindow(
+            x=blur.x,
+            y=blur.y,
+            width=blur.width,
+            height=blur.height,
+            shape=blur.shape,
+            feather=blur.feather,
+            radius=blur.radius,
+            strength=blur.strength,
+            reason=blur.reason,
+            covers_unsafe=blur.covers_unsafe,
+        )
+        for blur in image.blurs
+    ]
+    blurred_rgb = apply_blur_covers(original_rgb, windows)
+    render_blur_derivative(
+        rgb=original_rgb,
+        covers=list(image.blurs),
+        image_id=image.id,
+        derivatives_root=settings.derivatives_root,
+    )
+
+    unsafe_boxes = unsafe_model_regions(session, image.id)
+    if not unsafe_boxes:
+        unsafe_boxes = clear_exposed_boxes(session, image.id)
+
+    coverages = region_coverages(
+        windows,
+        unsafe_boxes,
+        (image.width, image.height),
+        min_ratio=_COVERAGE_MIN,
+        padding=_REGION_PADDING,
+    )
+    uncovered = [
+        {
+            "x": row.box.x,
+            "y": row.box.y,
+            "width": row.box.width,
+            "height": row.box.height,
+            "coverage": round(row.coverage, 4),
+        }
+        for row in coverages
+        if row.coverage < _COVERAGE_MIN
+    ]
+
+    signals = _classify_render(blurred_rgb, classifier)
+    detections = [
+        {
+            "label": region.label,
+            "score": round(region.score, 4),
+            "x": region.box.x,
+            "y": region.box.y,
+            "width": region.box.width,
+            "height": region.box.height,
+        }
+        for region in signals.clear_exposed()
+    ]
+
+    geometry_hash = blur_geometry_hash(image.blurs)
+    details: dict[str, Any] = {
+        "uncovered_regions": uncovered,
+        "classifier_detections": detections,
+        "coverage_min": _COVERAGE_MIN,
+        "model_name": signals.model_name,
+    }
+
+    if uncovered or detections:
+        message = unlock_summary_message_from_parts(uncovered, detections)
+        details["message"] = message
+        return UnlockVerification(
+            status=BlurUnlockStatus.FAILED,
+            geometry_hash=None,
+            details=details,
+            message=message,
+        )
+
+    details["message"] = "SAFE · BLURRED (verified)"
+    return UnlockVerification(
+        status=BlurUnlockStatus.VERIFIED,
+        geometry_hash=geometry_hash,
+        details=details,
+        message=details["message"],
+    )
+
+
+def apply_unlock_result(image: Image, result: UnlockVerification) -> None:
+    image.blur_unlock_status = result.status.value
+    image.blur_unlock_details_json = json.dumps(result.details)
+    if result.status == BlurUnlockStatus.VERIFIED:
+        image.blur_unlock_verified_at = datetime.now(UTC)
+        image.blur_unlock_geometry_hash = result.geometry_hash
+    else:
+        image.blur_unlock_verified_at = None
+        image.blur_unlock_geometry_hash = None

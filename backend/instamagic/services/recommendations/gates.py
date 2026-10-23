@@ -19,14 +19,18 @@ def publishing_gate(
     needs_crop: bool,
     has_approved_crop: bool,
     has_approved_covering_blur: bool = False,
+    has_approved_blur: bool = False,
+    do_not_post_blur_unlocked: bool = False,
 ) -> GateResult:
     reasons: list[str] = []
     if not attested:
         reasons.append("The library has no adult attestation.")
     if human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
         reasons.append("A human safe or excellent rating is required.")
-    if model_state == SafetyState.DO_NOT_POST.value:
+    if model_state == SafetyState.DO_NOT_POST.value and not do_not_post_blur_unlocked:
         reasons.append("The local model marked this image DO_NOT_POST.")
+    if model_state == SafetyState.DO_NOT_POST.value and do_not_post_blur_unlocked and not has_approved_blur:
+        reasons.append("Verified blur unlock requires approved blur covers.")
     if needs_crop and not (has_approved_crop or has_approved_covering_blur):
         reasons.append("SAFE_AFTER_CROP requires an approved crop or covering blur.")
     return GateResult(allowed=not reasons, reasons=reasons)
@@ -42,6 +46,8 @@ def gemini_gate(
     operator_confirmed: bool,
     policy: str,
     has_approved_covering_blur: bool = False,
+    has_approved_blur: bool = False,
+    do_not_post_blur_unlocked: bool = False,
 ) -> GateResult:
     result = publishing_gate(
         attested=attested,
@@ -50,6 +56,8 @@ def gemini_gate(
         needs_crop=needs_crop,
         has_approved_crop=has_approved_crop,
         has_approved_covering_blur=has_approved_covering_blur,
+        has_approved_blur=has_approved_blur,
+        do_not_post_blur_unlocked=do_not_post_blur_unlocked,
     )
     reasons = list(result.reasons)
     # Human "review" rating is blocked. Classifier REVIEW with human safe/excellent is allowed.

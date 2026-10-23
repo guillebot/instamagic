@@ -328,6 +328,9 @@ class ImageOut(BaseModel):
     preview_url: str | None
     original_preview_url: str | None = None
     publish_preview_url: str | None = None
+    blur_unlock_status: str = "none"
+    blur_unlock_message: str | None = None
+    blur_unlock_highlights: list[dict[str, object]] = Field(default_factory=list)
     gemini_label_status: str | None = None
     gemini_label_at: datetime | None = None
     gemini_description: str | None = None

@@ -710,6 +710,18 @@ def clear_exposed_boxes(session: Session, image_id: UUID) -> list[Box]:
     ]
 
 
+def unsafe_model_regions(session: Session, image_id: UUID) -> list[Box]:
+    """All regions the latest local assessment marked unsafe (for blur-unlock coverage)."""
+    assessment = _latest_assessment(session, image_id)
+    if assessment is None:
+        return []
+    return [
+        Box(region.x, region.y, region.width, region.height)
+        for region in assessment.regions
+        if region.unsafe
+    ]
+
+
 def replace_suggested_blurs(
     session: Session,
     *,
@@ -721,9 +733,9 @@ def replace_suggested_blurs(
     """Rebuild unapproved blur covers from stored clear-exposed regions (operator opt-in)."""
     if image.width is None or image.height is None:
         raise ValueError("Image dimensions are unknown.")
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        raise ValueError("DO_NOT_POST cannot receive blur suggestions.")
     unsafe = clear_exposed_boxes(session, image.id)
+    if not unsafe:
+        unsafe = unsafe_model_regions(session, image.id)
     if not unsafe:
         raise ValueError("No clear exposed regions to cover.")
     windows = suggest_blurs(image.width, image.height, unsafe, strength=strength)

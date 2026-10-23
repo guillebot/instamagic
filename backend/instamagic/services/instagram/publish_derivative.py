@@ -9,7 +9,9 @@ import numpy as np
 from instamagic.config import Settings
 from instamagic.errors import NotAllowed, NotConfigured, NotFound
 from instamagic.models import BlurCover, CropSuggestion, Image, Library
+from instamagic.models.enums import SafetyState
 from instamagic.services.blurs.generator import BlurWindow, apply_blur_covers
+from instamagic.services.blurs.unlock import blur_unlock_effective
 from instamagic.services.images.derivatives import crop_image, oriented_rgb, read_image
 from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.feed_image import (
@@ -36,11 +38,13 @@ def blur_drawn_not_approved_reason(image: Image) -> str | None:
 
     if not image.blurs:
         return None
-    if image.human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
-        return None
     if any(blur.approved for blur in image.blurs):
         return None
-    return "Blur drawn but not approved."
+    if image.human_rating in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
+        return "Blur drawn but not approved."
+    if image.model_state == SafetyState.DO_NOT_POST.value and image.blur_unlock_status != "none":
+        return "Blur drawn but not approved."
+    return None
 
 
 def _window_from_row(blur: BlurCover) -> BlurWindow:
@@ -195,6 +199,8 @@ def ensure_publish_derivative(
     carousel_slide: bool = False,
 ) -> str:
     """Return a derivatives-relative JPEG path suitable for Meta to fetch."""
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(image):
+        raise NotAllowed("DO_NOT_POST requires verified blur unlock before publishing.")
     pending = blur_drawn_not_approved_reason(image)
     if pending:
         raise NotAllowed(pending)

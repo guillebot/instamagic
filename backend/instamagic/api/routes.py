@@ -95,11 +95,18 @@ from instamagic.schemas.dto import (
     ScheduleIn,
     TagIn,
 )
+from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.blurs.generator import (
     BlurWindow,
     covers_unsafe_boxes,
     manual_blur,
     with_strength,
+)
+from instamagic.services.blurs.unlock import (
+    apply_unlock_result,
+    reset_blur_unlock,
+    unlock_summary_message,
+    verify_blur_unlock,
 )
 from instamagic.services.crops.generator import validate_crop_window, window_excludes_unsafe
 from instamagic.services.factory import build_instagram
@@ -291,7 +298,10 @@ def _image_out(session: Session, image: Image) -> ImageOut:
     original_preview = (
         f"/api/derivatives/{image.id}/preview" if image.preview_path else None
     )
-    if has_approved_blur:
+    use_blurred_previews = has_approved_blur or (
+        image.model_state == SafetyState.DO_NOT_POST.value and bool(image.blurs)
+    )
+    if use_blurred_previews:
         thumbnail_url = f"/api/derivatives/{image.id}/blurred-thumbnail"
         preview_url = f"/api/derivatives/{image.id}/blurred-preview"
         publish_preview_url = f"/api/images/{image.id}/publish-preview"
@@ -306,6 +316,20 @@ def _image_out(session: Session, image: Image) -> ImageOut:
         has_approved_crop=has_approved_crop,
         has_approved_blur=has_approved_blur,
     )
+    variant_label = publish_variant_label(variant)
+    unlock_message = unlock_summary_message(image)
+    if unlock_message and unlock_message.startswith("SAFE"):
+        variant_label = unlock_message
+    highlights: list[dict[str, object]] = []
+    if image.blur_unlock_details_json:
+        try:
+            details = json.loads(image.blur_unlock_details_json)
+            for row in details.get("uncovered_regions") or []:
+                highlights.append({**row, "kind": "uncovered"})
+            for row in details.get("classifier_detections") or []:
+                highlights.append({**row, "kind": "detection"})
+        except json.JSONDecodeError:
+            pass
     return ImageOut(
         id=image.id,
         filename=image.filename,
@@ -339,7 +363,10 @@ def _image_out(session: Session, image: Image) -> ImageOut:
         has_approved_covering_blur=covering_blur,
         has_approved_blur=has_approved_blur,
         publish_variant=variant,
-        publish_variant_label=publish_variant_label(variant),
+        publish_variant_label=variant_label,
+        blur_unlock_status=image.blur_unlock_status,
+        blur_unlock_message=unlock_message,
+        blur_unlock_highlights=highlights,
         thumbnail_url=thumbnail_url,
         preview_url=preview_url,
         original_preview_url=original_preview,
@@ -907,8 +934,6 @@ def create_blur(
     settings: Settings = Depends(settings_dep),
 ) -> BlurOut:
     image = _load_image(session, image_id)
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        raise NotAllowed("DO_NOT_POST — blur cannot override.")
     if image.width is None or image.height is None:
         raise NotAllowed("Image dimensions are unknown.")
     try:
@@ -940,6 +965,8 @@ def create_blur(
     session.add(row)
     session.flush()
     _refresh_blur_derivative(session, settings, image)
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        reset_blur_unlock(image)
     session.commit()
     session.refresh(row)
     return _blur_out(image, row)
@@ -955,8 +982,6 @@ def suggest_blur_covers(
 ) -> list[BlurOut]:
     """Opt-in: build ellipse covers from stored local-model unsafe boxes (not auto on scan)."""
     image = _load_image(session, image_id)
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        raise NotAllowed("DO_NOT_POST — blur cannot override.")
     if image.width is None or image.height is None:
         raise NotAllowed("Image dimensions are unknown.")
     library = session.get(Library, image.library_id)
@@ -975,6 +1000,8 @@ def suggest_blur_covers(
         raise NotAllowed(str(exc)) from exc
     for crop in image.crops:
         crop.approved = False
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        reset_blur_unlock(image)
     session.commit()
     return [_blur_out(image, row) for row in rows]
 
@@ -997,6 +1024,8 @@ def set_blur_strength(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _refresh_blur_derivative(session, settings, image)
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        reset_blur_unlock(image)
     session.commit()
     return [_blur_out(image, blur) for blur in image.blurs]
 
@@ -1004,22 +1033,33 @@ def set_blur_strength(
 @router.post("/api/images/{image_id}/blurs/approve", response_model=list[BlurOut])
 def approve_blurs(
     image_id: UUID,
+    request: Request,
     _auth: None = Depends(require_session),
     session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
 ) -> list[BlurOut]:
     image = _load_image(session, image_id)
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        raise NotAllowed("DO_NOT_POST — blur cannot override.")
     if not image.blurs:
         raise NotAllowed("No blur covers are available.")
     unsafe = clear_exposed_boxes(session, image.id)
     windows = [_window_from_row(blur) for blur in image.blurs]
-    if unsafe and not covers_unsafe_boxes(windows, unsafe):
-        raise NotAllowed("These blur covers do not fully cover every detected unsafe region.")
     for crop in image.crops:
         crop.approved = False
     for blur in image.blurs:
         blur.approved = True
+    session.flush()
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        try:
+            result = verify_blur_unlock(session, settings, image, request.app.state.classifier)
+        except ValueError as exc:
+            raise NotAllowed(str(exc)) from exc
+        apply_unlock_result(image, result)
+    else:
+        if unsafe and not covers_unsafe_boxes(windows, unsafe):
+            for blur in image.blurs:
+                blur.approved = False
+            session.commit()
+            raise NotAllowed("These blur covers do not fully cover every detected unsafe region.")
     session.commit()
     return [_blur_out(image, blur) for blur in image.blurs]
 
@@ -1182,15 +1222,7 @@ def enqueue(
 ) -> dict[str, object]:
     image = _load_image(session, body.image_id)
     approved = next((crop for crop in image.crops if crop.approved), None)
-    covering_blur = _has_approved_covering_blur(session, image)
-    gate = publishing_gate(
-        attested=is_attested(session, image.library_id),
-        human_rating=image.human_rating,
-        model_state=image.model_state,
-        needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-        has_approved_crop=approved is not None,
-        has_approved_covering_blur=covering_blur,
-    )
+    gate = publishing_gate(attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image))
     blur_pending = blur_drawn_not_approved_reason(image)
     if not gate.allowed or blur_pending:
         reasons = list(gate.reasons)
@@ -1456,7 +1488,12 @@ def _candidate_inputs(
         .where(Image.skip_reason.is_(None))
         .where(Image.human_rating.in_([HumanRating.SAFE.value, HumanRating.EXCELLENT.value]))
         .where(Image.model_state.is_not(None))
-        .where(Image.model_state != SafetyState.DO_NOT_POST.value)
+        .where(
+            or_(
+                Image.model_state != SafetyState.DO_NOT_POST.value,
+                Image.blur_unlock_status == "verified",
+            )
+        )
         .options(
             selectinload(Image.score),
             selectinload(Image.crops),

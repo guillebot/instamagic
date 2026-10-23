@@ -1052,7 +1052,9 @@ export function ReviewPage() {
                           {lifecycleLabel(image.effective_state)}
                         </span>
                         {image.has_approved_crop ? <span className="badge crop-approved">crop</span> : null}
-                        {image.publish_variant_label ? (
+                        {image.blur_unlock_message ? (
+                          <span className="badge publish-variant">{image.blur_unlock_message}</span>
+                        ) : image.publish_variant_label ? (
                           <span className="badge publish-variant">{image.publish_variant_label}</span>
                         ) : null}
                         {image.has_approved_blur && !image.publish_variant_label ? (

@@ -532,6 +532,11 @@ input, select, textarea {
   box-shadow: inset 0 0 24px rgba(126, 184, 212, 0.18);
 }
 .blur-ellipse.approved { border-color: #8fd4a4; box-shadow: inset 0 0 24px rgba(143, 212, 164, 0.22); }
+.blur-ellipse.highlight-unsafe {
+  border-color: #e8a0a0;
+  box-shadow: inset 0 0 18px rgba(232, 160, 160, 0.35);
+  pointer-events: none;
+}
 .blur-list {
   list-style: none;
   padding: 0;

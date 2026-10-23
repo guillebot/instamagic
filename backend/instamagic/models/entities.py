@@ -117,6 +117,10 @@ class Image(Base):
     gemini_label_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     gemini_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     gemini_mood: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    blur_unlock_status: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
+    blur_unlock_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    blur_unlock_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blur_unlock_geometry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
 
     library: Mapped[Library] = relationship(back_populates="images")

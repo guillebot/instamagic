@@ -6,6 +6,7 @@ from instamagic.config import Settings
 from instamagic.errors import GeminiBlocked
 from instamagic.models import BlurCover, CropSuggestion, Image, SafetyState
 from instamagic.services.blurs.generator import BlurWindow, covers_unsafe_boxes
+from instamagic.services.blurs.unlock import blur_unlock_effective
 from instamagic.services.gemini.context import gemini_allows_pixels
 from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.publish_derivative import (
@@ -50,7 +51,7 @@ def derivative_bytes_for_gemini(
 ) -> bytes | None:
     if require_policy and not gemini_allows_pixels(settings.gemini_image_policy):
         return None
-    if image.model_state == SafetyState.DO_NOT_POST.value:
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(image):
         return None
     relative = None
     approved_blur_path = next(
@@ -84,7 +85,7 @@ def derivative_bytes_for_gemini(
 
 
 def curation_derivative_bytes(session: Session, settings: Settings, image: Image) -> bytes | None:
-    if image.model_state == SafetyState.DO_NOT_POST.value:
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(image):
         return None
     approved = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
     return gemini_preview_bytes(session, settings, image, approved, require_policy=False)
