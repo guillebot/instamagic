@@ -20,5 +20,5 @@ def publishing_gate_kwargs(session: Session, image: Image) -> dict:
         "has_approved_crop": approved_crop is not None,
         "has_approved_covering_blur": covering,
         "has_approved_blur": has_blur,
-        "do_not_post_blur_unlocked": blur_unlock_effective(image),
+        "do_not_post_blur_unlocked": blur_unlock_effective(session, image),
     }

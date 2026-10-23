@@ -15,24 +15,19 @@ from typing import Any
 import numpy as np
 from instamagic.models import BlurCover, Image, SafetyAssessment
 from instamagic.models.enums import BlurUnlockStatus, SafetyState
+from instamagic.services.blurs.coverage_settings import blur_coverage_settings
 from instamagic.services.blurs.generator import BlurWindow
 from instamagic.services.blurs.masks import (
     combined_coverage_mask,
     interior_mask_array,
     translate_window,
 )
-from instamagic.services.blurs.unlock import (
-    _COVERAGE_MIN,
-    _REGION_PADDING,
-    blur_unlock_effective,
-)
+from instamagic.services.blurs.unlock import blur_unlock_effective
 from instamagic.services.blurs.version import blur_geometry_hash as geometry_version
 from instamagic.services.geometry import Box
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-COVERAGE_MIN = _COVERAGE_MIN
-REGION_PADDING = _REGION_PADDING
 # A strip (row/column) of the padded box counts as "missed" below this mean coverage.
 _STRIP_MISSED = 0.5
 
@@ -93,7 +88,7 @@ def region_coverage_rows(
     boxes: list[Box],
     image_size: tuple[int, int],
     *,
-    padding: int = REGION_PADDING,
+    padding: int = 6,
 ) -> list[dict[str, Any]]:
     """Coverage per box, identical to ``region_coverages_rotated`` but on a local window."""
     if not boxes:
@@ -139,7 +134,7 @@ def region_coverage_rows(
     return rows
 
 
-def _verification_checks(image: Image) -> dict[str, Any]:
+def _verification_checks(session: Session, image: Image) -> dict[str, Any]:
     details: dict[str, Any] = {}
     if image.blur_unlock_details_json:
         try:
@@ -149,7 +144,7 @@ def _verification_checks(image: Image) -> dict[str, Any]:
     current = geometry_version(list(image.blurs)) if image.blurs else None
     checked = details.get("geometry_version")
     status = image.blur_unlock_status or BlurUnlockStatus.NONE.value
-    effective = blur_unlock_effective(image)
+    effective = blur_unlock_effective(session, image)
     if effective:
         recheck = "pass"
     elif status == BlurUnlockStatus.FAILED.value and checked and checked == current:
@@ -167,23 +162,30 @@ def _verification_checks(image: Image) -> dict[str, Any]:
 
 
 def blur_coverage_report(session: Session, image: Image) -> dict[str, Any]:
+    gate = blur_coverage_settings(session)
     regions = flagged_regions(session, image.id)
     blocked = image.model_state == SafetyState.DO_NOT_POST.value
     out: dict[str, Any] = {
-        "min_coverage": COVERAGE_MIN,
-        "padding": REGION_PADDING,
+        "min_coverage": gate.min_ratio,
+        "coverage_threshold_percent": gate.threshold_percent,
+        "padding": gate.padding_px,
         "do_not_post": blocked,
         "regions": [],
         "all_covered": False,
         "coverage_check": "none",
-        "verification": _verification_checks(image),
+        "verification": _verification_checks(session, image),
     }
     if image.width is None or image.height is None or not regions:
         out["all_covered"] = not regions
         out["coverage_check"] = "pass" if not regions else "unknown"
         return out
     windows = [window_from_cover(blur) for blur in image.blurs]
-    rows = region_coverage_rows(windows, [box for _, _, box in regions], (image.width, image.height))
+    rows = region_coverage_rows(
+        windows,
+        [box for _, _, box in regions],
+        (image.width, image.height),
+        padding=gate.padding_px,
+    )
     report = []
     for (label, score, box), row in zip(regions, rows, strict=True):
         coverage = round(row["coverage"], 4)
@@ -197,7 +199,7 @@ def blur_coverage_report(session: Session, image: Image) -> dict[str, Any]:
                 "height": box.height,
                 "coverage": coverage,
                 "inside_outline": round(row["inside_outline"], 4),
-                "covered": row["coverage"] >= COVERAGE_MIN,
+                "covered": row["coverage"] >= gate.min_ratio,
                 "missed_px": row["missed"],
             }
         )
@@ -207,11 +209,11 @@ def blur_coverage_report(session: Session, image: Image) -> dict[str, Any]:
     return out
 
 
-def readiness_blur_reason(image: Image) -> str | None:
+def readiness_blur_reason(session: Session, image: Image) -> str | None:
     """Name the failing blur check for DO_NOT_POST images (adds detail; never unblocks)."""
     if image.model_state != SafetyState.DO_NOT_POST.value or not image.blurs:
         return None
-    if blur_unlock_effective(image):
+    if blur_unlock_effective(session, image):
         return None
     status = image.blur_unlock_status
     if status == BlurUnlockStatus.FAILED.value and image.blur_unlock_details_json:

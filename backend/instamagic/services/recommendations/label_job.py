@@ -122,7 +122,7 @@ def resolve_label_targets(
         if human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
             skip("not_safe_or_excellent")
             continue
-        if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(image):
+        if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(session, image):
             skip("do_not_post")
             continue
         gate = gemini_gate(

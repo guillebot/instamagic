@@ -365,6 +365,8 @@ class PostingScheduleConfig(Base):
         String(32), default="blur_backdrop", server_default="blur_backdrop"
     )
     story_border_color_default: Mapped[str] = mapped_column(String(16), default="black", server_default="black")
+    blur_coverage_threshold: Mapped[int] = mapped_column(Integer, default=95, server_default="95")
+    blur_region_padding_px: Mapped[int] = mapped_column(Integer, default=6, server_default="6")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )

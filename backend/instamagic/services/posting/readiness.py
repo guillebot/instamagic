@@ -48,7 +48,7 @@ def build_image_publish_readiness(
         publishing_reasons.append(blur_pending)
     from instamagic.services.blurs.coverage_report import readiness_blur_reason
 
-    blur_check = readiness_blur_reason(image)
+    blur_check = readiness_blur_reason(session, image)
     if blur_check:
         # Detail only: the gate above already blocks DO_NOT_POST until the unlock is verified.
         publishing_allowed = False

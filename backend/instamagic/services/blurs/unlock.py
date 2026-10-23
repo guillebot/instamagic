@@ -14,6 +14,7 @@ import numpy as np
 from instamagic.config import Settings
 from instamagic.models import BlurCover, Image, Library
 from instamagic.models.enums import BlurUnlockStatus, SafetyState
+from instamagic.services.blurs.coverage_settings import BlurCoverageSettings, blur_coverage_settings
 from instamagic.services.blurs.generator import (
     BlurWindow,
     apply_blur_covers,
@@ -30,9 +31,6 @@ from instamagic.services.pipeline import (
 from instamagic.services.safety.signals import SafetySignals
 from PIL import Image as PilImage
 from sqlalchemy.orm import Session
-
-_COVERAGE_MIN = 0.95
-_REGION_PADDING = 6
 
 
 @dataclass(frozen=True)
@@ -76,7 +74,54 @@ def reset_blur_unlock(image: Image) -> None:
     image.blur_unlock_details_json = None
 
 
-def blur_unlock_effective(image: Image) -> bool:
+def _approved_windows(image: Image) -> list[BlurWindow]:
+    return [
+        BlurWindow(
+            x=blur.x,
+            y=blur.y,
+            width=blur.width,
+            height=blur.height,
+            shape=blur.shape,
+            feather=blur.feather,
+            radius=blur.radius,
+            strength=blur.strength,
+            reason=blur.reason,
+            covers_unsafe=blur.covers_unsafe,
+            rotation_deg=blur.rotation_deg,
+            corner_radius=blur.corner_radius,
+            edge_mode=blur.edge_mode or "soft",
+        )
+        for blur in image.blurs
+        if blur.approved
+    ]
+
+
+def coverage_gate_passes(
+    session: Session,
+    image: Image,
+    gate: BlurCoverageSettings,
+) -> bool:
+    if image.width is None or image.height is None:
+        return False
+    windows = _approved_windows(image)
+    if not windows:
+        return False
+    unsafe_boxes = unsafe_model_regions(session, image.id)
+    if not unsafe_boxes:
+        unsafe_boxes = clear_exposed_boxes(session, image.id)
+    if not unsafe_boxes:
+        return True
+    coverages = region_coverages(
+        windows,
+        unsafe_boxes,
+        (image.width, image.height),
+        min_ratio=gate.min_ratio,
+        padding=gate.padding_px,
+    )
+    return all(row.coverage >= gate.min_ratio for row in coverages)
+
+
+def blur_unlock_effective(session: Session, image: Image) -> bool:
     if image.model_state != SafetyState.DO_NOT_POST.value:
         return False
     if image.blur_unlock_status != BlurUnlockStatus.VERIFIED.value:
@@ -85,13 +130,24 @@ def blur_unlock_effective(image: Image) -> bool:
         return False
     if not any(blur.approved for blur in image.blurs):
         return False
-    return blur_geometry_hash(image.blurs) == image.blur_unlock_geometry_hash
+    if blur_geometry_hash(image.blurs) != image.blur_unlock_geometry_hash:
+        return False
+    gate = blur_coverage_settings(session)
+    if image.blur_unlock_details_json:
+        try:
+            details = json.loads(image.blur_unlock_details_json)
+        except json.JSONDecodeError:
+            details = {}
+        verified_min = float(details.get("coverage_min", gate.min_ratio))
+        if gate.min_ratio > verified_min:
+            return False
+    return coverage_gate_passes(session, image, gate)
 
 
-def unlock_summary_message(image: Image) -> str | None:
+def unlock_summary_message(session: Session, image: Image) -> str | None:
     if image.model_state != SafetyState.DO_NOT_POST.value:
         return None
-    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_unlock_effective(image):
+    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_unlock_effective(session, image):
         return "SAFE · BLURRED (verified)"
     if image.blur_unlock_status == BlurUnlockStatus.FAILED.value and image.blur_unlock_details_json:
         try:
@@ -101,19 +157,25 @@ def unlock_summary_message(image: Image) -> str | None:
         return details.get("message") or unlock_summary_message_from_parts(
             details.get("uncovered_regions") or [],
             details.get("classifier_detections") or [],
+            coverage_min=float(details.get("coverage_min", 0.95)),
         )
     if image.blurs and image.blur_unlock_status == BlurUnlockStatus.PENDING.value:
         return "Blur unlock pending verification."
     return None
 
 
-def unlock_summary_message_from_parts(uncovered: list[dict], detections: list[dict]) -> str:
+def unlock_summary_message_from_parts(
+    uncovered: list[dict],
+    detections: list[dict],
+    *,
+    coverage_min: float = 0.95,
+) -> str:
     parts: list[str] = []
     if uncovered:
         pct = ", ".join(f"{round(float(row.get('coverage', 0)) * 100)}%" for row in uncovered)
         parts.append(
             f"coverage check: {len(uncovered)} regions uncovered "
-            f"({pct} covered; every flagged area needs {round(_COVERAGE_MIN * 100)}%)"
+            f"({pct} covered; every flagged area needs {round(coverage_min * 100)}%)"
         )
     if detections:
         labels = ", ".join(sorted({row["label"] for row in detections}))
@@ -145,6 +207,8 @@ def verify_blur_unlock(
     if not image.blurs or not all(blur.approved for blur in image.blurs):
         raise ValueError("All blur covers must be approved before verification.")
 
+    gate = blur_coverage_settings(session)
+
     library = session.get(Library, image.library_id)
     if library is None:
         raise ValueError("Library was not found.")
@@ -155,24 +219,7 @@ def verify_blur_unlock(
         raise ValueError("Image dimensions are unknown.")
 
     original_rgb = oriented_rgb(read_image(source))
-    windows = [
-        BlurWindow(
-            x=blur.x,
-            y=blur.y,
-            width=blur.width,
-            height=blur.height,
-            shape=blur.shape,
-            feather=blur.feather,
-            radius=blur.radius,
-            strength=blur.strength,
-            reason=blur.reason,
-            covers_unsafe=blur.covers_unsafe,
-            rotation_deg=blur.rotation_deg,
-            corner_radius=blur.corner_radius,
-            edge_mode=blur.edge_mode or "soft",
-        )
-        for blur in image.blurs
-    ]
+    windows = _approved_windows(image)
     blurred_rgb = apply_blur_covers(original_rgb, windows)
     render_blur_derivative(
         rgb=original_rgb,
@@ -189,8 +236,8 @@ def verify_blur_unlock(
         windows,
         unsafe_boxes,
         (image.width, image.height),
-        min_ratio=_COVERAGE_MIN,
-        padding=_REGION_PADDING,
+        min_ratio=gate.min_ratio,
+        padding=gate.padding_px,
     )
     uncovered = [
         {
@@ -201,7 +248,7 @@ def verify_blur_unlock(
             "coverage": round(row.coverage, 4),
         }
         for row in coverages
-        if row.coverage < _COVERAGE_MIN
+        if row.coverage < gate.min_ratio
     ]
 
     signals = _classify_render(blurred_rgb, classifier)
@@ -221,14 +268,15 @@ def verify_blur_unlock(
     details: dict[str, Any] = {
         "uncovered_regions": uncovered,
         "classifier_detections": detections,
-        "coverage_min": _COVERAGE_MIN,
+        "coverage_min": gate.min_ratio,
+        "coverage_threshold_percent": gate.threshold_percent,
+        "coverage_padding_px": gate.padding_px,
         "model_name": signals.model_name,
-        # Lets the editor tell whether this result still applies to the covers on screen.
         "geometry_version": blur_geometry_version(list(image.blurs)),
     }
 
     if uncovered or detections:
-        message = unlock_summary_message_from_parts(uncovered, detections)
+        message = unlock_summary_message_from_parts(uncovered, detections, coverage_min=gate.min_ratio)
         details["message"] = message
         return UnlockVerification(
             status=BlurUnlockStatus.FAILED,
