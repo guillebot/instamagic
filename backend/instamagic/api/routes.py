@@ -19,7 +19,7 @@ from instamagic.auth import (
     client_ip,
     login_is_blocked,
     record_login_failure,
-    sign_session,
+    set_session_cookie,
 )
 from instamagic.config import ATTESTATION_STATEMENT, Settings, get_settings
 from instamagic.errors import GeminiBlocked, NotAllowed, NotConfigured, NotFound
@@ -498,15 +498,7 @@ def login(body: LoginIn, request: Request, response: Response, settings: Setting
         record_login_failure(failures, ip)
         raise HTTPException(status_code=401, detail="Incorrect password.")
     clear_login_failures(failures, ip)
-    response.set_cookie(
-        COOKIE_NAME,
-        sign_session(settings),
-        max_age=settings.session_ttl_seconds,
-        httponly=True,
-        samesite="lax",
-        secure=settings.session_cookie_secure(),
-        path="/",
-    )
+    set_session_cookie(response, settings)
     return {"authenticated": True}
 
 
