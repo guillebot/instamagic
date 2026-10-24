@@ -91,3 +91,26 @@ def test_min_hamming_matches_pairwise() -> None:
 
 def test_social_queue_registered() -> None:
     assert QUEUE_SOCIAL in QUEUE_NAMES
+
+
+def test_slow_section_served_stale_and_refreshed_in_background(monkeypatch):
+    from instamagic.services import app_status
+
+    app_status.reset_app_status_cache()
+    calls: list[str] = []
+    started: list[str] = []
+
+    def fake(settings, session, redis):
+        calls.append("x")
+        return {"value": len(calls)}
+
+    monkeypatch.setattr(app_status, "_refresh_in_background", lambda name, fn, settings: started.append(name))
+    first = app_status._slow_section("enrichment", fake, None, None, None, 1000.0)
+    assert first["value"] == 1 and "as_of" in first
+    fresh = app_status._slow_section("enrichment", fake, None, None, None, 1010.0)
+    assert fresh["value"] == 1 and len(calls) == 1
+    stale = app_status._slow_section("enrichment", fake, None, None, None, 1000.0 + 301)
+    assert stale["value"] == 1 and len(calls) == 1 and started == ["enrichment"]
+    app_status._slow_section("enrichment", fake, None, None, None, 1000.0 + 302)
+    assert started == ["enrichment"]
+    app_status.reset_app_status_cache()

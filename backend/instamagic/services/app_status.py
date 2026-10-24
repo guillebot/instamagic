@@ -44,6 +44,13 @@ CACHE_SECONDS = 15
 _cache_lock = threading.Lock()
 _cache: tuple[float, dict[str, Any]] | None = None
 
+# Sections too heavy to recompute on every refresh (enrichment_status loads every
+# eligible image). Served from a longer cache; once stale, the previous value is
+# returned immediately and refreshed in a background thread.
+SLOW_SECTION_TTL: dict[str, int] = {"enrichment": 300}
+_section_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_refreshing: set[str] = set()
+
 _UNIQUENESS_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
 _SECRET_RE = re.compile(r"(access_token|token|secret|code|signature)=([^&\s\"']+)", re.IGNORECASE)
 
@@ -504,6 +511,61 @@ SECTIONS: dict[str, Callable[[Settings, Session, Any], dict[str, Any]]] = {
 }
 
 
+def _run_section(name: str, fn, settings: Settings, session: Session, redis) -> dict[str, Any]:
+    try:
+        return fn(settings, session, redis)
+    except Exception as exc:
+        session.rollback()
+        log.info("status_section_failed", section=name, error_type=type(exc).__name__)
+        return {"error": f"unavailable ({type(exc).__name__})"}
+
+
+def _refresh_in_background(name: str, fn, settings: Settings) -> None:
+    def worker() -> None:
+        try:
+            from instamagic.db import session_factory
+
+            with session_factory()() as bg_session:
+                value = _run_section(name, fn, settings, bg_session, _redis(settings))
+            if "error" not in value:
+                with _cache_lock:
+                    _section_cache[name] = (time.time(), {**value, "as_of": datetime.now(UTC).isoformat()})
+        except Exception as exc:  # pragma: no cover - defensive
+            log.info("status_section_refresh_failed", section=name, error_type=type(exc).__name__)
+        finally:
+            with _cache_lock:
+                _refreshing.discard(name)
+
+    threading.Thread(target=worker, name=f"status-{name}", daemon=True).start()
+
+
+def _slow_section(name: str, fn, settings: Settings, session: Session, redis, now: float) -> dict[str, Any]:
+    ttl = SLOW_SECTION_TTL[name]
+    with _cache_lock:
+        cached = _section_cache.get(name)
+        if cached is not None and now - cached[0] < ttl:
+            return cached[1]
+        if cached is not None:
+            if name not in _refreshing:
+                _refreshing.add(name)
+                start = True
+            else:
+                start = False
+            stale = cached[1]
+        else:
+            stale = None
+    if stale is not None:
+        if start:
+            _refresh_in_background(name, fn, settings)
+        return stale
+    value = _run_section(name, fn, settings, session, redis)
+    if "error" not in value:
+        value = {**value, "as_of": datetime.now(UTC).isoformat()}
+        with _cache_lock:
+            _section_cache[name] = (now, value)
+    return value
+
+
 def build_app_status(settings: Settings, session: Session, *, bypass_cache: bool = False) -> dict[str, Any]:
     global _cache
     now = time.time()
@@ -515,12 +577,10 @@ def build_app_status(settings: Settings, session: Session, *, bypass_cache: bool
     timings: dict[str, int] = {}
     for name, fn in SECTIONS.items():
         started = time.perf_counter()
-        try:
-            payload[name] = fn(settings, session, redis)
-        except Exception as exc:
-            session.rollback()
-            log.info("status_section_failed", section=name, error_type=type(exc).__name__)
-            payload[name] = {"error": f"unavailable ({type(exc).__name__})"}
+        if name in SLOW_SECTION_TTL:
+            payload[name] = _slow_section(name, fn, settings, session, redis, now)
+        else:
+            payload[name] = _run_section(name, fn, settings, session, redis)
         timings[name] = int((time.perf_counter() - started) * 1000)
     payload["generated_at"] = datetime.now(UTC).isoformat()
     payload["cached_seconds"] = CACHE_SECONDS
@@ -534,3 +594,5 @@ def reset_app_status_cache() -> None:
     global _cache
     with _cache_lock:
         _cache = None
+        _section_cache.clear()
+        _refreshing.clear()
