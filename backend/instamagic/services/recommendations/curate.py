@@ -143,7 +143,9 @@ def collect_eligible(
         select(Image)
         .where(Image.skip_reason.is_(None))
         .where(
-            func.lower(Image.human_rating).in_([HumanRating.SAFE.value, HumanRating.EXCELLENT.value])
+            func.lower(Image.human_rating).in_(
+                [HumanRating.SAFE.value, HumanRating.EXCELLENT.value]
+            )
         )
         .where(
             or_(
@@ -183,7 +185,11 @@ def collect_eligible(
             continue
         approved = next((crop for crop in image.crops if crop.approved), None)
         covering_blur = covering_blur_fn(session, image)
-        if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved is None and not covering_blur:
+        if (
+            image.model_state == SafetyState.SAFE_AFTER_CROP.value
+            and approved is None
+            and not covering_blur
+        ):
             continue
         from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 
@@ -197,11 +203,17 @@ def collect_eligible(
             continue
         tags = [link.tag.name for link in image.tags if link.tag is not None]
         gemini_tags = [
-            link.tag.name for link in image.tags if link.tag is not None and link.source == TagSource.GEMINI.value
+            link.tag.name
+            for link in image.tags
+            if link.tag is not None and link.source == TagSource.GEMINI.value
         ]
         if gemini_tags:
             tags = list(dict.fromkeys([*gemini_tags, *tags]))
-        mood_names = [tag for tag in tags if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}]
+        mood_names = [
+            tag
+            for tag in tags
+            if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}
+        ]
         composition = image.orientation or "unknown orientation"
         if image.gemini_description:
             description = image.gemini_description
@@ -214,7 +226,9 @@ def collect_eligible(
         mood = image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified")
         score = image.score
         perf_score = (
-            image_performance_boost(perf_signals, str(image.id), tags) if perf_signals is not None else 0.0
+            image_performance_boost(perf_signals, str(image.id), tags)
+            if perf_signals is not None
+            else 0.0
         )
         ranked_input = CandidateInput(
             image_id=str(image.id),
@@ -292,7 +306,11 @@ def merge_chunked_drafts(
                 reasons=item.local_reasons,
                 tags=item.content_tags[:8],
                 captions=[
-                    CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
+                    CaptionDraft(
+                        style=style,
+                        language=language,
+                        text=f"{style}: quiet light, held for the feed.",
+                    )
                     for style, language in CURATION_CAPTION_STYLES
                 ],
             )
@@ -309,7 +327,11 @@ def merge_chunked_drafts(
                 reasons=item.local_reasons[:4] or [f"Local score {item.local_score}."],
                 tags=item.content_tags[:8],
                 captions=[
-                    CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
+                    CaptionDraft(
+                        style=style,
+                        language=language,
+                        text=f"{style}: quiet light, held for the feed.",
+                    )
                     for style, language in CURATION_CAPTION_STYLES
                 ],
             )
@@ -448,12 +470,16 @@ def execute_curation_batch(
             sharpness=item.image.score.sharpness if item.image.score else 0,
             composition=item.image.score.composition if item.image.score else 0,
             performance_score=(
-                image_performance_boost(perf_signals, str(item.image.id), item.tags) if perf_signals else 0.0
+                image_performance_boost(perf_signals, str(item.image.id), item.tags)
+                if perf_signals
+                else 0.0
             ),
         )
         for item in eligible
     ]
-    ranked = rank_candidates(shortlist_inputs, limit=effective_limit, performance_weight=performance_weight)
+    ranked = rank_candidates(
+        shortlist_inputs, limit=effective_limit, performance_weight=performance_weight
+    )
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
     held_back = held_back_near_duplicate_count(len(eligible), len(shortlist))
@@ -505,7 +531,9 @@ def execute_curation_batch(
             composition=sample.composition,
             mood=sample.mood,
             safe_description=sample.description,
-            crop=sample_crop if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value else None,
+            crop=sample_crop
+            if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value
+            else None,
             gemini_refused=any(is_gemini_refused(item.image) for item in shortlist),
         ),
         account_voice=account_voice,
@@ -574,7 +602,9 @@ def _execute_curation_gemini(
     blocked_ids: list[str] = []
     try:
         for index, chunk in enumerate(chunks, start=1):
-            batch.detail = f"shortlist={len(shortlist)} held_back={held_back} chunks={index - 1}/{len(chunks)}"
+            batch.detail = (
+                f"shortlist={len(shortlist)} held_back={held_back} chunks={index - 1}/{len(chunks)}"
+            )
             session.commit()
             outcome = curate_chunk_resilient(
                 provider,
@@ -606,10 +636,17 @@ def _execute_curation_gemini(
     for index, draft in enumerate(ordered_drafts, start=1):
         item = by_id[draft.image_id]
         existing = existing_by_image.get(item.image.id) or []
-        captions = [] if existing else draft.captions or [
-            CaptionDraft(style=style, language=language, text=f"{style}: quiet light, held for the feed.")
-            for style, language in CURATION_CAPTION_STYLES
-        ]
+        captions = (
+            []
+            if existing
+            else draft.captions
+            or [
+                CaptionDraft(
+                    style=style, language=language, text=f"{style}: quiet light, held for the feed."
+                )
+                for style, language in CURATION_CAPTION_STYLES
+            ]
+        )
         # Reuse pre-generated/user captions (background enrichment) instead of stacking new rows.
         preferred: Caption | None = existing[0] if existing else None
         for caption_draft in captions[:6]:
@@ -722,12 +759,16 @@ def run_curation(
             sharpness=item.image.score.sharpness if item.image.score else 0,
             composition=item.image.score.composition if item.image.score else 0,
             performance_score=(
-                image_performance_boost(perf_signals, str(item.image.id), item.tags) if perf_signals else 0.0
+                image_performance_boost(perf_signals, str(item.image.id), item.tags)
+                if perf_signals
+                else 0.0
             ),
         )
         for item in eligible
     ]
-    ranked = rank_candidates(shortlist_inputs, limit=effective_limit, performance_weight=performance_weight)
+    ranked = rank_candidates(
+        shortlist_inputs, limit=effective_limit, performance_weight=performance_weight
+    )
     by_id = {str(item.image.id): item for item in eligible}
     shortlist = [by_id[row.image_id] for row in ranked if row.image_id in by_id]
     held_back = held_back_near_duplicate_count(len(eligible), len(shortlist))
@@ -781,7 +822,9 @@ def run_curation(
             composition=sample.composition,
             mood=sample.mood,
             safe_description=sample.description,
-            crop=sample_crop if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value else None,
+            crop=sample_crop
+            if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value
+            else None,
             gemini_refused=any(is_gemini_refused(item.image) for item in shortlist),
         ),
         account_voice=account_voice,
@@ -861,7 +904,9 @@ def apply_suggested_tags(session: Session, pick: CurationPick) -> list[str]:
             select(ImageTag).where(ImageTag.image_id == pick.image_id, ImageTag.tag_id == tag.id)
         )
         if exists is None:
-            session.add(ImageTag(image_id=pick.image_id, tag_id=tag.id, source=TagSource.GEMINI.value))
+            session.add(
+                ImageTag(image_id=pick.image_id, tag_id=tag.id, source=TagSource.GEMINI.value)
+            )
         applied.append(name)
     return applied
 
@@ -975,13 +1020,21 @@ def undo_queued_pick(session: Session, pick: CurationPick) -> CurationPick:
         return pick
     if item.state != QueueState.CANDIDATE.value:
         raise NotAllowed("Queue item is already approved or published; cannot undo send.")
-    if item.scheduled_at is not None or item.approved_at is not None or item.published_at is not None:
+    if (
+        item.scheduled_at is not None
+        or item.approved_at is not None
+        or item.published_at is not None
+    ):
         raise NotAllowed("Queue item was already scheduled or approved; cannot undo send.")
     has_attempts = session.scalar(
-        select(func.count()).select_from(PublishAttempt).where(PublishAttempt.queue_item_id == item.id)
+        select(func.count())
+        .select_from(PublishAttempt)
+        .where(PublishAttempt.queue_item_id == item.id)
     )
     has_post = session.scalar(
-        select(func.count()).select_from(InstagramPost).where(InstagramPost.queue_item_id == item.id)
+        select(func.count())
+        .select_from(InstagramPost)
+        .where(InstagramPost.queue_item_id == item.id)
     )
     if has_attempts or has_post:
         raise NotAllowed("Queue item has publish history; cannot undo send.")
@@ -1061,9 +1114,10 @@ def reconcile_stale_curation_batches(session: Session, redis_url: str) -> int:
                 batch.finished_at = now
                 updated += 1
             continue
-        if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value} and not _rq_has_curation_job(
-            redis_url, str(job.id)
-        ):
+        if job.status in {
+            JobStatus.QUEUED.value,
+            JobStatus.RUNNING.value,
+        } and not _rq_has_curation_job(redis_url, str(job.id)):
             job.status = JobStatus.FAILED.value
             job.error = "Curation worker job expired or was lost from the queue."
             job.finished_at = now
@@ -1077,7 +1131,9 @@ def reconcile_stale_curation_batches(session: Session, redis_url: str) -> int:
 
 
 def active_curation_in_flight(session: Session, library_id: UUID | None) -> bool:
-    batch_stmt = select(CurationBatch).where(CurationBatch.status == CurationBatchStatus.RUNNING.value)
+    batch_stmt = select(CurationBatch).where(
+        CurationBatch.status == CurationBatchStatus.RUNNING.value
+    )
     if library_id is None:
         batch_stmt = batch_stmt.where(CurationBatch.library_id.is_(None))
     else:

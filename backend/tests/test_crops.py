@@ -12,7 +12,11 @@ def test_crop_excludes_unsafe_region_and_keeps_face() -> None:
     face = Box(400, 180, 200, 200)
     unsafe = Box(80, 760, 500, 200)
     crops = generate_crops(1000, 1000, [face], [unsafe])
-    safety = [crop for crop in crops if crop.aspect_ratio != "original" and crop.contains_face and crop.excludes_unsafe]
+    safety = [
+        crop
+        for crop in crops
+        if crop.aspect_ratio != "original" and crop.contains_face and crop.excludes_unsafe
+    ]
     assert safety
     assert viable_safety_crop(crops)
     for crop in safety:

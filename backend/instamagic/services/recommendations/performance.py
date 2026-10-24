@@ -118,7 +118,9 @@ def best_posting_times(session: Session) -> dict[str, object]:
         "best_weekdays_iso": best_weekdays,
         "hour_scores": {str(h): round(s, 4) for h, s in signals.by_hour.items()},
         "weekday_scores": {str(d): round(s, 4) for d, s in signals.by_weekday.items()},
-        "tag_scores": {k: round(v, 4) for k, v in sorted(signals.by_tag.items(), key=lambda p: -p[1])[:20]},
+        "tag_scores": {
+            k: round(v, 4) for k, v in sorted(signals.by_tag.items(), key=lambda p: -p[1])[:20]
+        },
     }
 
 
@@ -126,7 +128,9 @@ def insights_dashboard(session: Session) -> dict[str, object]:
     from instamagic.models import InstagramAccountInsightSnapshot
 
     snaps = session.scalars(
-        select(InstagramAccountInsightSnapshot).order_by(InstagramAccountInsightSnapshot.captured_at.asc()).limit(90)
+        select(InstagramAccountInsightSnapshot)
+        .order_by(InstagramAccountInsightSnapshot.captured_at.asc())
+        .limit(90)
     ).all()
     follower_trend = [
         {
@@ -140,7 +144,9 @@ def insights_dashboard(session: Session) -> dict[str, object]:
     top_posts = session.execute(
         select(InstagramPost, InstagramMetrics)
         .join(InstagramMetrics, InstagramMetrics.post_id == InstagramPost.id)
-        .order_by(InstagramMetrics.engagement_rate.desc().nullslast(), InstagramMetrics.captured_at.desc())
+        .order_by(
+            InstagramMetrics.engagement_rate.desc().nullslast(), InstagramMetrics.captured_at.desc()
+        )
         .limit(12)
     ).all()
     posts_out: list[dict[str, object]] = []

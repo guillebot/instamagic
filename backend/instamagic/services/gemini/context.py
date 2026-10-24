@@ -171,22 +171,19 @@ def _assemble_context(
         if crop is not None:
             description = (
                 f"Describe only the approved {crop.get('aspect_ratio', 'crop')} crop. "
-                "Do not infer what was excluded from the frame. "
-                + description
+                "Do not infer what was excluded from the frame. " + description
             )
         else:
             description = (
                 "Describe the photograph with approved covering blur applied. "
-                "Do not infer what was covered. "
-                + description
+                "Do not infer what was covered. " + description
             )
             crop_payload = None
     elif model_state == "DO_NOT_POST":
         # Only reachable when the gate accepted a verified blur unlock with approved covers.
         description = (
             "Describe the photograph with approved covering blur applied. "
-            "Do not infer what was covered. "
-            + description
+            "Do not infer what was covered. " + description
         )
         crop_payload = None
     return GeminiContext(

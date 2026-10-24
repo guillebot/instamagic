@@ -98,7 +98,9 @@ def config_view(session: Session) -> ScheduleConfigView:
         story_share_default=bool(row.story_share_default),
         story_render_mode_default=row.story_render_mode_default,
         story_border_color_default=row.story_border_color_default,
-        blur_coverage_threshold=int(row.blur_coverage_threshold or DEFAULT_COVERAGE_THRESHOLD_PERCENT),
+        blur_coverage_threshold=int(
+            row.blur_coverage_threshold or DEFAULT_COVERAGE_THRESHOLD_PERCENT
+        ),
         blur_region_padding_px=int(row.blur_region_padding_px or DEFAULT_REGION_PADDING_PX),
         updated_at=row.updated_at,
     )

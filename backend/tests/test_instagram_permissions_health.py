@@ -77,7 +77,9 @@ def test_user_token_scopes_via_me_permissions(monkeypatch: pytest.MonkeyPatch) -
     assert fetched.scopes == frozenset({"instagram_manage_comments"})
 
 
-def test_page_token_without_app_creds_is_scope_undetermined(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_page_token_without_app_creds_is_scope_undetermined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fake_graph_get(url, *, params, timeout, action):
         if url.endswith("/me/permissions"):
             raise NotConfigured(
@@ -119,7 +121,10 @@ def test_refresh_persists_debug_token_scopes(app_env, monkeypatch: pytest.Monkey
 
     row = get_connection(session)
     assert row is not None
-    assert json.loads(row.token_scopes_json or "[]") == ["instagram_basic", "instagram_manage_insights"]
+    assert json.loads(row.token_scopes_json or "[]") == [
+        "instagram_basic",
+        "instagram_manage_insights",
+    ]
     session.close()
 
 
@@ -145,7 +150,9 @@ def test_sync_proceeds_when_scopes_undetermined(monkeypatch: pytest.MonkeyPatch,
         return []
 
     monkeypatch.setattr(GraphInstagramClient, "fetch_granted_permissions_detailed", fake_detailed)
-    monkeypatch.setattr(GraphInstagramClient, "fetch_account_insight_snapshot", fake_account_insights)
+    monkeypatch.setattr(
+        GraphInstagramClient, "fetch_account_insight_snapshot", fake_account_insights
+    )
     monkeypatch.setattr(GraphInstagramClient, "list_recent_media", fake_media)
 
     client = GraphInstagramClient(access_token="page-token", business_account_id="178414000")
@@ -164,7 +171,9 @@ def test_health_live_auth_failure_is_down(monkeypatch: pytest.MonkeyPatch, app_e
 
     session = session_factory()()
     try:
-        save_credentials(session, settings, access_token="bad-token", business_account_id="178414000")
+        save_credentials(
+            session, settings, access_token="bad-token", business_account_id="178414000"
+        )
         save_account_profile(
             session,
             InstagramAccountDetails(id="178414000", username="foto.sch", name="Cached"),
@@ -173,7 +182,9 @@ def test_health_live_auth_failure_is_down(monkeypatch: pytest.MonkeyPatch, app_e
         session.close()
 
     def fake_live(self):
-        raise NotConfigured("Instagram probe account username failed: Error validating access token (#190)")
+        raise NotConfigured(
+            "Instagram probe account username failed: Error validating access token (#190)"
+        )
 
     monkeypatch.setattr(GraphInstagramClient, "fetch_live_username", fake_live)
 

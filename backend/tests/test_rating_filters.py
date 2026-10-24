@@ -28,11 +28,18 @@ def test_human_rating_and_effective_safe_filters(client, app_env) -> None:
     login(client)
     library_id = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": STATEMENT,
+        },
     ).json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
 
-    items = client.get("/api/images", params={"library_id": library_id, "folder": "Album"}).json()["items"]
+    items = client.get("/api/images", params={"library_id": library_id, "folder": "Album"}).json()[
+        "items"
+    ]
     assert len(items) == 4
     ratings = ["reject", "review", "safe", "excellent"]
     for item, rating in zip(sorted(items, key=lambda row: row["filename"]), ratings, strict=True):
@@ -42,7 +49,9 @@ def test_human_rating_and_effective_safe_filters(client, app_env) -> None:
         assert out["model_state"] == "REVIEW"
 
     def names(**params: str) -> list[str]:
-        response = client.get("/api/images", params={"library_id": library_id, "folder": "Album", **params})
+        response = client.get(
+            "/api/images", params={"library_id": library_id, "folder": "Album", **params}
+        )
         assert response.status_code == 200, response.text
         return sorted(row["filename"] for row in response.json()["items"])
 
@@ -64,10 +73,13 @@ def test_human_rating_and_effective_safe_filters(client, app_env) -> None:
 
     # Folder scoping still applies — Other/e.jpg is rated nowhere.
     assert "e.jpg" not in names(model_state="SAFE")
-    assert client.get(
-        "/api/images",
-        params={"library_id": library_id, "folder": "Album", "human_rating": "nope"},
-    ).status_code == 400
+    assert (
+        client.get(
+            "/api/images",
+            params={"library_id": library_id, "folder": "Album", "human_rating": "nope"},
+        ).status_code
+        == 400
+    )
 
 
 def test_safe_filter_with_include_subfolders(client, app_env) -> None:
@@ -81,7 +93,12 @@ def test_safe_filter_with_include_subfolders(client, app_env) -> None:
     login(client)
     library_id = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": STATEMENT,
+        },
     ).json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
 
@@ -146,7 +163,12 @@ def test_safe_after_crop_and_blur_filters(client, app_env) -> None:
     login(client)
     library_id = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": STATEMENT,
+        },
     ).json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
 

@@ -33,7 +33,12 @@ def _marked(path: Path, color: tuple[int, int, int]) -> None:
 def _library(client, library: Path) -> str:
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": ATTESTATION,
+        },
     )
     assert created.status_code == 201
     library_id = created.json()["id"]
@@ -156,7 +161,9 @@ def test_final_story_file_check_passes_for_feed_render(app_env, tmp_path: Path) 
     _marked(feed, (30, 80, 120))
     for mode in StoryRenderMode:
         out = tmp_path / f"story-{mode.value}.jpg"
-        write_story_jpeg(render_story_from_feed_file(feed, mode=mode.value, border_color="white"), out)
+        write_story_jpeg(
+            render_story_from_feed_file(feed, mode=mode.value, border_color="white"), out
+        )
         assert_story_file_matches_feed(out, feed, mode=mode.value, border_color="white")
 
 
@@ -176,7 +183,9 @@ def test_final_story_file_check_rejects_unblurred_source(app_env, tmp_path: Path
     blurred.save(feed, format="JPEG", quality=95)
     for mode in StoryRenderMode:
         out = tmp_path / f"leak-{mode.value}.jpg"
-        write_story_jpeg(render_story_from_feed_file(original_path, mode=mode.value, border_color="black"), out)
+        write_story_jpeg(
+            render_story_from_feed_file(original_path, mode=mode.value, border_color="black"), out
+        )
         with pytest.raises(NotAllowed):
             assert_story_file_matches_feed(out, feed, mode=mode.value, border_color="black")
 
@@ -190,10 +199,20 @@ def _blurred_published_with_delayed_story(client, app_env, name: str) -> tuple[s
     library_id = _library(client, library)
     items = client.get("/api/images", params={"library_id": library_id}).json()["items"]
     image_id = items[0]["id"]
-    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "excellent"}).status_code == 200
+    assert (
+        client.post(f"/api/images/{image_id}/rating", json={"rating": "excellent"}).status_code
+        == 200
+    )
     manual = client.post(
         f"/api/images/{image_id}/blurs",
-        json={"x": 200, "y": 250, "width": 400, "height": 400, "strength": "standard", "reason": "Cover."},
+        json={
+            "x": 200,
+            "y": 250,
+            "width": 400,
+            "height": 400,
+            "strength": "standard",
+            "reason": "Cover.",
+        },
     )
     assert manual.status_code == 201, manual.text
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
@@ -255,7 +274,14 @@ def test_story_refused_and_unscheduled_when_blur_changes_after_feed(client, app_
     image_id, queue_id = _blurred_published_with_delayed_story(client, app_env, "changed.jpg")
     extra = client.post(
         f"/api/images/{image_id}/blurs",
-        json={"x": 20, "y": 20, "width": 100, "height": 100, "strength": "standard", "reason": "More."},
+        json={
+            "x": 20,
+            "y": 20,
+            "width": 100,
+            "height": 100,
+            "strength": "standard",
+            "reason": "More.",
+        },
     )
     assert extra.status_code == 201, extra.text
     session = session_factory()()

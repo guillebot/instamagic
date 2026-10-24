@@ -56,7 +56,10 @@ def test_library_create_rejects_outside_allowed_roots(client, app_env) -> None:
         json={"name": "bad", "root_path": str(outside), "confirmed": False, "statement": ""},
     )
     assert response.status_code == 400
-    assert "allowed" in response.json()["detail"].lower() or "outside" in response.json()["detail"].lower()
+    assert (
+        "allowed" in response.json()["detail"].lower()
+        or "outside" in response.json()["detail"].lower()
+    )
 
 
 def test_assert_library_root_prefix_boundary(tmp_path: Path) -> None:
@@ -81,7 +84,12 @@ def test_derivative_escape_via_db_path_is_404(client, app_env) -> None:
     statement = "I confirm that every person depicted in this library is a consenting adult."
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": statement},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": statement,
+        },
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202

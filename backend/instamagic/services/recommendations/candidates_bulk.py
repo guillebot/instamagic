@@ -9,7 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 
-def try_enqueue_image(session: Session, image: Image, *, covering_blur_fn) -> tuple[bool, str | None]:
+def try_enqueue_image(
+    session: Session, image: Image, *, covering_blur_fn
+) -> tuple[bool, str | None]:
     approved = next((crop for crop in image.crops if crop.approved), None)
     covering_blur = covering_blur_fn(session, image)
     gate = publishing_gate(
@@ -71,7 +73,9 @@ def bulk_enqueue(
 
 def bulk_reject(session: Session, image_ids: list[UUID]) -> list[tuple[UUID, bool, str | None]]:
     unique = list(dict.fromkeys(image_ids))
-    images = session.scalars(select(Image).where(Image.id.in_(unique), Image.skip_reason.is_(None))).all()
+    images = session.scalars(
+        select(Image).where(Image.id.in_(unique), Image.skip_reason.is_(None))
+    ).all()
     by_id = {image.id: image for image in images}
     results: list[tuple[UUID, bool, str | None]] = []
     for image_id in unique:

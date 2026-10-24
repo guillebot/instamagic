@@ -44,7 +44,9 @@ def validate_threshold_percent(value: int) -> int:
 
 def validate_padding_px(value: int) -> int:
     if value < MIN_REGION_PADDING_PX or value > MAX_REGION_PADDING_PX:
-        raise ValueError(f"blur_region_padding_px must be between {MIN_REGION_PADDING_PX} and {MAX_REGION_PADDING_PX}.")
+        raise ValueError(
+            f"blur_region_padding_px must be between {MIN_REGION_PADDING_PX} and {MAX_REGION_PADDING_PX}."
+        )
     return value
 
 
@@ -52,7 +54,9 @@ def _from_row(row: object) -> BlurCoverageSettings:
     threshold = getattr(row, "blur_coverage_threshold", None)
     padding = getattr(row, "blur_region_padding_px", None)
     return BlurCoverageSettings(
-        threshold_percent=_clamp_threshold(threshold if threshold is not None else DEFAULT_COVERAGE_THRESHOLD_PERCENT),
+        threshold_percent=_clamp_threshold(
+            threshold if threshold is not None else DEFAULT_COVERAGE_THRESHOLD_PERCENT
+        ),
         padding_px=_clamp_padding(padding if padding is not None else DEFAULT_REGION_PADDING_PX),
     )
 

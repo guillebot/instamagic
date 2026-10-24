@@ -17,7 +17,12 @@ ATTESTATION = "I confirm that every person depicted in this library is a consent
 def _attested_library(client, library: Path) -> str:
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": ATTESTATION,
+        },
     )
     assert created.status_code == 201, created.text
     library_id = created.json()["id"]
@@ -68,7 +73,12 @@ def test_api_returns_blurred_thumbnail_url(client, app_env) -> None:
     unsafe = next(item for item in items if item["model_state"] == "SAFE_AFTER_CROP")
     image_id = unsafe["id"]
     client.post(f"/api/images/{unsafe['id']}/rating", json={"rating": "safe"})
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "standard"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "standard"}
+        ).status_code
+        == 200
+    )
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     detail = client.get(f"/api/images/{image_id}").json()
     assert detail["thumbnail_url"].startswith(f"/api/derivatives/{image_id}/blurred-thumbnail?v=")
@@ -88,7 +98,12 @@ def test_publish_renders_blur_when_derivative_missing(client, app_env) -> None:
     unsafe = next(item for item in items if item["model_state"] == "SAFE_AFTER_CROP")
     image_id = unsafe["id"]
     client.post(f"/api/images/{image_id}/rating", json={"rating": "excellent"})
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "standard"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "standard"}
+        ).status_code
+        == 200
+    )
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     derivatives = app_env["derivatives"]
     cover = derivatives / f"{image_id}/blurs/cover.jpg"

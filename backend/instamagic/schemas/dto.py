@@ -284,7 +284,12 @@ class CropApproveIn(BaseModel):
             return None
         if any(value is None for value in values):
             raise ValueError("Crop adjustments require x, y, width, and height together.")
-        assert self.x is not None and self.y is not None and self.width is not None and self.height is not None
+        assert (
+            self.x is not None
+            and self.y is not None
+            and self.width is not None
+            and self.height is not None
+        )
         return self.x, self.y, self.width, self.height
 
 

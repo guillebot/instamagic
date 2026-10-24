@@ -73,12 +73,16 @@ def caption_prompt(context: dict[str, Any]) -> str:
 
 
 class GeminiProvider:
-    def generate(self, context: dict[str, Any], image_bytes: bytes | None, policy: str) -> CaptionBatch:
+    def generate(
+        self, context: dict[str, Any], image_bytes: bytes | None, policy: str
+    ) -> CaptionBatch:
         raise NotImplementedError
 
 
 class FakeGeminiProvider(GeminiProvider):
-    def generate(self, context: dict[str, Any], image_bytes: bytes | None, policy: str) -> CaptionBatch:
+    def generate(
+        self, context: dict[str, Any], image_bytes: bytes | None, policy: str
+    ) -> CaptionBatch:
         from instamagic.services.gemini.context import gemini_allows_pixels
 
         if not gemini_allows_pixels(policy):
@@ -102,7 +106,9 @@ class GoogleGeminiProvider(GeminiProvider):
         self.api_key = api_key
         self.model = model
 
-    def generate(self, context: dict[str, Any], image_bytes: bytes | None, policy: str) -> CaptionBatch:
+    def generate(
+        self, context: dict[str, Any], image_bytes: bytes | None, policy: str
+    ) -> CaptionBatch:
         import httpx
         from instamagic.services.gemini.context import gemini_allows_pixels
 
@@ -120,7 +126,9 @@ class GoogleGeminiProvider(GeminiProvider):
                     }
                 }
             )
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        )
         response = httpx.post(
             url,
             params={"key": self.api_key},

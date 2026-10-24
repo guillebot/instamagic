@@ -63,15 +63,21 @@ def _seed(client, library: Path) -> dict[str, str]:
     _marked(library / "s1" / "unrated.jpg", (10, 90, 30), (20, 20, 50, 50))
     login(client)
     created = client.post(
-        "/api/libraries", json={"name": "A", "root_path": str(library), "confirmed": True, "statement": STATEMENT}
+        "/api/libraries",
+        json={"name": "A", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
-    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()["items"]
+    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()[
+        "items"
+    ]
     ids = {item["filename"]: item["id"] for item in items}
     for name, image_id in ids.items():
         if name != "unrated.jpg":
-            assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
+            assert (
+                client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code
+                == 200
+            )
     return ids
 
 
@@ -130,7 +136,9 @@ def test_eligibility_uses_central_gate_and_stores_hashtags(client, app_env) -> N
     assert blocked.model_state == "DO_NOT_POST"
     assert blocked.blur_unlock_status != "verified"
     # Rated tier only here; the prefetch tier for unrated clean photos is covered below.
-    assert client.put("/api/enrichment/settings", json={"prefetch_enabled": False}).status_code == 200
+    assert (
+        client.put("/api/enrichment/settings", json={"prefetch_enabled": False}).status_code == 200
+    )
 
     summary = _batch(redis=FakeRedis())
     assert summary["state"] == "running"
@@ -154,10 +162,14 @@ def test_eligibility_uses_central_gate_and_stores_hashtags(client, app_env) -> N
     assert status["enabled"] is True
 
     # Hashtag endpoint returns the stored set without a new Gemini call.
-    stored = client.post(f"/api/images/{ids['a-clean.jpg']}/hashtags", json={"confirmed": True}).json()
+    stored = client.post(
+        f"/api/images/{ids['a-clean.jpg']}/hashtags", json={"confirmed": True}
+    ).json()
     assert stored["stored"] is True
     assert stored["tags"] == enrichment.stored_hashtags(_image(ids["a-clean.jpg"]))
-    assert client.get(f"/api/images/{ids['a-clean.jpg']}").json()["enrich_hashtags"] == stored["tags"]
+    assert (
+        client.get(f"/api/images/{ids['a-clean.jpg']}").json()["enrich_hashtags"] == stored["tags"]
+    )
 
 
 def test_never_overwrites_existing_captions(client, app_env) -> None:
@@ -189,7 +201,10 @@ def test_pause_disable_and_daily_cap(client, app_env) -> None:
     assert _image(ids["a-clean.jpg"]).enrich_hashtags_json is None
     assert client.post("/api/enrichment/resume").json()["paused"] is False
 
-    assert client.put("/api/enrichment/settings", json={"enabled": False}).json()["state"] == "disabled"
+    assert (
+        client.put("/api/enrichment/settings", json={"enabled": False}).json()["state"]
+        == "disabled"
+    )
     assert _batch(redis=FakeRedis())["state"] == "disabled"
     client.put("/api/enrichment/settings", json={"enabled": True, "daily_cap": 1})
 
@@ -197,7 +212,9 @@ def test_pause_disable_and_daily_cap(client, app_env) -> None:
     summary = _batch(redis=redis)
     assert enrichment.calls_today(redis) <= 1
     assert summary["state"] == "capped"
-    ready = [name for name in ("a-clean.jpg", "b-clean.jpg") if _image(ids[name]).enrich_hashtags_json]
+    ready = [
+        name for name in ("a-clean.jpg", "b-clean.jpg") if _image(ids[name]).enrich_hashtags_json
+    ]
     assert len(ready) == 1
     assert _batch(redis=redis)["state"] == "capped"
 
@@ -244,7 +261,9 @@ def test_curation_reuses_pregenerated_captions_and_hashtags(client, app_env) -> 
     _batch(redis=FakeRedis())
     target = ids["a-clean.jpg"]
     before = _caption_rows(target)
-    created = client.post("/api/curation", json={"limit": 0, "include_images": False, "confirmed": True})
+    created = client.post(
+        "/api/curation", json={"limit": 0, "include_images": False, "confirmed": True}
+    )
     assert created.status_code == 201, created.text
     picks = {pick["image"]["id"]: pick for pick in created.json()["picks"]}
     assert target in picks
@@ -252,7 +271,9 @@ def test_curation_reuses_pregenerated_captions_and_hashtags(client, app_env) -> 
     assert picks[target]["suggested_tags"] == enrichment.stored_hashtags(_image(target))
     session = session_factory()()
     try:
-        count = session.scalar(select(func.count()).select_from(Caption).where(Caption.image_id == UUID(target)))
+        count = session.scalar(
+            select(func.count()).select_from(Caption).where(Caption.image_id == UUID(target))
+        )
     finally:
         session.close()
     assert count == len(before)
@@ -292,14 +313,25 @@ def _seed_prefetch(client, library: Path) -> dict[str, str]:
     _marked(library / "s2" / "rejected.jpg", (70, 70, 70), (10, 10, 40, 40))
     login(client)
     created = client.post(
-        "/api/libraries", json={"name": "P", "root_path": str(library), "confirmed": True, "statement": STATEMENT}
+        "/api/libraries",
+        json={"name": "P", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
-    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()["items"]
+    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()[
+        "items"
+    ]
     ids = {item["filename"]: item["id"] for item in items}
-    assert client.post(f"/api/images/{ids['a-clean.jpg']}/rating", json={"rating": "safe"}).status_code == 200
-    assert client.post(f"/api/images/{ids['rejected.jpg']}/rating", json={"rating": "reject"}).status_code == 200
+    assert (
+        client.post(f"/api/images/{ids['a-clean.jpg']}/rating", json={"rating": "safe"}).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/images/{ids['rejected.jpg']}/rating", json={"rating": "reject"}
+        ).status_code
+        == 200
+    )
     return ids
 
 
@@ -311,7 +343,9 @@ def _queue_count() -> int:
         session.close()
 
 
-def test_prefetch_generates_for_clean_unrated_but_never_makes_them_queueable(client, app_env) -> None:
+def test_prefetch_generates_for_clean_unrated_but_never_makes_them_queueable(
+    client, app_env
+) -> None:
     from instamagic.services.pipeline import is_attested
     from instamagic.services.recommendations.candidates_bulk import try_enqueue_image
     from instamagic.services.recommendations.gates import gemini_gate, publishing_gate
@@ -359,7 +393,9 @@ def test_prefetch_generates_for_clean_unrated_but_never_makes_them_queueable(cli
     try:
         image = session.get(Image, UUID(target))
         attested = is_attested(session, image.library_id)
-        assert not publishing_gate(attested=attested, **publishing_gate_kwargs(session, image)).allowed
+        assert not publishing_gate(
+            attested=attested, **publishing_gate_kwargs(session, image)
+        ).allowed
         ok, _reason = try_enqueue_image(session, image, covering_blur_fn=has_approved_covering_blur)
         assert ok is False
         session.rollback()
@@ -380,7 +416,9 @@ def test_prefetch_generates_for_clean_unrated_but_never_makes_them_queueable(cli
     finally:
         session.close()
     assert _queue_count() == queue_before
-    created = client.post("/api/curation", json={"limit": 0, "include_images": False, "confirmed": True})
+    created = client.post(
+        "/api/curation", json={"limit": 0, "include_images": False, "confirmed": True}
+    )
     assert created.status_code == 201, created.text
     picked = {pick["image"]["id"] for pick in created.json()["picks"]}
     assert target not in picked and ids["unrated-two.jpg"] not in picked
@@ -390,7 +428,12 @@ def test_prefetch_generates_for_clean_unrated_but_never_makes_them_queueable(cli
 def test_prefetch_toggle_cap_priority_and_existing_captions(client, app_env) -> None:
     ids = _seed_prefetch(client, app_env["library"])
     # Toggle off: only the rated tier runs.
-    assert client.put("/api/enrichment/settings", json={"prefetch_enabled": False}).json()["prefetch_enabled"] is False
+    assert (
+        client.put("/api/enrichment/settings", json={"prefetch_enabled": False}).json()[
+            "prefetch_enabled"
+        ]
+        is False
+    )
     _batch(redis=FakeRedis())
     assert enrichment.stored_hashtags(_image(ids["a-clean.jpg"]))
     assert _image(ids["unrated.jpg"]).gemini_label_status is None
@@ -411,9 +454,12 @@ def test_prefetch_toggle_cap_priority_and_existing_captions(client, app_env) -> 
     assert order == [ids["unrated-two.jpg"], ids["unrated.jpg"]]
 
     # Prefetch cap: 2 calls = one photo (label + hashtags), the best one.
-    assert client.put(
-        "/api/enrichment/settings", json={"prefetch_enabled": True, "prefetch_daily_cap": 2}
-    ).status_code == 200
+    assert (
+        client.put(
+            "/api/enrichment/settings", json={"prefetch_enabled": True, "prefetch_daily_cap": 2}
+        ).status_code
+        == 200
+    )
     redis = FakeRedis()
     _batch(redis=redis, concurrency=1)
     assert enrichment.calls_today(redis, prefetch=True) == 2
@@ -424,7 +470,16 @@ def test_prefetch_toggle_cap_priority_and_existing_captions(client, app_env) -> 
     # A photo that already has captions is not re-labeled by prefetch (no second caption set).
     session = session_factory()()
     image = session.get(Image, UUID(ids["unrated.jpg"]))
-    session.add(Caption(image_id=image.id, style="short", language="en", text="Mine.", original_text="Mine.", status="modified"))
+    session.add(
+        Caption(
+            image_id=image.id,
+            style="short",
+            language="en",
+            text="Mine.",
+            original_text="Mine.",
+            status="modified",
+        )
+    )
     session.commit()
     session.close()
     client.put("/api/enrichment/settings", json={"prefetch_daily_cap": 300})

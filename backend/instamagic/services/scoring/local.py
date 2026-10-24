@@ -17,7 +17,9 @@ def score_image(image: Image.Image, face: Box | None) -> dict[str, float]:
     exposure = 1.0 - min(1.0, clipped * 4)
     technical = 0.7 * sharpness + 0.3 * exposure
     composition = _composition(sample.size, face, image.size)
-    face_quality = 0.0 if face is None else min(1.0, face.area / max(1, image.size[0] * image.size[1]) * 12)
+    face_quality = (
+        0.0 if face is None else min(1.0, face.area / max(1, image.size[0] * image.size[1]) * 12)
+    )
     if face is not None:
         face_quality = max(face_quality, 0.55 if sharpness > 0.4 else 0.35)
     aesthetic = 0.5 * technical + 0.3 * composition + 0.2 * face_quality
@@ -37,7 +39,9 @@ def is_monochrome(image: Image.Image) -> bool:
     return float(np.mean(hsv[:, :, 1])) < 18
 
 
-def _composition(sample_size: tuple[int, int], face: Box | None, full_size: tuple[int, int]) -> float:
+def _composition(
+    sample_size: tuple[int, int], face: Box | None, full_size: tuple[int, int]
+) -> float:
     if face is None or full_size[0] == 0 or full_size[1] == 0:
         return 0.45
     scale_x = sample_size[0] / full_size[0]

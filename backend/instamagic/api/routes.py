@@ -340,17 +340,21 @@ def _enqueue_gemini_label_work(
 
 def _image_out(session: Session, image: Image, *, settings: Settings | None = None) -> ImageOut:
     approved_queue = next(iter(image.queue_items), None) if image.queue_items else None
-    has_approved_crop = any(crop.approved for crop in image.crops) if image.crops is not None else False
-    has_approved_blur = any(blur.approved for blur in image.blurs) if image.blurs is not None else False
-    covering_blur = _has_approved_covering_blur(session, image)
-    original_preview = (
-        f"/api/derivatives/{image.id}/preview" if image.preview_path else None
+    has_approved_crop = (
+        any(crop.approved for crop in image.crops) if image.crops is not None else False
     )
+    has_approved_blur = (
+        any(blur.approved for blur in image.blurs) if image.blurs is not None else False
+    )
+    covering_blur = _has_approved_covering_blur(session, image)
+    original_preview = f"/api/derivatives/{image.id}/preview" if image.preview_path else None
     use_blurred_previews = has_approved_blur or (
         image.model_state == SafetyState.DO_NOT_POST.value and bool(image.blurs)
     )
     blur_version = _image_blur_version(image) if image.blurs else None
-    approved_crop = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
+    approved_crop = (
+        next((crop for crop in image.crops if crop.approved), None) if image.crops else None
+    )
     crop_key = (
         f"{approved_crop.id}:{approved_crop.x},{approved_crop.y},{approved_crop.width},{approved_crop.height}"
         if approved_crop
@@ -489,7 +493,9 @@ def ready(session: Session = db_dep) -> dict[str, str]:
 
 
 @router.post("/api/auth/login")
-def login(body: LoginIn, request: Request, response: Response, settings: Settings = Depends(settings_dep)) -> dict[str, bool]:
+def login(
+    body: LoginIn, request: Request, response: Response, settings: Settings = Depends(settings_dep)
+) -> dict[str, bool]:
     ip = client_ip(request)
     failures: dict[str, list[float]] = request.app.state.login_failures
     if login_is_blocked(failures, ip):
@@ -520,7 +526,11 @@ def auth_session(_auth: None = Depends(require_session)) -> dict[str, bool]:
 
 
 @router.get("/api/config")
-def config(request: Request, _auth: None = Depends(require_session), settings: Settings = Depends(settings_dep)) -> dict[str, object]:
+def config(
+    request: Request,
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
     classifier = request.app.state.classifier
     ig = getattr(request.app.state, "instagram", None)
     return {
@@ -529,7 +539,9 @@ def config(request: Request, _auth: None = Depends(require_session), settings: S
         "gemini_pixels_allowed": gemini_allows_pixels(settings.gemini_image_policy),
         "gemini_configured": settings.gemini_provider == "fake" or bool(settings.gemini_api_key),
         "auto_publish": settings.auto_publish,
-        "instagram_configured": bool(ig.configured()) if ig is not None else settings.instagram_configured(),
+        "instagram_configured": bool(ig.configured())
+        if ig is not None
+        else settings.instagram_configured(),
         "instagram_provider": settings.instagram_provider,
         "account_voice": settings.account_voice,
         "detector_available": bool(classifier.available()),
@@ -540,12 +552,16 @@ def config(request: Request, _auth: None = Depends(require_session), settings: S
 
 
 @router.get("/api/libraries")
-def list_libraries(_auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
+def list_libraries(
+    _auth: None = Depends(require_session), session: Session = db_dep
+) -> list[dict[str, object]]:
     rows = session.scalars(select(Library).order_by(Library.created_at.desc())).all()
     payload = []
     for library in rows:
         count = session.scalar(
-            select(func.count()).select_from(Image).where(Image.library_id == library.id, Image.skip_reason.is_(None))
+            select(func.count())
+            .select_from(Image)
+            .where(Image.library_id == library.id, Image.skip_reason.is_(None))
         )
         payload.append(
             {
@@ -587,7 +603,12 @@ def create_library(
             )
         )
     session.commit()
-    return {"id": library.id, "name": library.name, "root_path": library.root_path, "attested": body.confirmed}
+    return {
+        "id": library.id,
+        "name": library.name,
+        "root_path": library.root_path,
+        "attested": body.confirmed,
+    }
 
 
 @router.post("/api/libraries/{library_id}/attest")
@@ -602,7 +623,9 @@ def attest_library(
         raise NotFound("Library was not found.")
     if not body.confirmed or body.statement.strip() != ATTESTATION_STATEMENT:
         raise HTTPException(status_code=400, detail="Attestation statement does not match.")
-    session.add(AdultAttestation(library_id=library.id, confirmed=True, statement=ATTESTATION_STATEMENT))
+    session.add(
+        AdultAttestation(library_id=library.id, confirmed=True, statement=ATTESTATION_STATEMENT)
+    )
     session.commit()
     recompute_model_states(session, library.id)
     return {"attested": True}
@@ -635,7 +658,9 @@ def scan_library(
     )
     if active is not None:
         return {"job_id": str(active.id), "status": active.status}
-    job = ProcessingJob(kind="scan", status=JobStatus.QUEUED.value, library_id=library.id, detail="scan queued")
+    job = ProcessingJob(
+        kind="scan", status=JobStatus.QUEUED.value, library_id=library.id, detail="scan queued"
+    )
     session.add(job)
     session.commit()
     if settings.pipeline_mode == "inline":
@@ -675,13 +700,19 @@ def _library_classification_counts(session: Session, library_id: UUID | None) ->
         session.scalar(
             select(func.count())
             .select_from(Image)
-            .where(Image.library_id == library_id, Image.skip_reason.is_(None), Image.model_state.is_not(None))
+            .where(
+                Image.library_id == library_id,
+                Image.skip_reason.is_(None),
+                Image.model_state.is_not(None),
+            )
         )
         or 0
     )
     visible = int(
         session.scalar(
-            select(func.count()).select_from(Image).where(Image.library_id == library_id, Image.skip_reason.is_(None))
+            select(func.count())
+            .select_from(Image)
+            .where(Image.library_id == library_id, Image.skip_reason.is_(None))
         )
         or 0
     )
@@ -758,12 +789,18 @@ def get_job(
 
 
 @router.get("/api/queues", response_model=QueuesOut)
-def list_queues(_auth: None = Depends(require_session), settings: Settings = Depends(settings_dep)) -> QueuesOut:
+def list_queues(
+    _auth: None = Depends(require_session), settings: Settings = Depends(settings_dep)
+) -> QueuesOut:
     return snapshot_queues(settings.redis_url)
 
 
 @router.get("/api/facets")
-def facets(library_id: UUID | None = None, _auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, list[str]]:
+def facets(
+    library_id: UUID | None = None,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, list[str]]:
     def values(column):  # type: ignore[no-untyped-def]
         stmt = select(column).where(column.is_not(None), Image.skip_reason.is_(None)).distinct()
         if library_id:
@@ -867,7 +904,9 @@ def list_images(
 
 
 @router.get("/api/images/{image_id}", response_model=ImageOut)
-def get_image(image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> ImageOut:
+def get_image(
+    image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep
+) -> ImageOut:
     return _image_out(session, _load_image(session, image_id))
 
 
@@ -926,7 +965,9 @@ def rate(
 
 
 @router.get("/api/images/{image_id}/crops", response_model=list[CropOut])
-def list_crops(image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> list[CropOut]:
+def list_crops(
+    image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep
+) -> list[CropOut]:
     image = _load_image(session, image_id)
     return [_crop_out(image, crop) for crop in image.crops]
 
@@ -1144,7 +1185,9 @@ def update_blur(
         reason=body.reason if body.reason is not None else current.reason,
         covers_unsafe=current.covers_unsafe,
         rotation_deg=body.rotation_deg if body.rotation_deg is not None else current.rotation_deg,
-        corner_radius=body.corner_radius if body.corner_radius is not None else current.corner_radius,
+        corner_radius=body.corner_radius
+        if body.corner_radius is not None
+        else current.corner_radius,
         edge_mode=body.edge_mode if body.edge_mode is not None else current.edge_mode,
     )
     if body.edge_mode is not None and body.edge_mode not in {"hard", "soft"}:
@@ -1273,6 +1316,8 @@ _NO_CACHE = {"Cache-Control": "private, no-cache"}
 
 def _render_cache(v: str | None) -> dict[str, str]:
     return _DERIVATIVE_CACHE if v else _NO_CACHE
+
+
 _GRID_KIND_FILES = {"thumbnail": THUMB_FILENAME, "preview": PREVIEW_FILENAME}
 _BLUR_KIND_FILES = {"blurred-preview": "blurs/cover.jpg", "blurred-thumbnail": "blurs/thumb.jpg"}
 
@@ -1326,7 +1371,9 @@ def publish_preview(
     path = safe_join(settings.derivatives_root, relative)
     if not path.is_file():
         raise NotFound("Publish preview was not found.")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
+    return FileResponse(
+        path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"}
+    )
 
 
 @router.get("/api/images/{image_id}/story-preview")
@@ -1360,7 +1407,9 @@ def story_preview(
     preview_path = settings.derivatives_root / f"{image.id}/publish/story-preview.jpg"
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     write_story_jpeg(story_rgb, preview_path)
-    return FileResponse(preview_path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
+    return FileResponse(
+        preview_path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"}
+    )
 
 
 @router.get("/api/derivatives/{image_id}/crops/{crop_id}")
@@ -1372,7 +1421,11 @@ def crop_derivative(
     session: Session = db_dep,
     settings: Settings = Depends(settings_dep),
 ) -> FileResponse:
-    crop = session.scalar(select(CropSuggestion).where(CropSuggestion.id == crop_id, CropSuggestion.image_id == image_id))
+    crop = session.scalar(
+        select(CropSuggestion).where(
+            CropSuggestion.id == crop_id, CropSuggestion.image_id == image_id
+        )
+    )
     if crop is None or not crop.derivative_path:
         raise NotFound("Derivative was not found.")
     path = safe_join(settings.derivatives_root, crop.derivative_path)
@@ -1390,7 +1443,9 @@ def blur_derivative(
     session: Session = db_dep,
     settings: Settings = Depends(settings_dep),
 ) -> FileResponse:
-    blur = session.scalar(select(BlurCover).where(BlurCover.id == blur_id, BlurCover.image_id == image_id))
+    blur = session.scalar(
+        select(BlurCover).where(BlurCover.id == blur_id, BlurCover.image_id == image_id)
+    )
     if blur is None or not blur.derivative_path:
         raise NotFound("Derivative was not found.")
     path = safe_join(settings.derivatives_root, blur.derivative_path)
@@ -1400,13 +1455,17 @@ def blur_derivative(
 
 
 @router.get("/api/tags")
-def list_tags(_auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
+def list_tags(
+    _auth: None = Depends(require_session), session: Session = db_dep
+) -> list[dict[str, object]]:
     tags = session.scalars(select(ContentTag).order_by(ContentTag.name)).all()
     return [{"id": tag.id, "name": tag.name} for tag in tags]
 
 
 @router.post("/api/tags", status_code=201)
-def create_tag(body: TagIn, _auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, object]:
+def create_tag(
+    body: TagIn, _auth: None = Depends(require_session), session: Session = db_dep
+) -> dict[str, object]:
     name = body.name.strip().lower()
     existing = session.scalar(select(ContentTag).where(ContentTag.name == name))
     if existing:
@@ -1431,7 +1490,9 @@ def add_tag(
         tag = ContentTag(name=name)
         session.add(tag)
         session.flush()
-    exists = session.scalar(select(ImageTag).where(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id))
+    exists = session.scalar(
+        select(ImageTag).where(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id)
+    )
     if exists is None:
         session.add(ImageTag(image_id=image.id, tag_id=tag.id, source=TagSource.HUMAN.value))
         session.commit()
@@ -1467,7 +1528,9 @@ def enqueue(
 ) -> dict[str, object]:
     image = _load_image(session, body.image_id)
     approved = next((crop for crop in image.crops if crop.approved), None)
-    gate = publishing_gate(attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image))
+    gate = publishing_gate(
+        attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image)
+    )
     blur_pending = blur_drawn_not_approved_reason(image)
     if not gate.allowed or blur_pending:
         reasons = list(gate.reasons)
@@ -1532,13 +1595,19 @@ def patch_queue_item(
 
 
 @router.get("/api/queue")
-def list_queue(_auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
-    items = session.scalars(select(PublishingQueueItem).order_by(PublishingQueueItem.created_at.desc())).all()
+def list_queue(
+    _auth: None = Depends(require_session), session: Session = db_dep
+) -> list[dict[str, object]]:
+    items = session.scalars(
+        select(PublishingQueueItem).order_by(PublishingQueueItem.created_at.desc())
+    ).all()
     return [_queue_out(session, item) for item in items]
 
 
 @router.post("/api/queue/{item_id}/approve")
-def approve_queue_item(item_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, object]:
+def approve_queue_item(
+    item_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep
+) -> dict[str, object]:
     item = session.get(PublishingQueueItem, item_id)
     if item is None:
         raise NotFound("Queue item was not found.")
@@ -1577,7 +1646,9 @@ def publish_queue(
 
 
 @router.get("/api/posting-schedule/config")
-def get_posting_schedule_config(_auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, object]:
+def get_posting_schedule_config(
+    _auth: None = Depends(require_session), session: Session = db_dep
+) -> dict[str, object]:
     return config_as_dict(config_view(session))
 
 
@@ -1613,7 +1684,9 @@ def get_upcoming_scheduled(
 
 
 @router.post("/api/posting-schedule/fill-slots")
-def fill_posting_slots(_auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, int]:
+def fill_posting_slots(
+    _auth: None = Depends(require_session), session: Session = db_dep
+) -> dict[str, int]:
     assigned = fill_slots_from_approved(session)
     return {"assigned": assigned}
 
@@ -1666,10 +1739,16 @@ def create_captions(
     gate_kwargs = publishing_gate_kwargs(session, image)
     tags = list(
         session.scalars(
-            select(ContentTag.name).join(ImageTag, ImageTag.tag_id == ContentTag.id).where(ImageTag.image_id == image.id)
+            select(ContentTag.name)
+            .join(ImageTag, ImageTag.tag_id == ContentTag.id)
+            .where(ImageTag.image_id == image.id)
         ).all()
     )
-    mood_names = [tag for tag in tags if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}]
+    mood_names = [
+        tag
+        for tag in tags
+        if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}
+    ]
     crop_payload = None
     if approved is not None:
         crop_payload = {
@@ -1702,7 +1781,9 @@ def create_captions(
             composition=composition,
             mood=", ".join(mood_names) if mood_names else "unspecified",
             safe_description=description,
-            crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
+            crop=crop_payload
+            if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved
+            else None,
             gemini_refused=is_gemini_refused(image),
         ),
         account_voice=settings.account_voice,
@@ -1749,9 +1830,13 @@ def create_captions(
 
 
 @router.get("/api/images/{image_id}/captions")
-def list_captions(image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
+def list_captions(
+    image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep
+) -> list[dict[str, object]]:
     _load_image(session, image_id)
-    rows = session.scalars(select(Caption).where(Caption.image_id == image_id).order_by(Caption.created_at.desc())).all()
+    rows = session.scalars(
+        select(Caption).where(Caption.image_id == image_id).order_by(Caption.created_at.desc())
+    ).all()
     return [_caption_out(row) for row in rows]
 
 
@@ -1762,7 +1847,11 @@ def update_caption(
     _auth: None = Depends(require_session),
     session: Session = db_dep,
 ) -> dict[str, object]:
-    if body.status not in {CaptionStatus.USED.value, CaptionStatus.MODIFIED.value, CaptionStatus.REJECTED.value}:
+    if body.status not in {
+        CaptionStatus.USED.value,
+        CaptionStatus.MODIFIED.value,
+        CaptionStatus.REJECTED.value,
+    }:
         raise HTTPException(status_code=400, detail="Status must be used, modified, or rejected.")
     row = session.get(Caption, caption_id)
     if row is None:
@@ -1812,7 +1901,11 @@ def _candidate_inputs(
             continue
         approved = next((crop for crop in image.crops if crop.approved), None)
         covering_blur = _has_approved_covering_blur(session, image)
-        if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved is None and not covering_blur:
+        if (
+            image.model_state == SafetyState.SAFE_AFTER_CROP.value
+            and approved is None
+            and not covering_blur
+        ):
             continue
         score = image.score
         covered = approved is not None or covering_blur
@@ -1830,7 +1923,9 @@ def _candidate_inputs(
                 sharpness=score.sharpness if score else 0,
                 composition=score.composition if score else 0,
                 performance_score=(
-                    image_performance_boost(perf_signals, str(image.id), tags) if perf_signals else 0.0
+                    image_performance_boost(perf_signals, str(image.id), tags)
+                    if perf_signals
+                    else 0.0
                 ),
             )
         )
@@ -1839,7 +1934,9 @@ def _candidate_inputs(
     return inputs, images, aspects
 
 
-def _candidate_out(session: Session, item, images: dict[str, Image], aspects: dict[str, str | None]) -> CandidateOut:
+def _candidate_out(
+    session: Session, item, images: dict[str, Image], aspects: dict[str, str | None]
+) -> CandidateOut:
     image = images[item.image_id]
     queue_item = next(iter(image.queue_items), None) if image.queue_items else None
     published = bool(queue_item and queue_item.state == QueueState.PUBLISHED.value)
@@ -1901,7 +1998,8 @@ def candidates_bulk_queue(
 ) -> CandidateBulkQueueResult:
     raw = bulk_enqueue(session, body.image_ids, covering_blur_fn=_has_approved_covering_blur)
     results = [
-        CandidateBulkItemResult(image_id=image_id, ok=ok, error=error) for image_id, ok, error in raw
+        CandidateBulkItemResult(image_id=image_id, ok=ok, error=error)
+        for image_id, ok, error in raw
     ]
     queued_count = sum(1 for row in results if row.ok)
     return CandidateBulkQueueResult(results=results, queued_count=queued_count)
@@ -1914,7 +2012,10 @@ def candidates_bulk_reject(
     session: Session = db_dep,
 ) -> list[CandidateBulkItemResult]:
     raw = bulk_reject(session, body.image_ids)
-    return [CandidateBulkItemResult(image_id=image_id, ok=ok, error=error) for image_id, ok, error in raw]
+    return [
+        CandidateBulkItemResult(image_id=image_id, ok=ok, error=error)
+        for image_id, ok, error in raw
+    ]
 
 
 @router.post("/api/curation", status_code=201)
@@ -2007,7 +2108,9 @@ def gemini_label_stats(
     _auth: None = Depends(require_session),
     session: Session = db_dep,
 ) -> dict[str, int]:
-    return gemini_label_counts(session, library_id=library_id, covering_blur_fn=_has_approved_covering_blur)
+    return gemini_label_counts(
+        session, library_id=library_id, covering_blur_fn=_has_approved_covering_blur
+    )
 
 
 @router.get("/api/curation")
@@ -2017,7 +2120,9 @@ def list_curation(
     settings: Settings = Depends(settings_dep),
 ) -> list[dict[str, object]]:
     reconcile_stale_curation_batches(session, settings.redis_url)
-    rows = session.scalars(select(CurationBatch).order_by(CurationBatch.created_at.desc()).limit(30)).all()
+    rows = session.scalars(
+        select(CurationBatch).order_by(CurationBatch.created_at.desc()).limit(30)
+    ).all()
     return [_curation_batch_summary(row) for row in rows]
 
 
@@ -2047,7 +2152,9 @@ def reorder_curation(
         raise NotFound("Curation batch was not found.")
     picks = {
         pick.id: pick
-        for pick in session.scalars(select(CurationPick).where(CurationPick.batch_id == batch_id)).all()
+        for pick in session.scalars(
+            select(CurationPick).where(CurationPick.batch_id == batch_id)
+        ).all()
     }
     if set(body.pick_ids) != set(picks):
         raise NotAllowed("Reorder must include every pick in the batch exactly once.")
@@ -2074,7 +2181,9 @@ def update_curation_pick(
             CurationPickStatus.REJECTED.value,
         }
         if body.status not in allowed:
-            raise HTTPException(status_code=400, detail="Status must be suggested, accepted, or rejected.")
+            raise HTTPException(
+                status_code=400, detail="Status must be suggested, accepted, or rejected."
+            )
         if pick.status == CurationPickStatus.QUEUED.value:
             raise NotAllowed("Queued picks cannot change status here.")
         pick.status = body.status
@@ -2420,9 +2529,7 @@ def instagram_oauth_callback(
             )
             from urllib.parse import quote
 
-            choose_url = (
-                f"{frontend}/instagram?oauth=choose&pending={quote(pending, safe='')}"
-            )
+            choose_url = f"{frontend}/instagram?oauth=choose&pending={quote(pending, safe='')}"
             resp = RedirectResponse(url=choose_url, status_code=302)
             resp.delete_cookie(
                 OAUTH_NONCE_COOKIE,
@@ -2516,8 +2623,12 @@ def public_publish_asset(
     settings: Settings = Depends(settings_dep),
 ) -> FileResponse | Response:
     """Unauthenticated short-lived JPEG for Meta's crawler. Token-gated; no session cookie."""
-    asset = parse_publish_token(token, secret=settings.app_secret)
-    path = resolve_publish_file(settings.derivatives_root, asset)
+    # Invalid, garbled, expired or missing → plain 404 (no oracle for token guessing).
+    try:
+        asset = parse_publish_token(token, secret=settings.app_secret)
+        path = resolve_publish_file(settings.derivatives_root, asset)
+    except (NotAllowed, NotFound):
+        raise HTTPException(status_code=404, detail="Not Found") from None
     cache = {"Cache-Control": "private, max-age=60"}
     if request.method == "HEAD":
         stat = path.stat()
@@ -2533,7 +2644,9 @@ def public_publish_asset(
 
 
 @router.get("/api/related-accounts")
-def list_related_accounts(_auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
+def list_related_accounts(
+    _auth: None = Depends(require_session), session: Session = db_dep
+) -> list[dict[str, object]]:
     rows = session.scalars(select(RelatedAccount).order_by(RelatedAccount.handle.asc())).all()
     return [_related_out(row) for row in rows]
 
@@ -2570,7 +2683,9 @@ def update_related_account(
     if row is None:
         raise NotFound("Related account was not found.")
     clash = session.scalar(
-        select(RelatedAccount).where(RelatedAccount.handle == body.handle, RelatedAccount.id != account_id)
+        select(RelatedAccount).where(
+            RelatedAccount.handle == body.handle, RelatedAccount.id != account_id
+        )
     )
     if clash is not None:
         raise NotAllowed("That handle is already on the research list.")
@@ -2589,7 +2704,9 @@ def inbox_list_comments(
     _auth: None = Depends(require_session),
     session: Session = db_dep,
 ) -> list[dict[str, object]]:
-    stmt = select(InstagramInboxComment).order_by(InstagramInboxComment.commented_at.desc().nullslast())
+    stmt = select(InstagramInboxComment).order_by(
+        InstagramInboxComment.commented_at.desc().nullslast()
+    )
     if status != "all":
         stmt = stmt.where(InstagramInboxComment.status == status)
     rows = session.scalars(stmt.limit(100)).all()
@@ -2781,10 +2898,16 @@ def create_comment_drafts(
         covering_blur = _has_approved_covering_blur(session, image)
         tags = list(
             session.scalars(
-                select(ContentTag.name).join(ImageTag, ImageTag.tag_id == ContentTag.id).where(ImageTag.image_id == image.id)
+                select(ContentTag.name)
+                .join(ImageTag, ImageTag.tag_id == ContentTag.id)
+                .where(ImageTag.image_id == image.id)
             ).all()
         )
-        mood_names = [tag for tag in tags if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}]
+        mood_names = [
+            tag
+            for tag in tags
+            if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}
+        ]
         composition = image.orientation or "unknown orientation"
         context = append_voice_to_context(
             build_context(
@@ -2837,8 +2960,12 @@ def create_comment_drafts(
 
 
 @router.get("/api/comment-drafts")
-def list_comment_drafts(_auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
-    rows = session.scalars(select(CommentDraft).order_by(CommentDraft.created_at.desc()).limit(100)).all()
+def list_comment_drafts(
+    _auth: None = Depends(require_session), session: Session = db_dep
+) -> list[dict[str, object]]:
+    rows = session.scalars(
+        select(CommentDraft).order_by(CommentDraft.created_at.desc()).limit(100)
+    ).all()
     return [_comment_draft_out(row) for row in rows]
 
 
@@ -2849,7 +2976,11 @@ def update_comment_draft(
     _auth: None = Depends(require_session),
     session: Session = db_dep,
 ) -> dict[str, object]:
-    allowed = {CommentDraftStatus.DRAFT.value, CommentDraftStatus.COPIED.value, CommentDraftStatus.DISCARDED.value}
+    allowed = {
+        CommentDraftStatus.DRAFT.value,
+        CommentDraftStatus.COPIED.value,
+        CommentDraftStatus.DISCARDED.value,
+    }
     if body.status not in allowed:
         raise HTTPException(status_code=400, detail="Status must be draft, copied, or discarded.")
     row = session.get(CommentDraft, draft_id)
@@ -2908,7 +3039,9 @@ def get_enrichment_status(
     return status
 
 
-def _enrichment_config_update(session: Session, settings: Settings, **fields: object) -> dict[str, object]:
+def _enrichment_config_update(
+    session: Session, settings: Settings, **fields: object
+) -> dict[str, object]:
     row = get_or_create_schedule_config(session)
     for key, value in fields.items():
         setattr(row, key, value)
@@ -2975,7 +3108,9 @@ def _crop_out(image: Image, crop: CropSuggestion) -> CropOut:
     preview = None
     if crop.derivative_path:
         stamp = file_stamp(_derivatives_path(crop.derivative_path))
-        crop_v = hashlib.sha1(f"{crop.x},{crop.y},{crop.width},{crop.height}|{stamp}".encode()).hexdigest()[:12]
+        crop_v = hashlib.sha1(
+            f"{crop.x},{crop.y},{crop.width},{crop.height}|{stamp}".encode()
+        ).hexdigest()[:12]
         preview = f"/api/derivatives/{image.id}/crops/{crop.id}?v={crop_v}"
     elif crop.aspect_ratio == "original":
         preview = f"/api/derivatives/{image.id}/preview"
@@ -3114,7 +3249,9 @@ def _rgb_for_image(session: Session, settings: Settings, image: Image):
     raise NotFound("Original image was not found.")
 
 
-def _refresh_crop_derivative(session: Session, settings: Settings, image: Image, crop: CropSuggestion) -> None:
+def _refresh_crop_derivative(
+    session: Session, settings: Settings, image: Image, crop: CropSuggestion
+) -> None:
     from instamagic.services.instagram.publish_derivative import refresh_crop_derivative
 
     refresh_crop_derivative(session, settings, image, crop)
@@ -3199,7 +3336,9 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "story_published_at": item.story_published_at,
         "story_last_error": item.story_last_error,
         "story_status": story_status,
-        "story_ig_media_id": story_attempt.ig_media_id if story_attempt and story_attempt.success else None,
+        "story_ig_media_id": story_attempt.ig_media_id
+        if story_attempt and story_attempt.success
+        else None,
         "story_preview_url": f"/api/images/{image.id}/story-preview",
         "image": _image_out(session, image).model_dump(mode="json"),
     }
@@ -3307,7 +3446,9 @@ def _curation_pick_out(
 
 def _curation_batch_out(session: Session, batch: CurationBatch) -> dict[str, object]:
     picks = session.scalars(
-        select(CurationPick).where(CurationPick.batch_id == batch.id).order_by(CurationPick.sort_order.asc())
+        select(CurationPick)
+        .where(CurationPick.batch_id == batch.id)
+        .order_by(CurationPick.sort_order.asc())
     ).all()
     from instamagic.services.recommendations.curate_skipped import latest_rating_times
 
@@ -3341,7 +3482,9 @@ def _curation_skipped_out(
 
     data = load_skipped(batch)
     if data is None and batch.status == CurationBatchStatus.READY.value:
-        latest_id = session.scalar(select(CurationBatch.id).order_by(CurationBatch.created_at.desc()).limit(1))
+        latest_id = session.scalar(
+            select(CurationBatch.id).order_by(CurationBatch.created_at.desc()).limit(1)
+        )
         if latest_id == batch.id:
             # Batches created before this feature: explain once, against today's state.
             eligible = collect_eligible(
@@ -3373,7 +3516,9 @@ def _curation_skipped_out(
         except ValueError:
             image = None
         item["thumbnail_url"] = _skipped_thumbnail_url(image)
-        item["filename"] = image.relative_path.rsplit("/", 1)[-1] if image and image.relative_path else None
+        item["filename"] = (
+            image.relative_path.rsplit("/", 1)[-1] if image and image.relative_path else None
+        )
     return data
 
 
@@ -3381,7 +3526,9 @@ def _curation_derivative_bytes(session: Session, settings: Settings, image: Imag
     return _curation_derivative_bytes_impl(session, settings, image)
 
 
-def _preview_bytes(session: Session, settings: Settings, image: Image, approved: CropSuggestion | None) -> bytes | None:
+def _preview_bytes(
+    session: Session, settings: Settings, image: Image, approved: CropSuggestion | None
+) -> bytes | None:
     from instamagic.services.recommendations.gemini_derivatives import gemini_preview_bytes
 
     return gemini_preview_bytes(session, settings, image, approved, require_policy=True)
@@ -3395,7 +3542,9 @@ def _derivative_bytes_for_gemini(
     *,
     require_policy: bool,
 ) -> bytes | None:
-    return derivative_bytes_for_gemini(session, settings, image, approved, require_policy=require_policy)
+    return derivative_bytes_for_gemini(
+        session, settings, image, approved, require_policy=require_policy
+    )
 
 
 def _encode_cursor(image: Image) -> str:
@@ -3411,4 +3560,3 @@ def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         return datetime.fromisoformat(stamp), UUID(image_id)
     except (ValueError, UnicodeError) as exc:
         raise HTTPException(status_code=400, detail="Invalid cursor.") from exc
-

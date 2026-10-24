@@ -14,6 +14,7 @@ EDGE_MODES = ("hard", "soft")
 def default_edge_mode(shape: str) -> str:
     return "hard" if shape == "rectangle" else "soft"
 
+
 # Sigma scales with the shorter side of the cover. Floor values stay high enough
 # that detail inside the region is not recognizable (not a beauty soft-focus).
 _STRENGTH_SCALE = {
@@ -207,7 +208,9 @@ def apply_blur_covers(image: Image.Image, covers: list[BlurWindow]) -> Image.Ima
     rgb = image if image.mode == "RGB" else image.convert("RGB")
     if not covers:
         return rgb.copy()
-    pad = int(max(cover.radius for cover in covers) * 4) + max(cover.feather for cover in covers) + 8
+    pad = (
+        int(max(cover.radius for cover in covers) * 4) + max(cover.feather for cover in covers) + 8
+    )
     use_reflect = any(getattr(cover, "edge_mode", "soft") == "hard" for cover in covers)
     if use_reflect:
         rgb_arr = np.asarray(rgb, dtype=np.uint8)

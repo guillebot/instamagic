@@ -87,7 +87,9 @@ def list_upcoming(session: Session, limit: int = 50) -> list[PublishingQueueItem
             .where(
                 PublishingQueueItem.scheduled_at.is_not(None),
                 PublishingQueueItem.scheduled_at >= now,
-                PublishingQueueItem.state.in_([QueueState.APPROVED.value, QueueState.PUBLISHING.value]),
+                PublishingQueueItem.state.in_(
+                    [QueueState.APPROVED.value, QueueState.PUBLISHING.value]
+                ),
             )
             .order_by(PublishingQueueItem.scheduled_at.asc())
             .limit(limit)

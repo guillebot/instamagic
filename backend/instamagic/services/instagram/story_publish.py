@@ -83,7 +83,9 @@ def ensure_story_derivative(
     dest.parent.mkdir(parents=True, exist_ok=True)
     write_story_jpeg(story_rgb, dest)
     try:
-        assert_story_file_matches_feed(dest, feed_path, mode=opts.render_mode, border_color=opts.border_color)
+        assert_story_file_matches_feed(
+            dest, feed_path, mode=opts.render_mode, border_color=opts.border_color
+        )
     except NotAllowed:
         dest.unlink(missing_ok=True)
         raise
@@ -122,7 +124,9 @@ def publish_story_for_queue_item(
     )
     if image is None:
         raise NotFound("Image was not found.")
-    gate = publishing_gate(attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image))
+    gate = publishing_gate(
+        attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image)
+    )
     blur_pending = blur_drawn_not_approved_reason(image)
     if not gate.allowed or blur_pending:
         reasons = list(gate.reasons)

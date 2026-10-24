@@ -28,7 +28,9 @@ def _detect_language(text: str) -> str:
     return "es" if _SPANISH_HINT.search(text) else "en"
 
 
-def sync_inbox_comments(session: Session, settings: Settings, client: InstagramClient, *, force: bool = False) -> dict[str, object]:
+def sync_inbox_comments(
+    session: Session, settings: Settings, client: InstagramClient, *, force: bool = False
+) -> dict[str, object]:
     if not client.configured():
         return {"ok": False, "error": "not_configured", "synced": 0}
     row = get_connection(session)
@@ -47,7 +49,10 @@ def sync_inbox_comments(session: Session, settings: Settings, client: InstagramC
     if not callable(list_fn):
         return {"ok": False, "error": "comments_unavailable", "synced": 0}
     posts = session.scalars(
-        select(InstagramPost).where(InstagramPost.ig_media_id.is_not(None)).order_by(InstagramPost.published_at.desc()).limit(20)
+        select(InstagramPost)
+        .where(InstagramPost.ig_media_id.is_not(None))
+        .order_by(InstagramPost.published_at.desc())
+        .limit(20)
     ).all()
     synced = 0
     for post in posts:
@@ -68,7 +73,9 @@ def sync_inbox_comments(session: Session, settings: Settings, client: InstagramC
             ig_id = str(item.get("id") or "")
             if not ig_id:
                 continue
-            existing = session.scalar(select(InstagramInboxComment).where(InstagramInboxComment.ig_comment_id == ig_id))
+            existing = session.scalar(
+                select(InstagramInboxComment).where(InstagramInboxComment.ig_comment_id == ig_id)
+            )
             if existing is not None:
                 continue
             commented_at = None
@@ -122,14 +129,18 @@ def suggest_reply(
         account_context={},
     )
     context = append_voice_to_context(context, account_voice=account_voice)
-    batch = growth.generate_comment_drafts(context, target_context=target, account_voice=account_voice)
+    batch = growth.generate_comment_drafts(
+        context, target_context=target, account_voice=account_voice
+    )
     reply = batch.drafts[0].text
     comment.suggested_reply = reply
     session.commit()
     return reply
 
 
-def post_reply(session: Session, client: InstagramClient, comment: InstagramInboxComment, message: str) -> None:
+def post_reply(
+    session: Session, client: InstagramClient, comment: InstagramInboxComment, message: str
+) -> None:
     if not message.strip():
         raise NotAllowed("Reply text is empty.")
     post_fn = getattr(client, "post_comment_reply", None)

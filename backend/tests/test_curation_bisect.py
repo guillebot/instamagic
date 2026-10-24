@@ -25,7 +25,9 @@ class BlockingProvider:
 
         return CurationResult(
             picks=[
-                CurationPickDraft(image_id=item.image_id, rank=index, reasons=["ok"], tags=[], captions=[])
+                CurationPickDraft(
+                    image_id=item.image_id, rank=index, reasons=["ok"], tags=[], captions=[]
+                )
                 for index, item in enumerate(candidates, start=1)
             ]
         )

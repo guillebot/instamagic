@@ -14,8 +14,12 @@ from sqlalchemy import select
 
 
 def test_rank_includes_performance_when_weighted() -> None:
-    base = CandidateInput("a", 0.5, "safe", 0.5, None, True, None, "REVIEW", 0.5, 0.5, performance_score=0.9)
-    other = CandidateInput("b", 0.5, "safe", 0.5, None, True, None, "REVIEW", 0.5, 0.5, performance_score=0.1)
+    base = CandidateInput(
+        "a", 0.5, "safe", 0.5, None, True, None, "REVIEW", 0.5, 0.5, performance_score=0.9
+    )
+    other = CandidateInput(
+        "b", 0.5, "safe", 0.5, None, True, None, "REVIEW", 0.5, 0.5, performance_score=0.1
+    )
     without = rank_candidates([base, other], limit=2, performance_weight=0.0)
     with_perf = rank_candidates([base, other], limit=2, performance_weight=0.25)
     assert without[0].image_id == with_perf[0].image_id == "a"
@@ -34,14 +38,24 @@ def test_sync_insights_persists_account_snapshot(monkeypatch: pytest.MonkeyPatch
         )
 
     def fake_account_insights(self):
-        return {"follower_count": 500, "reach": 100, "profile_views": 20, "impressions": None, "accounts_engaged": 5}
+        return {
+            "follower_count": 500,
+            "reach": 100,
+            "profile_views": 20,
+            "impressions": None,
+            "accounts_engaged": 5,
+        }
 
     def fake_media(self, *, limit: int = 50):
         del limit
         return []
 
-    monkeypatch.setattr(GraphInstagramClient, "fetch_granted_permissions_detailed", fake_permissions)
-    monkeypatch.setattr(GraphInstagramClient, "fetch_account_insight_snapshot", fake_account_insights)
+    monkeypatch.setattr(
+        GraphInstagramClient, "fetch_granted_permissions_detailed", fake_permissions
+    )
+    monkeypatch.setattr(
+        GraphInstagramClient, "fetch_account_insight_snapshot", fake_account_insights
+    )
     monkeypatch.setattr(GraphInstagramClient, "list_recent_media", fake_media)
 
     client = GraphInstagramClient(access_token="tok", business_account_id="178414000")
@@ -72,7 +86,9 @@ def test_sync_requires_insights_permission(monkeypatch: pytest.MonkeyPatch, app_
     def fake_permissions(self):
         return FetchedScopes(scopes=frozenset({"instagram_basic"}), determined=True)
 
-    monkeypatch.setattr(GraphInstagramClient, "fetch_granted_permissions_detailed", fake_permissions)
+    monkeypatch.setattr(
+        GraphInstagramClient, "fetch_granted_permissions_detailed", fake_permissions
+    )
     client = GraphInstagramClient(access_token="tok", business_account_id="178414000")
     result = sync_instagram_insights(session, settings, client, force=True)
     assert result["ok"] is False

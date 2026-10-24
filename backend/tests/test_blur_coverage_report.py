@@ -53,8 +53,15 @@ def test_local_window_matches_full_image_gate_math(seed: int) -> None:
         )
         for _ in range(rng.randint(1, 3))
     ]
-    boxes = [Box(rng.randint(-10, 620), rng.randint(-10, 950), rng.randint(20, 200), rng.randint(20, 200)) for _ in range(3)]
-    expected = [coverage for _, coverage in region_coverages_rotated(windows, boxes, size, padding=6)]
+    boxes = [
+        Box(
+            rng.randint(-10, 620), rng.randint(-10, 950), rng.randint(20, 200), rng.randint(20, 200)
+        )
+        for _ in range(3)
+    ]
+    expected = [
+        coverage for _, coverage in region_coverages_rotated(windows, boxes, size, padding=6)
+    ]
     got = [row["coverage"] for row in region_coverage_rows(windows, boxes, size, padding=6)]
     assert got == pytest.approx(expected, abs=1e-9)
 
@@ -65,7 +72,9 @@ def test_reported_case_band_too_short_and_feathered() -> None:
     band = _window(-118, 327, 973, 142, feather=29, rotation=4.34)
     boxes = [Box(341, 304, 186, 162), Box(152, 309, 174, 152)]
     rows = region_coverage_rows([band], boxes, (667, 1000))
-    gate = [coverage for _, coverage in region_coverages_rotated([band], boxes, (667, 1000), padding=6)]
+    gate = [
+        coverage for _, coverage in region_coverages_rotated([band], boxes, (667, 1000), padding=6)
+    ]
     assert [row["coverage"] for row in rows] == pytest.approx(gate, abs=1e-9)
     assert all(row["coverage"] < 0.95 for row in rows)
     # The drawn outline covers far more than the feathered mask counts.
@@ -93,7 +102,12 @@ def _blocked_image(client, app_env) -> str:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": ATTESTATION,
+        },
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
@@ -113,7 +127,9 @@ def test_coverage_endpoint_tracks_current_geometry_and_names_failed_check(client
     assert all(row["covered"] for row in report["regions"])
 
     blur = suggested.json()[0]
-    moved = client.patch(f"/api/images/{image_id}/blurs/{blur['id']}", json={"x": 0, "y": 500, "height": 60})
+    moved = client.patch(
+        f"/api/images/{image_id}/blurs/{blur['id']}", json={"x": 0, "y": 500, "height": 60}
+    )
     assert moved.status_code == 200, moved.text
     report = client.get(f"/api/images/{image_id}/blur-coverage").json()
     assert report["coverage_check"] == "fail"
@@ -139,7 +155,12 @@ def test_coverage_endpoint_tracks_current_geometry_and_names_failed_check(client
 
 def test_recheck_failure_is_named(client, app_env) -> None:
     image_id = _blocked_image(client, app_env)
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     unsafe = SafetySignals(
         regions=[Region("FEMALE_BREAST_EXPOSED", 0.96, Box(10, 10, 80, 80))],
         detector_available=True,

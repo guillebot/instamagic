@@ -65,7 +65,11 @@ def publish_queue_item(
     )
     if item is None:
         raise NotFound("Queue item was not found.")
-    if item.state not in {QueueState.APPROVED.value, QueueState.FAILED.value, QueueState.PUBLISHING.value}:
+    if item.state not in {
+        QueueState.APPROVED.value,
+        QueueState.FAILED.value,
+        QueueState.PUBLISHING.value,
+    }:
         raise NotAllowed("Only an approved (or previously failed) queue item can be published.")
     if item.state == QueueState.PUBLISHING.value and trigger != PublishTrigger.SCHEDULER.value:
         raise NotAllowed("This queue item is already publishing.")
@@ -107,7 +111,9 @@ def publish_queue_item(
         raise NotAllowed("Caption text is empty.")
 
     approved = next((crop for crop in image.crops if crop.approved), None)
-    gate = publishing_gate(attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image))
+    gate = publishing_gate(
+        attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image)
+    )
     blur_pending = blur_drawn_not_approved_reason(image)
     if not gate.allowed or blur_pending:
         reasons = list(gate.reasons)

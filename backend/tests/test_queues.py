@@ -8,8 +8,14 @@ def test_queues_endpoint_handles_redis_down(client, monkeypatch) -> None:
     def boom(_url: str):
         raise ConnectionError("down")
 
-    monkeypatch.setattr("instamagic.services.queues.snapshot_queues", lambda _url: snapshot_queues("redis://invalid"))
-    monkeypatch.setattr("instamagic.services.queues.Redis.from_url", classmethod(lambda cls, _url: (_ for _ in ()).throw(ConnectionError("down"))))
+    monkeypatch.setattr(
+        "instamagic.services.queues.snapshot_queues",
+        lambda _url: snapshot_queues("redis://invalid"),
+    )
+    monkeypatch.setattr(
+        "instamagic.services.queues.Redis.from_url",
+        classmethod(lambda cls, _url: (_ for _ in ()).throw(ConnectionError("down"))),
+    )
 
     # Direct unit path
     result = snapshot_queues("redis://localhost:1/0")
@@ -57,7 +63,9 @@ def test_queues_snapshot_shape(monkeypatch) -> None:
 
     monkeypatch.setattr("instamagic.services.queues.Redis", FakeRedis)
     monkeypatch.setattr("instamagic.services.queues.Queue", FakeQueue)
-    monkeypatch.setattr("instamagic.services.queues.StartedJobRegistry", lambda **_k: FakeRegistry())
+    monkeypatch.setattr(
+        "instamagic.services.queues.StartedJobRegistry", lambda **_k: FakeRegistry()
+    )
     monkeypatch.setattr("instamagic.services.queues.FailedJobRegistry", lambda **_k: FakeRegistry())
     monkeypatch.setattr("instamagic.services.queues.Worker", FakeWorker)
 

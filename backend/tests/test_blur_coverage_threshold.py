@@ -27,7 +27,12 @@ def _blocked_image(client, app_env) -> str:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": ATTESTATION,
+        },
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
@@ -44,9 +49,17 @@ def test_config_rejects_out_of_range_threshold(client, app_env) -> None:
 
 def test_coverage_endpoint_reflects_threshold(client, app_env) -> None:
     login(client)
-    assert client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 80}).status_code == 200
+    assert (
+        client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 80}).status_code
+        == 200
+    )
     image_id = _blocked_image(client, app_env)
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     report = client.get(f"/api/images/{image_id}/blur-coverage").json()
     assert report["min_coverage"] == 0.8
     assert report["coverage_threshold_percent"] == 80
@@ -54,9 +67,17 @@ def test_coverage_endpoint_reflects_threshold(client, app_env) -> None:
 
 def test_classifier_still_required_at_low_threshold(client, app_env) -> None:
     login(client)
-    assert client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 60}).status_code == 200
+    assert (
+        client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 60}).status_code
+        == 200
+    )
     image_id = _blocked_image(client, app_env)
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     unsafe = SafetySignals(
         regions=[Region("FEMALE_BREAST_EXPOSED", 0.96, Box(10, 10, 80, 80))],
         detector_available=True,
@@ -72,14 +93,25 @@ def test_classifier_still_required_at_low_threshold(client, app_env) -> None:
 
 def test_raising_threshold_re_gates_verified_unlock(client, app_env) -> None:
     login(client)
-    assert client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 60}).status_code == 200
+    assert (
+        client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 60}).status_code
+        == 200
+    )
     image_id = _blocked_image(client, app_env)
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     detail = client.get(f"/api/images/{image_id}").json()
     assert detail["blur_unlock_status"] == "verified"
 
-    assert client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 95}).status_code == 200
+    assert (
+        client.put("/api/posting-schedule/config", json={"blur_coverage_threshold": 95}).status_code
+        == 200
+    )
     detail = client.get(f"/api/images/{image_id}").json()
     assert detail["blur_unlock_status"] == "verified"
     assert "SAFE" not in (detail["blur_unlock_message"] or "")
@@ -89,7 +121,12 @@ def test_raising_threshold_re_gates_verified_unlock(client, app_env) -> None:
 
 def test_blur_detector_probe_endpoint(client, app_env) -> None:
     image_id = _blocked_image(client, app_env)
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     unsafe = SafetySignals(
         regions=[Region("FEMALE_BREAST_EXPOSED", 0.88, Box(5, 5, 90, 90))],
         detector_available=True,

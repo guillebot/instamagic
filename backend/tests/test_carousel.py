@@ -31,7 +31,12 @@ def _library_with_two(client, library: Path) -> tuple[str, list[str]]:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": ATTESTATION,
+        },
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
@@ -53,7 +58,9 @@ def test_carousel_enqueue_and_publish(client, app_env) -> None:
     assert len(body["slides"]) == 2
     item_id = body["id"]
     client.post(f"/api/queue/{item_id}/approve")
-    caption = client.post(f"/api/images/{image_ids[0]}/captions", json={"confirmed": True}).json()[0]
+    caption = client.post(f"/api/images/{image_ids[0]}/captions", json={"confirmed": True}).json()[
+        0
+    ]
     published = client.post(f"/api/queue/{item_id}/publish", json={"caption_id": caption["id"]})
     assert published.status_code == 200, published.text
     assert published.json()["state"] == "PUBLISHED"
@@ -81,7 +88,9 @@ def test_scheduled_carousel_publish(client, app_env) -> None:
     queued = client.post("/api/queue/carousel", json={"image_ids": image_ids})
     item_id = queued.json()["id"]
     client.post(f"/api/queue/{item_id}/approve")
-    caption_id = client.post(f"/api/images/{image_ids[0]}/captions", json={"confirmed": True}).json()[0]["id"]
+    caption_id = client.post(
+        f"/api/images/{image_ids[0]}/captions", json={"confirmed": True}
+    ).json()[0]["id"]
     past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
     client.post(
         f"/api/queue/{item_id}/schedule",

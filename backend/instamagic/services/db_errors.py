@@ -17,6 +17,8 @@ def is_db_connection_error(exc: BaseException) -> bool:
             if "OperationalError" in name or "InterfaceError" in name:
                 return True
             message = str(orig).lower()
-            if "connection" in message and ("closed" in message or "lost" in message or "unexpected" in message):
+            if "connection" in message and (
+                "closed" in message or "lost" in message or "unexpected" in message
+            ):
                 return True
     return False

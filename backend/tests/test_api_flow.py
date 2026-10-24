@@ -29,13 +29,22 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
     _marked(session_dir / "blocked-frame.jpg", (40, 40, 90), (40, 300, 180, 420))
     (session_dir / "z-copy.jpg").write_bytes((session_dir / "a-clean.jpg").read_bytes())
     (session_dir / "frame.cr3").write_bytes(b"not-a-real-raw")
-    before = {path.relative_to(library).as_posix(): path.read_bytes() for path in library.rglob("*") if path.is_file()}
+    before = {
+        path.relative_to(library).as_posix(): path.read_bytes()
+        for path in library.rglob("*")
+        if path.is_file()
+    }
 
     login(client)
     statement = "I confirm that every person depicted in this library is a consenting adult."
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": statement},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": statement,
+        },
     )
     assert created.status_code == 201, created.text
     library_id = created.json()["id"]
@@ -55,7 +64,11 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
     assert job["finished_at"]
     assert "seen=5" in job["detail"]
 
-    after = {path.relative_to(library).as_posix(): path.read_bytes() for path in library.rglob("*") if path.is_file()}
+    after = {
+        path.relative_to(library).as_posix(): path.read_bytes()
+        for path in library.rglob("*")
+        if path.is_file()
+    }
     assert after == before
 
     listed = client.get("/api/images", params={"library_id": library_id, "limit": 50})
@@ -98,7 +111,14 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
         assert blur["approved"] is False
     manual = client.post(
         f"/api/images/{clean_id}/blurs",
-        json={"x": 10, "y": 10, "width": 80, "height": 60, "strength": "standard", "reason": "Manual cover."},
+        json={
+            "x": 10,
+            "y": 10,
+            "width": 80,
+            "height": 60,
+            "strength": "standard",
+            "reason": "Manual cover.",
+        },
     )
     assert manual.status_code == 201, manual.text
     assert manual.json()["covers_unsafe"] is False
@@ -122,7 +142,9 @@ def test_scan_does_not_modify_originals_and_gates_queue(client, app_env) -> None
     blocked_crops = client.get(f"/api/images/{blocked_id}/crops").json()
     if blocked_crops:
         blocked_crop = blocked_crops[0]
-        blocked_approve = client.post(f"/api/images/{blocked_id}/crops/{blocked_crop['id']}/approve")
+        blocked_approve = client.post(
+            f"/api/images/{blocked_id}/crops/{blocked_crop['id']}/approve"
+        )
         assert blocked_approve.status_code == 409
         assert "DO_NOT_POST" in blocked_approve.json()["detail"]
 

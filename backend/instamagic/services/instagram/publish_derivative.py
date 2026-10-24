@@ -245,7 +245,9 @@ def ensure_publish_derivative(
     carousel_slide: bool = False,
 ) -> str:
     """Return a derivatives-relative JPEG path suitable for Meta to fetch."""
-    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(session, image):
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(
+        session, image
+    ):
         raise NotAllowed("DO_NOT_POST requires verified blur unlock before publishing.")
     pending = blur_drawn_not_approved_reason(image)
     if pending:
@@ -262,7 +264,11 @@ def ensure_publish_derivative(
             session.commit()
         if approved.derivative_path:
             return _instagram_publish_copy(
-                settings, image.id, approved.derivative_path, "from-crop", carousel_slide=carousel_slide
+                settings,
+                image.id,
+                approved.derivative_path,
+                "from-crop",
+                carousel_slide=carousel_slide,
             )
 
     if image.preview_path:
@@ -346,7 +352,9 @@ def _instagram_publish_copy(
     return relative
 
 
-def refresh_crop_derivative(session: Session, settings: Settings, image: Image, crop: CropSuggestion) -> None:
+def refresh_crop_derivative(
+    session: Session, settings: Settings, image: Image, crop: CropSuggestion
+) -> None:
     if has_any_approved_blur(image):
         windows = _approved_blur_windows(image)
         original_rgb = _load_original_rgb(session, settings, image)

@@ -168,9 +168,12 @@ def test_run_gemini_label_job_entry_labels_all_eligible(client, app_env, monkeyp
     session.close()
 
 
-def test_gemini_preview_bytes_safe_join_accepts_derivative_path_string(app_env, monkeypatch) -> None:
+def test_gemini_preview_bytes_safe_join_accepts_derivative_path_string(
+    app_env, monkeypatch
+) -> None:
     from instamagic.db import session_factory
     from instamagic.models import Image, Library
+
     session = session_factory()()
     settings = get_settings()
     library = Library(id=uuid4(), name="L", root_path=str(app_env["library"]))

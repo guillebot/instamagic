@@ -72,7 +72,11 @@ class TruncatingProvider:
 
         item = candidates[0]
         return CurationResult(
-            picks=[CurationPickDraft(image_id=item.image_id, rank=1, reasons=["ok"], tags=[], captions=[])]
+            picks=[
+                CurationPickDraft(
+                    image_id=item.image_id, rank=1, reasons=["ok"], tags=[], captions=[]
+                )
+            ]
         )
 
 
@@ -95,6 +99,7 @@ def test_curate_chunk_bisects_on_truncation() -> None:
 
 def test_resolve_label_targets_includes_safe_review_model_state(app_env, monkeypatch) -> None:
     from instamagic.db import session_factory
+
     session = session_factory()()
     library = Library(id=uuid4(), name="L", root_path=str(app_env["library"]))
     session.add(library)
@@ -176,7 +181,10 @@ def test_curation_rejects_parallel_batch(client, app_env) -> None:
     )
     library_id = created.json()["id"]
     client.post(f"/api/libraries/{library_id}/scan")
-    client.post(f"/api/images/{client.get('/api/images', params={'library_id': library_id}).json()['items'][0]['id']}/rating", json={"rating": "safe"})
+    client.post(
+        f"/api/images/{client.get('/api/images', params={'library_id': library_id}).json()['items'][0]['id']}/rating",
+        json={"rating": "safe"},
+    )
 
     from instamagic.db import session_factory
 

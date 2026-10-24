@@ -97,13 +97,25 @@ def test_create_rectangle_cover_defaults_hard_edge(client, app_env) -> None:
     login(client)
     library_id = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": STATEMENT,
+        },
     ).json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
     image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
     created = client.post(
         f"/api/images/{image_id}/blurs",
-        json={"x": 10, "y": 10, "width": 80, "height": 60, "shape": "rectangle", "strength": "standard"},
+        json={
+            "x": 10,
+            "y": 10,
+            "width": 80,
+            "height": 60,
+            "shape": "rectangle",
+            "strength": "standard",
+        },
     )
     assert created.status_code == 201
     assert created.json()["edge_mode"] == "hard"
@@ -120,10 +132,18 @@ def test_suggest_blur_from_stored_regions_is_opt_in(client, app_env) -> None:
     login(client)
     library_id = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": STATEMENT,
+        },
     ).json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
-    items = {row["filename"]: row for row in client.get("/api/images", params={"library_id": library_id}).json()["items"]}
+    items = {
+        row["filename"]: row
+        for row in client.get("/api/images", params={"library_id": library_id}).json()["items"]
+    }
 
     unsafe_id = items["unsafe-frame.jpg"]["id"]
     assert items["unsafe-frame.jpg"]["model_state"] == "SAFE_AFTER_CROP"
@@ -142,7 +162,9 @@ def test_suggest_blur_from_stored_regions_is_opt_in(client, app_env) -> None:
 
     blocked_id = items["blocked-frame.jpg"]["id"]
     assert items["blocked-frame.jpg"]["model_state"] == "DO_NOT_POST"
-    suggested_blocked = client.post(f"/api/images/{blocked_id}/blurs/suggest", json={"strength": "standard"})
+    suggested_blocked = client.post(
+        f"/api/images/{blocked_id}/blurs/suggest", json={"strength": "standard"}
+    )
     assert suggested_blocked.status_code == 200, suggested_blocked.text
 
     clean_id = items["clean-frame.jpg"]["id"]

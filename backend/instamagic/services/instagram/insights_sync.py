@@ -172,7 +172,12 @@ def sync_instagram_insights(
                 "reconnect_hint": "Reconnect via Meta OAuth to grant instagram_manage_insights.",
                 "synced_media": 0,
             }
-        return {"ok": False, "error": "insights_sync_failed", "detail": exc.detail[:200], "synced_media": 0}
+        return {
+            "ok": False,
+            "error": "insights_sync_failed",
+            "detail": exc.detail[:200],
+            "synced_media": 0,
+        }
     session.add(
         InstagramAccountInsightSnapshot(
             follower_count=account_values.get("follower_count"),

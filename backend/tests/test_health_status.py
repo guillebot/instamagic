@@ -134,14 +134,18 @@ def test_instagram_username_mismatch_is_down(client, monkeypatch) -> None:
         )
         from instamagic.services.instagram.store import save_credentials
 
-        save_credentials(session, get_settings(), access_token="short-token", business_account_id="123")
+        save_credentials(
+            session, get_settings(), access_token="short-token", business_account_id="123"
+        )
     finally:
         session.close()
 
     def fake_live_probe(_settings):
         return "other.user", None
 
-    monkeypatch.setattr("instamagic.services.health_status.probe_instagram_username_live", fake_live_probe)
+    monkeypatch.setattr(
+        "instamagic.services.health_status.probe_instagram_username_live", fake_live_probe
+    )
     monkeypatch.setattr(
         "instamagic.services.health_status._check_queue",
         lambda _settings: type(
@@ -167,7 +171,9 @@ def test_instagram_check_gets_longer_timeout_than_default(monkeypatch) -> None:
 
     def slow_instagram(_settings):
         _time.sleep(hs._CHECK_TIMEOUT + 0.3)
-        return hs.HealthCheck(id="instagram", label="Instagram", status="ok", detail="@foto.sch (live)")
+        return hs.HealthCheck(
+            id="instagram", label="Instagram", status="ok", detail="@foto.sch (live)"
+        )
 
     slow_instagram.__name__ = "_check_instagram"
     result = hs._run_check(slow_instagram, None)

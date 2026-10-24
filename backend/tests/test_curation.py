@@ -23,21 +23,33 @@ def _seed_rated_library(client, library: Path) -> tuple[str, str, str]:
     statement = "I confirm that every person depicted in this library is a consenting adult."
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": statement},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": statement,
+        },
     )
     assert created.status_code == 201, created.text
     library_id = created.json()["id"]
     scanned = client.post(f"/api/libraries/{library_id}/scan")
     assert scanned.status_code == 202, scanned.text
 
-    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()["items"]
+    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()[
+        "items"
+    ]
     by_name = {item["filename"]: item for item in items}
     clean_id = by_name["a-clean.jpg"]["id"]
     unsafe_id = by_name["unsafe-portrait.jpg"]["id"]
     blocked_id = by_name["blocked-frame.jpg"]["id"]
 
-    assert client.post(f"/api/images/{clean_id}/rating", json={"rating": "excellent"}).status_code == 200
-    assert client.post(f"/api/images/{unsafe_id}/rating", json={"rating": "safe"}).status_code == 200
+    assert (
+        client.post(f"/api/images/{clean_id}/rating", json={"rating": "excellent"}).status_code
+        == 200
+    )
+    assert (
+        client.post(f"/api/images/{unsafe_id}/rating", json={"rating": "safe"}).status_code == 200
+    )
     crops = client.get(f"/api/images/{unsafe_id}/crops").json()
     crop = next(item for item in crops if item["aspect_ratio"] == "4:5" and item["excludes_unsafe"])
     approved = client.post(
@@ -45,7 +57,9 @@ def _seed_rated_library(client, library: Path) -> tuple[str, str, str]:
         json={"x": crop["x"], "y": crop["y"], "width": crop["width"], "height": crop["height"]},
     )
     assert approved.status_code == 200
-    assert client.post(f"/api/images/{blocked_id}/rating", json={"rating": "safe"}).status_code == 200
+    assert (
+        client.post(f"/api/images/{blocked_id}/rating", json={"rating": "safe"}).status_code == 200
+    )
     return library_id, clean_id, blocked_id
 
 
@@ -108,7 +122,9 @@ def test_curation_drafts_then_human_queues(client, app_env) -> None:
     assert undone.status_code == 200, undone.text
     assert undone.json()["status"] in {"suggested", "accepted"}
     refreshed_after_undo = client.get(f"/api/curation/{batch['id']}").json()
-    assert next(pick for pick in refreshed_after_undo["picks"] if pick["id"] == first["id"])["status"] in {
+    assert next(pick for pick in refreshed_after_undo["picks"] if pick["id"] == first["id"])[
+        "status"
+    ] in {
         "suggested",
         "accepted",
     }
@@ -129,7 +145,10 @@ def test_curation_drafts_then_human_queues(client, app_env) -> None:
 def test_curation_requires_auth(client) -> None:
     assert client.get("/api/curation").status_code == 401
     assert (
-        client.post("/api/curation/picks/00000000-0000-0000-0000-000000000000/undo-queue").status_code == 401
+        client.post(
+            "/api/curation/picks/00000000-0000-0000-0000-000000000000/undo-queue"
+        ).status_code
+        == 401
     )
     assert client.post("/api/curation", json={"limit": 4}).status_code == 401
 
@@ -138,6 +157,9 @@ def test_rejected_pick_cannot_queue(client, app_env) -> None:
     library_id, _clean_id, _blocked_id = _seed_rated_library(client, app_env["library"])
     batch = client.post("/api/curation", json={"library_id": library_id, "limit": 8}).json()
     pick = batch["picks"][0]
-    assert client.patch(f"/api/curation/picks/{pick['id']}", json={"status": "rejected"}).status_code == 200
+    assert (
+        client.patch(f"/api/curation/picks/{pick['id']}", json={"status": "rejected"}).status_code
+        == 200
+    )
     refused = client.post("/api/curation/queue", json={"pick_ids": [pick["id"]]})
     assert refused.status_code == 409

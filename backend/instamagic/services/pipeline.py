@@ -205,7 +205,9 @@ def _summary(job: ProcessingJob) -> str:
     return text[:512]
 
 
-def _flush_progress(session: Session, job: ProcessingJob, clock: _ProgressClock, *, force: bool = False) -> None:
+def _flush_progress(
+    session: Session, job: ProcessingJob, clock: _ProgressClock, *, force: bool = False
+) -> None:
     if clock.due(force=force):
         session.commit()
 
@@ -225,7 +227,9 @@ def run_scan(
         raise ValueError("Library was not found.")
     job = session.get(ProcessingJob, job_id) if job_id else None
     if job is None:
-        job = ProcessingJob(kind="scan", status=JobStatus.RUNNING.value, library_id=library_id, detail="Scanning")
+        job = ProcessingJob(
+            kind="scan", status=JobStatus.RUNNING.value, library_id=library_id, detail="Scanning"
+        )
         session.add(job)
         session.flush()
     job_pk = job.id
@@ -234,7 +238,9 @@ def run_scan(
     # Counters reset for this walk; already-ingested paths are skipped quickly in _ingest_one.
     already = int(
         session.scalar(
-            select(func.count()).select_from(Image).where(Image.library_id == library_id, Image.skip_reason.is_(None))
+            select(func.count())
+            .select_from(Image)
+            .where(Image.library_id == library_id, Image.skip_reason.is_(None))
         )
         or 0
     )
@@ -305,7 +311,9 @@ def run_scan(
                     attested=attested,
                     classifier=classifier,
                     face_detector=face_detector,
-                    on_stage=lambda stage, p=path: set_stage(stage, path=p, force=stage == "classify"),
+                    on_stage=lambda stage, p=path: set_stage(
+                        stage, path=p, force=stage == "classify"
+                    ),
                 )
             except Exception as exc:
                 session.rollback()
@@ -321,7 +329,12 @@ def run_scan(
                 session.commit()
                 since_flush = 0
                 clock.due(force=True)
-                log.info("scan_file", relative_path=relative, outcome="failed", error_type=type(exc).__name__)
+                log.info(
+                    "scan_file",
+                    relative_path=relative,
+                    outcome="failed",
+                    error_type=type(exc).__name__,
+                )
                 continue
             current = session.get(ProcessingJob, job_pk)
             if current is None:
@@ -378,7 +391,12 @@ def run_scan(
             failed.error = message
             failed.finished_at = datetime.now(UTC)
             session.commit()
-        log.info("scan_failed", library_id=str(library_id), job_id=str(job_pk), error_type=type(exc).__name__)
+        log.info(
+            "scan_failed",
+            library_id=str(library_id),
+            job_id=str(job_pk),
+            error_type=type(exc).__name__,
+        )
         raise
     finished = session.get(ProcessingJob, job_pk)
     if finished is None:
@@ -393,9 +411,13 @@ def recompute_model_states(session: Session, library_id: UUID) -> None:
         assessment = _latest_assessment(session, image.id)
         if assessment is None:
             continue
-        clear = any(region.unsafe and region.score >= CLEAR_SCORE and region.label in EXPOSED_LABELS for region in assessment.regions)
+        clear = any(
+            region.unsafe and region.score >= CLEAR_SCORE and region.label in EXPOSED_LABELS
+            for region in assessment.regions
+        )
         viable = any(
-            crop.aspect_ratio != "original" and crop.contains_face and crop.excludes_unsafe for crop in image.crops
+            crop.aspect_ratio != "original" and crop.contains_face and crop.excludes_unsafe
+            for crop in image.crops
         )
         state = decide(
             DecisionInput(
@@ -486,6 +508,7 @@ def _ingest_one(
         return "skipped"
     stage("reading")
     try:
+
         def _load_pil() -> PilImage.Image:
             with path.open("rb"):
                 return read_image(path)
@@ -559,7 +582,9 @@ def _ingest_one(
         skin_exposure_score=analysis.summary["skin_exposure_score"],
         face_count=len(analysis.faces),
         instagram_safe_score=safe_score,
-        crop_possible=any(crop.aspect_ratio != "original" and crop.excludes_unsafe for crop in analysis.crops),
+        crop_possible=any(
+            crop.aspect_ratio != "original" and crop.excludes_unsafe for crop in analysis.crops
+        ),
         manual_review_required=True,
         detector_available=analysis.signals.detector_available,
         uncertain=analysis.signals.uncertain or analysis.signals.has_ambiguous_exposure(),
@@ -630,17 +655,23 @@ def _apply_color_tag(session: Session, image_id: UUID, monochrome: bool) -> None
     tag = session.scalar(select(ContentTag).where(ContentTag.name == name))
     if tag is None:
         return
-    exists = session.scalar(select(ImageTag).where(ImageTag.image_id == image_id, ImageTag.tag_id == tag.id))
+    exists = session.scalar(
+        select(ImageTag).where(ImageTag.image_id == image_id, ImageTag.tag_id == tag.id)
+    )
     if exists is None:
         session.add(ImageTag(image_id=image_id, tag_id=tag.id, source=TagSource.HEURISTIC.value))
 
 
 def _record_duplicate(session: Session, image_id: UUID, library_id: UUID, relative: str) -> None:
     exists = session.scalar(
-        select(ImageDuplicate).where(ImageDuplicate.library_id == library_id, ImageDuplicate.relative_path == relative)
+        select(ImageDuplicate).where(
+            ImageDuplicate.library_id == library_id, ImageDuplicate.relative_path == relative
+        )
     )
     if exists is None:
-        session.add(ImageDuplicate(image_id=image_id, library_id=library_id, relative_path=relative))
+        session.add(
+            ImageDuplicate(image_id=image_id, library_id=library_id, relative_path=relative)
+        )
 
 
 def _latest_assessment(session: Session, image_id: UUID) -> SafetyAssessment | None:
@@ -698,13 +729,17 @@ def _refresh_uniqueness(session: Session, library_id: UUID, job_pk: UUID | None 
     rows = session.execute(
         select(Image.id, Image.phash, ImageScore.uniqueness)
         .join(ImageScore, ImageScore.image_id == Image.id, isouter=True)
-        .where(Image.library_id == library_id, Image.phash.is_not(None), Image.skip_reason.is_(None))
+        .where(
+            Image.library_id == library_id, Image.phash.is_not(None), Image.skip_reason.is_(None)
+        )
     ).all()
     last_write = time.monotonic()
 
     def progress(done: int, total: int) -> None:
         nonlocal last_write
-        if job_pk is None or (time.monotonic() - last_write < UNIQUENESS_PROGRESS_SECONDS and done < total):
+        if job_pk is None or (
+            time.monotonic() - last_write < UNIQUENESS_PROGRESS_SECONDS and done < total
+        ):
             return
         last_write = time.monotonic()
         job = session.get(ProcessingJob, job_pk)
@@ -721,13 +756,22 @@ def _refresh_uniqueness(session: Session, library_id: UUID, job_pk: UUID | None 
     for start in range(0, len(updates), 2000):
         session.execute(update(ImageScore), updates[start : start + 2000])
         session.commit()
-    log.info("scan_uniqueness_finished", library_id=str(library_id), images=len(rows), updated=len(updates))
+    log.info(
+        "scan_uniqueness_finished",
+        library_id=str(library_id),
+        images=len(rows),
+        updated=len(updates),
+    )
     session.commit()
 
 
 def duplicate_count(session: Session, image_id: UUID) -> int:
     return int(
-        session.scalar(select(func.count()).select_from(ImageDuplicate).where(ImageDuplicate.image_id == image_id))
+        session.scalar(
+            select(func.count())
+            .select_from(ImageDuplicate)
+            .where(ImageDuplicate.image_id == image_id)
+        )
         or 0
     )
 
@@ -804,7 +848,9 @@ def replace_suggested_blurs(
     derivative = None
     if windows:
         derivative = f"{image.id}/blurs/cover.jpg"
-        save_derivative(apply_blur_covers(rgb, windows), derivatives_root / derivative, 1600, quality=84)
+        save_derivative(
+            apply_blur_covers(rgb, windows), derivatives_root / derivative, 1600, quality=84
+        )
     rows = [_blur_row(image.id, window, derivative) for window in windows]
     for row in rows:
         session.add(row)

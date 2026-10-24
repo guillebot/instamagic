@@ -44,7 +44,9 @@ class OnnxYoloSafetyClassifier:
         outputs = self._session.run(None, {self._input_name: chw})
         regions = _decode(outputs[0], scale, pad_x, pad_y, image_bgr.shape[1], image_bgr.shape[0])
         if regions is None:
-            return SafetySignals(detector_available=False, uncertain=True, model_name="shape_mismatch")
+            return SafetySignals(
+                detector_available=False, uncertain=True, model_name="shape_mismatch"
+            )
         return SafetySignals(regions=regions, detector_available=True, model_name=self.model_name)
 
 

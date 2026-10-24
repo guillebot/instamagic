@@ -141,7 +141,9 @@ class GoogleGeminiProvider:
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": hashtag_request_text(context=context, account_voice=account_voice)}],
+                    "parts": [
+                        {"text": hashtag_request_text(context=context, account_voice=account_voice)}
+                    ],
                 }
             ],
             "generationConfig": {
@@ -157,14 +159,21 @@ class GoogleGeminiProvider:
         assert_safe_gemini_payload(body, policy="text_only")
         return HashtagSuggestion.model_validate_json(self._post(body))
 
-    def draft_engage_comments(self, targets: list[EngageTargetText], *, account_voice: str) -> EngageCommentBatch:
+    def draft_engage_comments(
+        self, targets: list[EngageTargetText], *, account_voice: str
+    ) -> EngageCommentBatch:
         """Text-only: captions of other accounts' posts in, short manual-comment suggestions out."""
         if not self._api_key:
             raise NotConfigured("GEMINI_API_KEY is not configured.")
         body = {
             "system_instruction": {"parts": [{"text": engage_system_instruction()}]},
             "contents": [
-                {"role": "user", "parts": [{"text": engage_request_text(targets=targets, account_voice=account_voice)}]}
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": engage_request_text(targets=targets, account_voice=account_voice)}
+                    ],
+                }
             ],
             "generationConfig": {
                 "temperature": 0.8,
@@ -178,7 +187,10 @@ class GoogleGeminiProvider:
                             "type": "ARRAY",
                             "items": {
                                 "type": "OBJECT",
-                                "properties": {"id": {"type": "STRING"}, "text": {"type": "STRING"}},
+                                "properties": {
+                                    "id": {"type": "STRING"},
+                                    "text": {"type": "STRING"},
+                                },
                                 "required": ["id", "text"],
                             },
                         }
@@ -215,7 +227,9 @@ class GoogleGeminiProvider:
         return CurationResult.model_validate_json(self._post(body))
 
     def _post(self, body: dict[str, object]) -> str:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:generateContent"
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:generateContent"
+        )
         headers = {"x-goog-api-key": self._api_key}
         try:
             response = httpx.post(url, headers=headers, json=body, timeout=self._timeout)
@@ -230,7 +244,9 @@ class GoogleGeminiProvider:
         return _extract_text(response.json())
 
 
-def build_request_body(context: GeminiContext, *, policy: str, image_bytes: bytes | None) -> dict[str, object]:
+def build_request_body(
+    context: GeminiContext, *, policy: str, image_bytes: bytes | None
+) -> dict[str, object]:
     pixels = image_bytes if gemini_allows_pixels(policy) else None
     parts: list[dict[str, object]] = [{"text": caption_request_text(context)}]
     if pixels:

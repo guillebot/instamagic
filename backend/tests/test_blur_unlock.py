@@ -19,13 +19,19 @@ def _marked(path: Path, color: tuple[int, int, int], box: tuple[int, int, int, i
     ImageDraw.Draw(image).rectangle(box, fill=(230, 230, 230))
     image.save(path, format="JPEG", quality=90)
 
+
 ATTESTATION = "I confirm that every person depicted in this library is a consenting adult."
 
 
 def _attested_library(client, library: Path) -> str:
     created = client.post(
         "/api/libraries",
-        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
+        json={
+            "name": "Archive",
+            "root_path": str(library),
+            "confirmed": True,
+            "statement": ATTESTATION,
+        },
     )
     assert created.status_code == 201, created.text
     library_id = created.json()["id"]
@@ -56,7 +62,10 @@ def test_blur_unlock_verified_allows_queue(client, app_env) -> None:
     _marked(library / "blocked-frame.jpg", (40, 40, 90), (120, 80, 200, 280))
     login(client)
     library_id = _attested_library(client, library)
-    items = {row["filename"]: row for row in client.get("/api/images", params={"library_id": library_id}).json()["items"]}
+    items = {
+        row["filename"]: row
+        for row in client.get("/api/images", params={"library_id": library_id}).json()["items"]
+    }
     image_id = items["blocked-frame.jpg"]["id"]
     assert items["blocked-frame.jpg"]["model_state"] == "DO_NOT_POST"
 
@@ -80,7 +89,12 @@ def test_blur_unlock_fails_when_classifier_still_unsafe(client, app_env) -> None
     login(client)
     library_id = _attested_library(client, library)
     image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
 
     unsafe_signals = SafetySignals(
         regions=[Region("FEMALE_BREAST_EXPOSED", 0.96, Box(10, 10, 80, 80))],
@@ -106,11 +120,21 @@ def test_blur_edit_after_verify_resets_and_blocks_queue(client, app_env) -> None
     login(client)
     library_id = _attested_library(client, library)
     image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
 
-    assert client.post(f"/api/images/{image_id}/blurs/strength", json={"strength": "subtle"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/strength", json={"strength": "subtle"}
+        ).status_code
+        == 200
+    )
     detail = client.get(f"/api/images/{image_id}").json()
     assert detail["blur_unlock_status"] == "pending"
     assert client.post("/api/queue", json={"image_id": image_id}).status_code == 409
@@ -122,7 +146,12 @@ def test_publish_preview_requires_unlock_on_do_not_post(client, app_env) -> None
     login(client)
     library_id = _attested_library(client, library)
     image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     preview = client.get(f"/api/images/{image_id}/publish-preview")
     assert preview.status_code == 200, preview.text
@@ -136,13 +165,27 @@ def test_captions_allowed_after_verified_blur_unlock(client, app_env) -> None:
     image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
     client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
     # Before any verified unlock, DO_NOT_POST still blocks caption generation.
-    assert client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409
-    assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
+    assert (
+        client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409
+    )
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}
+        ).status_code
+        == 200
+    )
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     assert client.get(f"/api/images/{image_id}").json()["blur_unlock_status"] == "verified"
     captions = client.post(f"/api/images/{image_id}/captions", json={"confirmed": True})
     assert captions.status_code == 201, captions.text
     assert captions.json()
     # Editing covers after verification resets the unlock and blocks captions again.
-    assert client.post(f"/api/images/{image_id}/blurs/strength", json={"strength": "subtle"}).status_code == 200
-    assert client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409
+    assert (
+        client.post(
+            f"/api/images/{image_id}/blurs/strength", json={"strength": "subtle"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409
+    )

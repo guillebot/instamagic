@@ -137,7 +137,9 @@ def resolve_label_targets(
         if human_rating not in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value}:
             skip("not_safe_or_excellent")
             continue
-        if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(session, image):
+        if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(
+            session, image
+        ):
             skip("do_not_post")
             continue
         gate = gemini_gate(
@@ -164,7 +166,9 @@ def resolve_label_targets(
     return targets, skip_counts
 
 
-def _apply_label_result(session: Session, image: Image, result, *, add_captions: bool = True) -> None:
+def _apply_label_result(
+    session: Session, image: Image, result, *, add_captions: bool = True
+) -> None:
     for raw in result.tags:
         name = str(raw).strip().lstrip("#").lower().replace(" ", "")[:64]
         if not name:
@@ -230,10 +234,16 @@ def label_one_image(
     gate_kwargs = publishing_gate_kwargs(session, image)
     # Never stack a second set of captions on an image that already has some (generated or user-edited).
     has_captions = bool(
-        session.scalar(select(func.count()).select_from(Caption).where(Caption.image_id == image.id))
+        session.scalar(
+            select(func.count()).select_from(Caption).where(Caption.image_id == image.id)
+        )
     )
     tags = [link.tag.name for link in image.tags if link.tag is not None]
-    mood_names = [tag for tag in tags if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}]
+    mood_names = [
+        tag
+        for tag in tags
+        if tag in {"soft", "dramatic", "playful", "elegant", "high key", "low key"}
+    ]
     composition = image.orientation or "unknown orientation"
     description = image.gemini_description or f"A {composition} photograph."
     crop_payload = None
@@ -284,7 +294,9 @@ def label_one_image(
                 composition=composition,
                 mood=image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified"),
                 safe_description=description,
-                crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
+                crop=crop_payload
+                if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved
+                else None,
                 gemini_refused=is_gemini_refused(image),
             ),
             account_voice=account_voice,
@@ -406,6 +418,7 @@ def run_gemini_label_job(
             )
             if image is None:
                 return image_id, "error"
+
             def thread_preview(img: Image) -> bytes | None:
                 return curation_derivative_bytes(inner, job_settings, img)
 

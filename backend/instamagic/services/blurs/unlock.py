@@ -147,7 +147,9 @@ def blur_unlock_effective(session: Session, image: Image) -> bool:
 def unlock_summary_message(session: Session, image: Image) -> str | None:
     if image.model_state != SafetyState.DO_NOT_POST.value:
         return None
-    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_unlock_effective(session, image):
+    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_unlock_effective(
+        session, image
+    ):
         return "SAFE · BLURRED (verified)"
     if image.blur_unlock_status == BlurUnlockStatus.FAILED.value and image.blur_unlock_details_json:
         try:
@@ -276,7 +278,9 @@ def verify_blur_unlock(
     }
 
     if uncovered or detections:
-        message = unlock_summary_message_from_parts(uncovered, detections, coverage_min=gate.min_ratio)
+        message = unlock_summary_message_from_parts(
+            uncovered, detections, coverage_min=gate.min_ratio
+        )
         details["message"] = message
         return UnlockVerification(
             status=BlurUnlockStatus.FAILED,

@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session
 log = get_logger("posting.scheduler")
 
 _LIMIT_BACKOFF_THRESHOLD = 48
+
+
 def content_limit_near_cap(client: InstagramClient) -> bool:
     if not client.configured():
         return True
@@ -30,7 +32,9 @@ def content_limit_near_cap(client: InstagramClient) -> bool:
     return limit.usage >= _LIMIT_BACKOFF_THRESHOLD
 
 
-def run_scheduled_publish_tick(session: Session, settings: Settings, client: InstagramClient) -> int:
+def run_scheduled_publish_tick(
+    session: Session, settings: Settings, client: InstagramClient
+) -> int:
     """Publish due scheduled items. Returns count of successful publishes."""
     get_or_create_config(session)
     view = config_view(session)

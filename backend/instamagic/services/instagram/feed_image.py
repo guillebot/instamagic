@@ -60,7 +60,11 @@ def write_instagram_publish_jpeg(
     carousel_slide: bool = False,
 ) -> None:
     """Center-crop to IG feed aspect bounds, resize, and stay under Meta's 8MB JPEG cap."""
-    working = enforce_carousel_feed_geometry(image) if carousel_slide else enforce_instagram_feed_geometry(image)
+    working = (
+        enforce_carousel_feed_geometry(image)
+        if carousel_slide
+        else enforce_instagram_feed_geometry(image)
+    )
     quality = IG_FEED_JPEG_QUALITY
     while quality >= 60:
         save_derivative(working, dest, IG_FEED_LONG_EDGE, quality=quality, optimize=True)
@@ -73,6 +77,8 @@ def write_instagram_publish_jpeg(
     )
 
 
-def prepare_publish_file_from_path(source: Path, dest: Path, *, carousel_slide: bool = False) -> None:
+def prepare_publish_file_from_path(
+    source: Path, dest: Path, *, carousel_slide: bool = False
+) -> None:
     rgb = oriented_rgb(read_image(source))
     write_instagram_publish_jpeg(rgb, dest, carousel_slide=carousel_slide)

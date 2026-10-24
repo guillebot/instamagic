@@ -57,17 +57,61 @@ NEEDED_SCOPES = ("instagram_basic", "pages_read_engagement")
 
 # Too broad to be a niche signal (and spam magnets).
 GENERIC_TAGS = {
-    "photography", "photo", "photooftheday", "picoftheday", "instagood", "instagram", "love", "art",
-    "nature", "beautiful", "follow", "like", "likeforlike", "followforfollow", "f4f", "l4l", "insta",
-    "photographer", "photos", "pic", "pics", "travel", "happy", "style", "fashion", "explore",
-    "explorepage", "viral", "reels", "reel", "trending", "fyp",
+    "photography",
+    "photo",
+    "photooftheday",
+    "picoftheday",
+    "instagood",
+    "instagram",
+    "love",
+    "art",
+    "nature",
+    "beautiful",
+    "follow",
+    "like",
+    "likeforlike",
+    "followforfollow",
+    "f4f",
+    "l4l",
+    "insta",
+    "photographer",
+    "photos",
+    "pic",
+    "pics",
+    "travel",
+    "happy",
+    "style",
+    "fashion",
+    "explore",
+    "explorepage",
+    "viral",
+    "reels",
+    "reel",
+    "trending",
+    "fyp",
 }
 FALLBACK_TAGS = [
-    "fineartphotography", "availablelight", "moodyportraits", "quietphotography", "blackandwhitephotography",
+    "fineartphotography",
+    "availablelight",
+    "moodyportraits",
+    "quietphotography",
+    "blackandwhitephotography",
 ]
 SPAM_MARKERS = (
-    "follow for follow", "follow4follow", "f4f", "l4l", "like for like", "giveaway", "dm for promo",
-    "dm for collab", "promo", "onlyfans", "crypto", "forex", "check my bio", "link in bio",
+    "follow for follow",
+    "follow4follow",
+    "f4f",
+    "l4l",
+    "like for like",
+    "giveaway",
+    "dm for promo",
+    "dm for collab",
+    "promo",
+    "onlyfans",
+    "crypto",
+    "forex",
+    "check my bio",
+    "link in bio",
 )
 _HASHTAG_IN_TEXT = re.compile(r"#([A-Za-z0-9_]{2,64})")
 _MENTION_IN_TEXT = re.compile(r"(?<![\w.])@([A-Za-z0-9._]{2,30})")
@@ -154,7 +198,9 @@ def update_settings(
             if tag not in cleaned:
                 cleaned.append(tag)
         if len(cleaned) > MAX_NICHE_TAGS:
-            raise NotAllowed(f"At most {MAX_NICHE_TAGS} seed hashtags (the Graph API allows 30 unique per 7 days).")
+            raise NotAllowed(
+                f"At most {MAX_NICHE_TAGS} seed hashtags (the Graph API allows 30 unique per 7 days)."
+            )
         row.seed_hashtags_json = json.dumps(cleaned)
     session.commit()
     session.refresh(row)
@@ -234,7 +280,9 @@ def niche_hashtags(session: Session, settings_row: EngageSettings) -> list[dict[
     # Gemini enrichment hashtags of your (safe, enriched) frames — published ones count triple.
     used: Counter[str] = Counter()
     rows = session.execute(
-        select(Image.id, Image.enrich_hashtags_json).where(Image.enrich_hashtags_json.is_not(None)).limit(5000)
+        select(Image.id, Image.enrich_hashtags_json)
+        .where(Image.enrich_hashtags_json.is_not(None))
+        .limit(5000)
     ).all()
     for image_id, blob in rows:
         weight = 3 if image_id in published_image_ids else 1
@@ -260,7 +308,9 @@ def _searched_recently(session: Session) -> set[str]:
     return set(rows)
 
 
-def pick_run_hashtags(session: Session, niche: list[dict[str, str]], per_run: int, day_index: int) -> list[dict[str, str]]:
+def pick_run_hashtags(
+    session: Session, niche: list[dict[str, str]], per_run: int, day_index: int
+) -> list[dict[str, str]]:
     """Rotate through the niche list; new (budget-counted) tags only while budget has a reserve."""
     if not niche:
         return []
@@ -349,7 +399,11 @@ def _media_ok(row: dict, *, max_age_days: int, now: datetime) -> bool:
 
 
 def hashtag_candidates(
-    session: Session, client: InstagramClient, tags: list[dict[str, str]], notes: RunNotes, now: datetime
+    session: Session,
+    client: InstagramClient,
+    tags: list[dict[str, str]],
+    notes: RunNotes,
+    now: datetime,
 ) -> tuple[list[Candidate], str | None]:
     """Returns candidates and an error code if the Graph denied hashtag search."""
     out: list[Candidate] = []
@@ -375,9 +429,14 @@ def hashtag_candidates(
             if needs_graph:
                 time.sleep(GRAPH_PAUSE_SECONDS)
         rows_seen = 0
-        for edge, rows in (("recent", data.get("recent_media") or []), ("top", data.get("top_media") or [])):
+        for edge, rows in (
+            ("recent", data.get("recent_media") or []),
+            ("top", data.get("top_media") or []),
+        ):
             for row in rows:
-                if not isinstance(row, dict) or not _media_ok(row, max_age_days=HASHTAG_POST_MAX_AGE_DAYS, now=now):
+                if not isinstance(row, dict) or not _media_ok(
+                    row, max_age_days=HASHTAG_POST_MAX_AGE_DAYS, now=now
+                ):
                     continue
                 rows_seen += 1
                 posted = _parse_ts(row.get("timestamp"))
@@ -397,7 +456,9 @@ def hashtag_candidates(
                         username=None,
                         caption=str(row.get("caption") or ""),
                         like_count=likes,
-                        comments_count=row.get("comments_count") if isinstance(row.get("comments_count"), int) else None,
+                        comments_count=row.get("comments_count")
+                        if isinstance(row.get("comments_count"), int)
+                        else None,
                         posted_at=posted,
                         reason=reason,
                         score=_score(likes, posted, now) + (2 if edge == "recent" else 0),
@@ -414,7 +475,9 @@ def hashtag_candidates(
 def _recently_targeted_accounts(session: Session, cooldown_days: int, now: datetime) -> set[str]:
     since = now - timedelta(days=cooldown_days)
     rows = session.scalars(
-        select(EngageTarget.username).where(EngageTarget.username.is_not(None), EngageTarget.created_at >= since)
+        select(EngageTarget.username).where(
+            EngageTarget.username.is_not(None), EngageTarget.created_at >= since
+        )
     ).all()
     return {str(r).lower() for r in rows}
 
@@ -441,7 +504,9 @@ def account_candidates(
     for account in accounts:
         handle = account.handle.lstrip("@").lower()
         if handle in cooling:
-            notes.accounts.append({"handle": handle, "skipped": f"engaged in the last {cooldown_days} days"})
+            notes.accounts.append(
+                {"handle": handle, "skipped": f"engaged in the last {cooldown_days} days"}
+            )
             continue
         if fetched >= MAX_ACCOUNTS_PER_RUN:
             break
@@ -462,7 +527,9 @@ def account_candidates(
         followers = discovery.get("followers_count")
         best: Candidate | None = None
         for row in media:
-            if not isinstance(row, dict) or not _media_ok(row, max_age_days=ACCOUNT_POST_MAX_AGE_DAYS, now=now):
+            if not isinstance(row, dict) or not _media_ok(
+                row, max_age_days=ACCOUNT_POST_MAX_AGE_DAYS, now=now
+            ):
                 continue
             if str(row["permalink"]) in known_permalinks:
                 continue
@@ -484,7 +551,9 @@ def account_candidates(
                 username=str(row.get("username") or discovery.get("username") or handle).lower(),
                 caption=str(row.get("caption") or ""),
                 like_count=likes,
-                comments_count=row.get("comments_count") if isinstance(row.get("comments_count"), int) else None,
+                comments_count=row.get("comments_count")
+                if isinstance(row.get("comments_count"), int)
+                else None,
                 posted_at=posted,
                 reason=reason,
                 score=_score(likes, posted, now) + 4,
@@ -502,11 +571,17 @@ def account_candidates(
 def _sanitize_caption(text: str) -> str:
     cleaned = _URL_RE.sub("", text)
     cleaned = re.sub(r"originals", "original", cleaned, flags=re.I)
-    cleaned = cleaned.replace("/photos/", " photos ").replace("\\photos\\", " photos ").replace("file:", "file ")
+    cleaned = (
+        cleaned.replace("/photos/", " photos ")
+        .replace("\\photos\\", " photos ")
+        .replace("file:", "file ")
+    )
     return re.sub(r"\s+", " ", cleaned).strip()[:400]
 
 
-def draft_comments(growth: object, targets: list[EngageTarget], *, account_voice: str, notes: RunNotes) -> None:
+def draft_comments(
+    growth: object, targets: list[EngageTarget], *, account_voice: str, notes: RunNotes
+) -> None:
     drafter = getattr(growth, "draft_engage_comments", None)
     if not callable(drafter) or not targets:
         notes.drafts = "unavailable"
@@ -567,7 +642,10 @@ def _own_username(session: Session) -> str | None:
 def running_run(session: Session, now: datetime | None = None) -> EngageRun | None:
     now = now or datetime.now(UTC)
     row = session.scalars(
-        select(EngageRun).where(EngageRun.status == "running").order_by(EngageRun.started_at.desc()).limit(1)
+        select(EngageRun)
+        .where(EngageRun.status == "running")
+        .order_by(EngageRun.started_at.desc())
+        .limit(1)
     ).first()
     if row is None:
         return None
@@ -599,7 +677,9 @@ def run_engage(
     session.commit()
     notes = RunNotes()
     try:
-        _run_into(session, client, growth, run, settings_row, notes, account_voice=account_voice, now=now)
+        _run_into(
+            session, client, growth, run, settings_row, notes, account_voice=account_voice, now=now
+        )
     except Exception as exc:
         session.rollback()
         run = session.get(EngageRun, run.id) or run
@@ -611,7 +691,9 @@ def run_engage(
     run.finished_at = datetime.now(UTC)
     session.commit()
     session.refresh(run)
-    log.info("engage_run_finished", status=run.status, created=run.targets_created, code=run.error_code)
+    log.info(
+        "engage_run_finished", status=run.status, created=run.targets_created, code=run.error_code
+    )
     return run
 
 
@@ -632,7 +714,12 @@ def _run_into(
         run.error = "Instagram is not connected."
         return
     target_total = int(settings_row.daily_target)
-    already_today = session.scalar(select(func.count(EngageTarget.id)).where(EngageTarget.run_date == run.run_date)) or 0
+    already_today = (
+        session.scalar(
+            select(func.count(EngageTarget.id)).where(EngageTarget.run_date == run.run_date)
+        )
+        or 0
+    )
     wanted = max(0, target_total - int(already_today))
     if wanted == 0:
         run.status = "ok"
@@ -722,7 +809,9 @@ def _run_into(
     session.flush()
     draft_comments(growth, rows, account_voice=account_voice, notes=notes)
 
-    existing_handles = {a.handle.lstrip("@").lower() for a in session.scalars(select(RelatedAccount)).all()}
+    existing_handles = {
+        a.handle.lstrip("@").lower() for a in session.scalars(select(RelatedAccount)).all()
+    }
     notes.suggested_accounts = [
         h for h in notes.suggested_accounts if h not in existing_handles and h != own
     ][:12]
@@ -800,7 +889,12 @@ def run_out(row: EngageRun | None) -> dict[str, object] | None:
 
 def permission_status(session: Session, client: InstagramClient) -> dict[str, object]:
     if not client.configured():
-        return {"ok": False, "code": "not_connected", "missing": [], "message": "Instagram is not connected."}
+        return {
+            "ok": False,
+            "code": "not_connected",
+            "missing": [],
+            "message": "Instagram is not connected.",
+        }
     row = get_connection(session)
     scopes = parse_scopes_json(row.token_scopes_json if row else None)
     missing = [s for s in NEEDED_SCOPES if scopes and s not in scopes]
@@ -829,7 +923,10 @@ def overview(session: Session, client: InstagramClient) -> dict[str, object]:
     today = local_today(session)
     running = running_run(session)
     last = session.scalars(
-        select(EngageRun).where(EngageRun.status != "running").order_by(EngageRun.started_at.desc()).limit(1)
+        select(EngageRun)
+        .where(EngageRun.status != "running")
+        .order_by(EngageRun.started_at.desc())
+        .limit(1)
     ).first()
     list_date = today
     targets = session.scalars(
@@ -840,7 +937,9 @@ def overview(session: Session, client: InstagramClient) -> dict[str, object]:
         if latest_date:
             list_date = str(latest_date)
             targets = session.scalars(
-                select(EngageTarget).where(EngageTarget.run_date == list_date).order_by(EngageTarget.created_at)
+                select(EngageTarget)
+                .where(EngageTarget.run_date == list_date)
+                .order_by(EngageTarget.created_at)
             ).all()
     days: list[dict[str, object]] = []
     rows = session.execute(
@@ -853,8 +952,14 @@ def overview(session: Session, client: InstagramClient) -> dict[str, object]:
         by_day.setdefault(str(day), {"open": 0, "done": 0, "skipped": 0})[str(status)] = int(count)
     for day in sorted(by_day, reverse=True)[:14]:
         counts = by_day[day]
-        days.append({"date": day, "done": counts.get("done", 0), "skipped": counts.get("skipped", 0),
-                     "total": sum(counts.values())})
+        days.append(
+            {
+                "date": day,
+                "done": counts.get("done", 0),
+                "skipped": counts.get("skipped", 0),
+                "total": sum(counts.values()),
+            }
+        )
     order = {"open": 0, "done": 1, "skipped": 2}
     targets_sorted = sorted(targets, key=lambda t: order.get(t.status, 3))
     return {
@@ -869,6 +974,7 @@ def overview(session: Session, client: InstagramClient) -> dict[str, object]:
         "niche_hashtags": niche_hashtags(session, settings_row),
         "hashtag_budget": budget_status(session),
         "similar_accounts": [
-            a.handle.lstrip("@") for a in session.scalars(select(RelatedAccount).order_by(RelatedAccount.created_at))
+            a.handle.lstrip("@")
+            for a in session.scalars(select(RelatedAccount).order_by(RelatedAccount.created_at))
         ],
     }

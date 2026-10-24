@@ -57,14 +57,32 @@ class GrowthDraftProvider(Protocol):
         account_voice: str,
     ) -> CommentDraftBatch: ...
 
-    def suggest_hashtags(self, context: GeminiContext, *, account_voice: str) -> HashtagSuggestion: ...
+    def suggest_hashtags(
+        self, context: GeminiContext, *, account_voice: str
+    ) -> HashtagSuggestion: ...
 
 
 # Comments on other people's posts must never look like spam or self-promotion.
 ENGAGE_BANNED_PHRASES = (
-    "follow me", "follow back", "follow my", "check out my", "check my", "my page", "my profile",
-    "my account", "my feed", "dm me", "dm for", "link in bio", "visit my", "http", "www.", "#", "@",
-    "collab", "promo",
+    "follow me",
+    "follow back",
+    "follow my",
+    "check out my",
+    "check my",
+    "my page",
+    "my profile",
+    "my account",
+    "my feed",
+    "dm me",
+    "dm for",
+    "link in bio",
+    "visit my",
+    "http",
+    "www.",
+    "#",
+    "@",
+    "collab",
+    "promo",
 )
 
 
@@ -174,28 +192,48 @@ class FakeGrowthDraftProvider:
         note = (target_context or "their frame")[:80]
         return CommentDraftBatch(
             drafts=[
-                CommentDraftText(text=f"The {mood} light in this holds the same patience as {note}."),
-                CommentDraftText(text="Beautiful restraint in the midtones — the shadow does real work here."),
-                CommentDraftText(text="That edge of soft contrast is doing more storytelling than a harder grade would."),
+                CommentDraftText(
+                    text=f"The {mood} light in this holds the same patience as {note}."
+                ),
+                CommentDraftText(
+                    text="Beautiful restraint in the midtones — the shadow does real work here."
+                ),
+                CommentDraftText(
+                    text="That edge of soft contrast is doing more storytelling than a harder grade would."
+                ),
             ]
         )
 
     def suggest_hashtags(self, context: GeminiContext, *, account_voice: str) -> HashtagSuggestion:
         del account_voice
-        base = ["fineartphotography", "portraitmood", "availablelight", "filmlook", "quietphotography"]
+        base = [
+            "fineartphotography",
+            "portraitmood",
+            "availablelight",
+            "filmlook",
+            "quietphotography",
+        ]
         if context.mood and context.mood != "unspecified":
             base.append(context.mood.replace(" ", "")[:32])
         return HashtagSuggestion(tags=base)
 
-    def draft_engage_comments(self, targets: list[EngageTargetText], *, account_voice: str) -> EngageCommentBatch:
+    def draft_engage_comments(
+        self, targets: list[EngageTargetText], *, account_voice: str
+    ) -> EngageCommentBatch:
         del account_voice
         out: list[EngageCommentDraft] = []
         for target in targets:
-            out.append(EngageCommentDraft(id=target.id, text="Lovely quiet mood here, the light feels honest."))
+            out.append(
+                EngageCommentDraft(
+                    id=target.id, text="Lovely quiet mood here, the light feels honest."
+                )
+            )
         return EngageCommentBatch(comments=out)
 
 
-def append_voice_to_context(context: GeminiContext, *, account_voice: str, research_notes: str = "") -> GeminiContext:
+def append_voice_to_context(
+    context: GeminiContext, *, account_voice: str, research_notes: str = ""
+) -> GeminiContext:
     account = dict(context.account_context)
     account["voice"] = account_voice[:400]
     if research_notes.strip():
