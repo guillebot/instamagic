@@ -217,6 +217,8 @@ class HashtagIn(BaseModel):
 class EnrichmentSettingsIn(BaseModel):
     enabled: bool | None = None
     daily_cap: int | None = Field(default=None, ge=0, le=20000)
+    prefetch_enabled: bool | None = None
+    prefetch_daily_cap: int | None = Field(default=None, ge=0, le=20000)
 
 
 class CurationIn(BaseModel):

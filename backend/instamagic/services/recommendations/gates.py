@@ -70,3 +70,39 @@ def gemini_gate(
     if policy == "manual_only" and not operator_confirmed:
         reasons.append("GEMINI_IMAGE_POLICY=manual_only requires an explicit confirmation.")
     return GateResult(allowed=not reasons, reasons=reasons)
+
+
+def prefetch_gate(
+    *,
+    attested: bool,
+    human_rating: str | None,
+    model_state: str | None,
+    classifier_clean: bool,
+    has_any_blur: bool,
+    skip_reason: str | None,
+    policy: str,
+    operator_confirmed: bool,
+) -> GateResult:
+    """Gemini prefetch for UNRATED photos the local classifier found clean (state REVIEW, no hits).
+
+    This only allows generating labels/captions/hashtags ahead of the operator's rating. It grants no
+    publish, queue or curation eligibility: ``publishing_gate`` / ``gemini_gate`` are unchanged and still
+    require a human safe/excellent rating. Never true for DO_NOT_POST, SAFE_AFTER_CROP, any image with
+    blur covers, detector hits, or any human rating (rated photos use the central gate instead).
+    """
+    reasons: list[str] = []
+    if not attested:
+        reasons.append("The library has no adult attestation.")
+    if human_rating is not None:
+        reasons.append("Prefetch is only for unrated photos.")
+    if model_state != SafetyState.REVIEW.value:
+        reasons.append("Prefetch requires local model state REVIEW.")
+    if not classifier_clean:
+        reasons.append("The local classifier reported detections or uncertainty.")
+    if has_any_blur:
+        reasons.append("Images with blur covers are never prefetched.")
+    if skip_reason is not None:
+        reasons.append("Skipped image.")
+    if policy == "manual_only" and not operator_confirmed:
+        reasons.append("GEMINI_IMAGE_POLICY=manual_only requires an explicit confirmation.")
+    return GateResult(allowed=not reasons, reasons=reasons)

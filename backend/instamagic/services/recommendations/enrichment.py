@@ -6,6 +6,11 @@ DO_NOT_POST only with a verified blur unlock (Gemini sees the blurred publish de
 SAFE_AFTER_CROP only with an approved crop or covering blur. Each image is re-checked right
 before any Gemini call. Existing captions and hashtags are never overwritten.
 
+Lower-priority "prefetch" tier (``prefetch.py``): unrated photos the local classifier left at REVIEW
+with no detections get labels/captions/hashtags ahead of the operator's rating. Prefetch only fills
+batch slots the rated tier did not need, has its own toggle and daily cap (inside the global cap), and
+never grants queue/publish/curation eligibility: those still require a human safe/excellent rating.
+
 Runs as small batches on the ``gemini`` RQ lane (never the ``io`` lane used by scans, insights
 and comment syncs). Batches are kicked by worker-io's scheduler thread, so curation and
 on-demand labeling jobs interleave between batches.
@@ -23,9 +28,9 @@ from uuid import UUID
 
 from instamagic.errors import GeminiBlocked, GeminiEmpty, GeminiRateLimited, GeminiTruncated
 from instamagic.logging_config import get_logger
-from instamagic.models import Image, ImageTag, SafetyState
+from instamagic.models import Caption, Image, ImageTag, SafetyState
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
-from instamagic.services.gemini.context import build_context
+from instamagic.services.gemini.context import build_context, build_prefetch_context
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.gemini.labeling import format_blocked_status, should_retry_label
 from instamagic.services.instagram.hashtag_research import suggest_tags_from_research
@@ -33,7 +38,12 @@ from instamagic.services.pipeline import is_attested
 from instamagic.services.posting.schedule_config import get_or_create_config
 from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.gemini_derivatives import has_approved_covering_blur
-from sqlalchemy import select
+from instamagic.services.recommendations.prefetch import (
+    is_prefetch_candidate,
+    pending_prefetch_ids,
+    prefetch_counts,
+)
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 log = get_logger("enrichment")
@@ -44,6 +54,9 @@ BACKOFF_KEY = "instamagic:enrich:backoff_until"
 BACKOFF_LEVEL_KEY = "instamagic:enrich:backoff_level"
 LAST_KEY = "instamagic:enrich:last"
 CALLS_KEY_PREFIX = "instamagic:enrich:calls:"
+PREFETCH_CALLS_KEY_PREFIX = "instamagic:enrich:prefetch_calls:"
+TIER_RATED = "rated"
+TIER_PREFETCH = "prefetch"
 LOCK_TTL_SECONDS = 30 * 60
 IDLE_TTL_SECONDS = 5 * 60
 MAX_ATTEMPTS = 5
@@ -107,26 +120,31 @@ def pending_images(images: list[Image]) -> list[Image]:
     return pending
 
 
-def _today_key(now: datetime | None = None) -> str:
-    return CALLS_KEY_PREFIX + (now or datetime.now(UTC)).strftime("%Y%m%d")
+def _today_key(now: datetime | None = None, *, prefix: str = CALLS_KEY_PREFIX) -> str:
+    return prefix + (now or datetime.now(UTC)).strftime("%Y%m%d")
 
 
-def calls_today(redis) -> int:
+def calls_today(redis, *, prefetch: bool = False) -> int:
+    """Gemini calls today (UTC). Global count includes prefetch calls; ``prefetch=True`` counts only those."""
     if redis is None:
         return 0
     try:
-        return int(redis.get(_today_key()) or 0)
+        prefix = PREFETCH_CALLS_KEY_PREFIX if prefetch else CALLS_KEY_PREFIX
+        return int(redis.get(_today_key(prefix=prefix)) or 0)
     except Exception:
         return 0
 
 
-def _count_call(redis) -> None:
+def _count_call(redis, *, prefetch: bool = False, n: int = 1) -> None:
     if redis is None:
         return
     try:
-        key = _today_key()
-        redis.incr(key)
-        redis.expire(key, 2 * 24 * 3600)
+        prefixes = [CALLS_KEY_PREFIX] + ([PREFETCH_CALLS_KEY_PREFIX] if prefetch else [])
+        for prefix in prefixes:
+            key = _today_key(prefix=prefix)
+            for _ in range(n):
+                redis.incr(key)
+            redis.expire(key, 2 * 24 * 3600)
     except Exception:
         pass
 
@@ -181,6 +199,11 @@ class EnrichmentDeps:
     account_voice: str
     thinking_budget: int
     max_output_tokens: int
+    prefetch_max_lingerie: float = 0.25
+
+
+def _has_captions(session: Session, image: Image) -> bool:
+    return bool(session.scalar(select(func.count()).select_from(Caption).where(Caption.image_id == image.id)))
 
 
 def _load_one(session: Session, image_id: UUID) -> Image | None:
@@ -195,12 +218,40 @@ def _load_one(session: Session, image_id: UUID) -> Image | None:
     )
 
 
-def generate_hashtags(session: Session, growth_provider, image: Image, *, account_voice: str) -> list[str]:
+def generate_hashtags(
+    session: Session,
+    growth_provider,
+    image: Image,
+    *,
+    account_voice: str,
+    prefetch: bool = False,
+    max_lingerie: float = 0.25,
+) -> list[str]:
     """Text-only hashtag suggestion (no pixels), merged with cached hashtag research."""
     approved = next((crop for crop in image.crops if crop.approved), None)
     gate_kwargs = publishing_gate_kwargs(session, image)
     tags = [link.tag.name for link in image.tags if link.tag is not None]
     composition = image.orientation or "unknown orientation"
+    if prefetch:
+        context = append_voice_to_context(
+            build_prefetch_context(
+                attested=is_attested(session, image.library_id),
+                human_rating=image.human_rating,
+                model_state=image.model_state,
+                classifier_clean=is_prefetch_candidate(session, image, max_lingerie=max_lingerie),
+                has_any_blur=bool(image.blurs),
+                skip_reason=image.skip_reason,
+                policy="text_only",
+                operator_confirmed=True,
+                content_tags=tags,
+                composition=composition,
+                mood=image.gemini_mood or "unspecified",
+                safe_description=image.gemini_description or f"A {composition} photograph.",
+            ),
+            account_voice=account_voice,
+        )
+        suggestion = growth_provider.suggest_hashtags(context, account_voice=account_voice)
+        return suggest_tags_from_research(session, suggestion.tags)
     context = append_voice_to_context(
         build_context(
             attested=is_attested(session, image.library_id),
@@ -233,24 +284,40 @@ def enrich_one(
     redis,
     budget,
     stop: threading.Event,
+    tier: str = TIER_RATED,
 ) -> str:
     """Label (if needed) then hashtag (if needed) one image. Returns ok|skipped|refused|error|rate_limited|capped."""
     from instamagic.services.recommendations.label_job import label_one_image
 
     session: Session = deps.session_factory()()  # type: ignore[operator]
     try:
-        # Re-check the central gate right before spending anything; state may have changed.
+        # Re-check eligibility right before spending anything; rating/state may have changed.
+        # A photo rated safe meanwhile is handled by the central gate (rated tier) even if queued as prefetch.
+        prefetch = False
         if not eligible_images(session, image_ids=[image_id]):
-            return "skipped"
+            if tier != TIER_PREFETCH:
+                return "skipped"
+            image = _load_one(session, image_id)
+            if image is None or not is_prefetch_candidate(session, image, max_lingerie=deps.prefetch_max_lingerie):
+                return "skipped"
+            prefetch = True
         image = _load_one(session, image_id)
         if image is None:
             return "skipped"
         outcome = "skipped"
-        if needs_label(image):
-            if stop.is_set() or not budget():
+        label_needed = needs_label(image)
+        if prefetch and label_needed and _has_captions(session, image):
+            label_needed = False  # prefetch skips photos that already have captions
+        reserved = 0
+        if prefetch:
+            # Reserve the whole photo up front (label + hashtags) so a cap never leaves photos half done.
+            reserved = int(label_needed) + int(label_needed or needs_hashtags(image))
+            if reserved and (stop.is_set() or not budget(True, reserved)):
+                return "capped"
+        if label_needed:
+            if not prefetch and (stop.is_set() or not budget(False, 1)):
                 return "capped"
             limiter.acquire()
-            _count_call(redis)
             try:
                 result = label_one_image(
                     session,
@@ -262,6 +329,7 @@ def enrich_one(
                     thinking_budget=deps.thinking_budget,
                     max_output_tokens=deps.max_output_tokens,
                     covering_blur_fn=has_approved_covering_blur,
+                    prefetch=prefetch,
                 )
             except GeminiRateLimited:
                 session.rollback()
@@ -277,13 +345,21 @@ def enrich_one(
             if image is None:
                 return "error"
         if image.gemini_label_status == "ok" and needs_hashtags(image):
-            if stop.is_set() or not budget():
+            if not prefetch and (stop.is_set() or not budget(False, 1)):
+                return "capped"
+            if prefetch and stop.is_set():
                 return "capped"
             limiter.acquire()
-            _count_call(redis)
             image.enrich_attempts = (image.enrich_attempts or 0) + 1
             try:
-                hashtags = generate_hashtags(session, deps.growth_provider, image, account_voice=deps.account_voice)
+                hashtags = generate_hashtags(
+                    session,
+                    deps.growth_provider,
+                    image,
+                    account_voice=deps.account_voice,
+                    prefetch=prefetch,
+                    max_lingerie=deps.prefetch_max_lingerie,
+                )
             except GeminiRateLimited:
                 session.rollback()
                 return "rate_limited"
@@ -339,13 +415,33 @@ def run_enrichment_batch(
         summary["state"] = "backoff"
         return summary
     cap = max(0, int(config.enrichment_daily_cap or 0))
+    prefetch_cap = min(cap, max(0, int(config.enrichment_prefetch_daily_cap or 0)))
     if calls_today(redis) >= cap:
         summary["state"] = "capped"
         _mark_idle(redis)
         return summary
-    targets = [image.id for image in pending_images(eligible_images(session))][: max(1, batch_size)]
+    size = max(1, batch_size)
+    targets: list[tuple[UUID, str]] = [
+        (image.id, TIER_RATED) for image in pending_images(eligible_images(session))
+    ][:size]
+    # Prefetch fills only the slots the rated tier did not need (rated always first).
+    prefetch_capped = False
+    if len(targets) < size and config.enrichment_prefetch_enabled:
+        if calls_today(redis, prefetch=True) >= prefetch_cap:
+            prefetch_capped = True
+        else:
+            taken = {image_id for image_id, _tier in targets}
+            for image_id in pending_prefetch_ids(
+                session, max_lingerie=deps.prefetch_max_lingerie, limit=size - len(targets) + len(taken)
+            ):
+                if image_id not in taken and len(targets) < size:
+                    targets.append((image_id, TIER_PREFETCH))
     session.commit()
+    summary["rated"] = sum(1 for _id, tier in targets if tier == TIER_RATED)
+    summary["prefetch"] = sum(1 for _id, tier in targets if tier == TIER_PREFETCH)
     if not targets:
+        if prefetch_capped:
+            summary["state"] = "prefetch_capped"
         _mark_idle(redis)
         return summary
 
@@ -353,26 +449,34 @@ def run_enrichment_batch(
     stop = threading.Event()
     budget_lock = threading.Lock()
 
-    def budget() -> bool:
+    def budget(prefetch: bool = False, n: int = 1) -> bool:
+        """Atomically check and reserve ``n`` calls (global cap; prefetch also within its own cap)."""
         with budget_lock:
-            return calls_today(redis) < cap
+            if calls_today(redis) + n > cap:
+                return False
+            if prefetch and calls_today(redis, prefetch=True) + n > prefetch_cap:
+                return False
+            _count_call(redis, prefetch=prefetch, n=n)
+            return True
 
     outcomes: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(targets)))) as pool:
         futures = [
-            pool.submit(enrich_one, image_id, deps, limiter=limiter, redis=redis, budget=budget, stop=stop)
-            for image_id in targets
+            pool.submit(
+                enrich_one, image_id, deps, limiter=limiter, redis=redis, budget=budget, stop=stop, tier=tier
+            )
+            for image_id, tier in targets
         ]
         for future in as_completed(futures):
             outcome = future.result()
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
-            if outcome in {"rate_limited", "capped"}:
+            if outcome == "rate_limited":
                 stop.set()
     if outcomes.get("rate_limited"):
         _enter_backoff(redis)
         summary["state"] = "backoff"
     elif outcomes.get("capped"):
-        summary["state"] = "capped"
+        summary["state"] = "capped" if calls_today(redis) >= cap else "prefetch_capped"
     else:
         summary["state"] = "running"
         if redis is not None:
@@ -381,7 +485,7 @@ def run_enrichment_batch(
             except Exception:
                 pass
     summary["outcomes"] = outcomes
-    log.info("enrichment_batch", targets=len(targets), **outcomes)
+    log.info("enrichment_batch", targets=len(targets), rated=summary["rated"], prefetch=summary["prefetch"], **outcomes)
     return summary
 
 
@@ -426,8 +530,12 @@ def wake_enrichment(redis_url: str) -> None:
         pass
 
 
-def enrichment_status(session: Session, redis) -> dict[str, object]:
+def enrichment_status(session: Session, redis, *, prefetch_max_lingerie: float = 0.25) -> dict[str, object]:
     config = get_or_create_config(session)
+    prefetch = prefetch_counts(session, max_lingerie=prefetch_max_lingerie)
+    prefetch_enabled = bool(config.enrichment_prefetch_enabled)
+    prefetch_cap = min(int(config.enrichment_daily_cap or 0), int(config.enrichment_prefetch_daily_cap or 0))
+    prefetch_used = calls_today(redis, prefetch=True)
     images = eligible_images(session)
     ready = sum(1 for image in images if is_ready(image))
     pending = len(pending_images(images))
@@ -461,6 +569,10 @@ def enrichment_status(session: Session, redis) -> dict[str, object]:
         state = "capped"
     elif pending:
         state = "running"
+    elif prefetch_enabled and prefetch["pending"] and (used >= cap or prefetch_used >= prefetch_cap):
+        state = "prefetch_capped"
+    elif prefetch_enabled and prefetch["pending"]:
+        state = "prefetching"
     else:
         state = "idle"
     return {
@@ -478,6 +590,12 @@ def enrichment_status(session: Session, redis) -> dict[str, object]:
         "batch_active": running,
         "backoff_until": datetime.fromtimestamp(until, UTC).isoformat() if until > time.time() else None,
         "last_batch": last,
+        "prefetch_enabled": prefetch_enabled,
+        "prefetch_daily_cap": prefetch_cap,
+        "prefetch_calls_today": prefetch_used,
+        "prefetch_eligible": prefetch["eligible"],
+        "prefetched": prefetch["ready"],
+        "prefetch_pending": prefetch["pending"],
     }
 
 

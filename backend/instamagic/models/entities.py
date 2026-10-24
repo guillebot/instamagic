@@ -374,6 +374,8 @@ class PostingScheduleConfig(Base):
     enrichment_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     enrichment_paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     enrichment_daily_cap: Mapped[int] = mapped_column(Integer, default=400, server_default="400")
+    enrichment_prefetch_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    enrichment_prefetch_daily_cap: Mapped[int] = mapped_column(Integer, default=300, server_default="300")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )

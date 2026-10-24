@@ -14,6 +14,12 @@ export type EnrichmentStatus = {
   backoff_until: string | null;
   rpm?: number;
   concurrency?: number;
+  prefetch_enabled?: boolean;
+  prefetch_daily_cap?: number;
+  prefetch_calls_today?: number;
+  prefetch_eligible?: number;
+  prefetched?: number;
+  prefetch_pending?: number;
 };
 
 const STATE_LABEL: Record<string, string> = {
@@ -23,12 +29,19 @@ const STATE_LABEL: Record<string, string> = {
   capped: "daily cap reached",
   running: "running",
   idle: "up to date",
+  prefetching: "pre-generating for unrated clean photos",
+  prefetch_capped: "prefetch daily cap reached",
 };
 
 export function enrichmentLine(status: EnrichmentStatus): string {
   const n = (value: number) => value.toLocaleString("en-US");
   const state = STATE_LABEL[status.state] ?? status.state;
-  return `Enrichment: ${n(status.ready)}/${n(status.eligible)} safe photos ready · ${state}`;
+  const rated = `Enrichment: rated-safe ready ${n(status.ready)}/${n(status.eligible)}`;
+  const prefetch =
+    status.prefetch_enabled && status.prefetch_eligible !== undefined
+      ? ` · prefetched ${n(status.prefetched ?? 0)}/${n(status.prefetch_eligible)} clean unrated`
+      : "";
+  return `${rated}${prefetch} · ${state}`;
 }
 
 /** Rough minutes left: ~2 Gemini calls per photo (label+captions, hashtags) at the configured RPM. */

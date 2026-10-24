@@ -9,7 +9,7 @@ from uuid import UUID
 from instamagic.config import get_settings
 from instamagic.db import session_factory
 from instamagic.errors import GeminiRateLimited
-from instamagic.models import Caption, Image
+from instamagic.models import Caption, Image, ImageScore, PublishingQueueItem
 from instamagic.services.factory import build_gemini, build_growth
 from instamagic.services.recommendations import enrichment
 from instamagic.services.recommendations.gemini_derivatives import curation_derivative_bytes
@@ -89,14 +89,14 @@ def _deps(growth=None) -> enrichment.EnrichmentDeps:
     )
 
 
-def _batch(redis=None, growth=None, batch_size=50):
+def _batch(redis=None, growth=None, batch_size=50, concurrency=2):
     session = session_factory()()
     try:
         return enrichment.run_enrichment_batch(
             session,
             _deps(growth),
             redis=redis,
-            concurrency=2,
+            concurrency=concurrency,
             rpm=6000,
             batch_size=batch_size,
             limiter=enrichment.RateLimiter(60000, sleep=lambda _s: None),
@@ -129,6 +129,8 @@ def test_eligibility_uses_central_gate_and_stores_hashtags(client, app_env) -> N
     blocked = _image(ids["blocked-frame.jpg"])
     assert blocked.model_state == "DO_NOT_POST"
     assert blocked.blur_unlock_status != "verified"
+    # Rated tier only here; the prefetch tier for unrated clean photos is covered below.
+    assert client.put("/api/enrichment/settings", json={"prefetch_enabled": False}).status_code == 200
 
     summary = _batch(redis=FakeRedis())
     assert summary["state"] == "running"
@@ -276,3 +278,157 @@ def test_hashtags_json_roundtrip() -> None:
     assert enrichment.stored_hashtags(image) == ["a", "b"]
     image.enrich_hashtags_json = "not json"
     assert enrichment.stored_hashtags(image) == []
+
+
+# --- Prefetch tier: unrated photos the local model left at REVIEW with no detections ---------------
+
+
+def _seed_prefetch(client, library: Path) -> dict[str, str]:
+    _marked(library / "s1" / "a-clean.jpg", (30, 30, 30), (20, 20, 80, 80))
+    _marked(library / "s1" / "unrated.jpg", (10, 90, 30), (20, 20, 50, 50))
+    _marked(library / "s1" / "unrated-two.jpg", (90, 90, 30), (30, 30, 70, 70))
+    _marked(library / "s1" / "unsafe-unrated.jpg", (60, 20, 20), (40, 300, 180, 420))
+    _marked(library / "s1" / "blocked-unrated.jpg", (20, 20, 60), (40, 300, 180, 420))
+    _marked(library / "s1" / "rejected.jpg", (70, 70, 70), (10, 10, 40, 40))
+    login(client)
+    created = client.post(
+        "/api/libraries", json={"name": "P", "root_path": str(library), "confirmed": True, "statement": STATEMENT}
+    )
+    library_id = created.json()["id"]
+    assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
+    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()["items"]
+    ids = {item["filename"]: item["id"] for item in items}
+    assert client.post(f"/api/images/{ids['a-clean.jpg']}/rating", json={"rating": "safe"}).status_code == 200
+    assert client.post(f"/api/images/{ids['rejected.jpg']}/rating", json={"rating": "reject"}).status_code == 200
+    return ids
+
+
+def _queue_count() -> int:
+    session = session_factory()()
+    try:
+        return int(session.scalar(select(func.count()).select_from(PublishingQueueItem)) or 0)
+    finally:
+        session.close()
+
+
+def test_prefetch_generates_for_clean_unrated_but_never_makes_them_queueable(client, app_env) -> None:
+    from instamagic.services.pipeline import is_attested
+    from instamagic.services.recommendations.candidates_bulk import try_enqueue_image
+    from instamagic.services.recommendations.gates import gemini_gate, publishing_gate
+    from instamagic.services.recommendations.gemini_derivatives import has_approved_covering_blur
+    from instamagic.services.recommendations.label_job import publishing_gate_kwargs
+
+    ids = _seed_prefetch(client, app_env["library"])
+    for name in ("unrated.jpg", "unrated-two.jpg"):
+        image = _image(ids[name])
+        assert image.human_rating is None and image.model_state == "REVIEW"
+    assert _image(ids["unsafe-unrated.jpg"]).model_state != "REVIEW"
+
+    status = client.get("/api/enrichment/status").json()
+    assert status["prefetch_enabled"] is True
+    assert status["prefetch_eligible"] == 2
+    assert status["prefetched"] == 0
+
+    queue_before = _queue_count()
+    _batch(redis=FakeRedis())
+
+    for name in ("unrated.jpg", "unrated-two.jpg"):
+        image = _image(ids[name])
+        assert image.human_rating is None  # ratings are never touched
+        assert image.gemini_label_status == "ok"
+        assert enrichment.stored_hashtags(image)
+        assert _caption_rows(ids[name])
+    # Detector hits, DO_NOT_POST / crop-needed and human-rejected photos are never sent.
+    for name in ("unsafe-unrated.jpg", "blocked-unrated.jpg", "rejected.jpg"):
+        image = _image(ids[name])
+        assert image.gemini_label_status is None, name
+        assert image.enrich_hashtags_json is None, name
+        assert _caption_rows(ids[name]) == [], name
+
+    status = client.get("/api/enrichment/status").json()
+    assert status["prefetched"] == 2
+    assert status["prefetch_pending"] == 0
+    assert status["ready"] == 1 and status["eligible"] == 1  # rated-safe counts are separate
+
+    # Captions on an unrated photo do NOT make it queueable / publishable / curatable.
+    target = ids["unrated.jpg"]
+    response = client.post("/api/queue", json={"image_id": target})
+    assert response.status_code >= 400, response.text
+    assert _queue_count() == queue_before
+    session = session_factory()()
+    try:
+        image = session.get(Image, UUID(target))
+        attested = is_attested(session, image.library_id)
+        assert not publishing_gate(attested=attested, **publishing_gate_kwargs(session, image)).allowed
+        ok, _reason = try_enqueue_image(session, image, covering_blur_fn=has_approved_covering_blur)
+        assert ok is False
+        session.rollback()
+        assert target not in {str(row.id) for row in enrichment.eligible_images(session)}
+        gate = gemini_gate(
+            attested=attested,
+            human_rating=image.human_rating,
+            model_state=image.model_state,
+            needs_crop=False,
+            has_approved_crop=False,
+            has_approved_covering_blur=False,
+            has_approved_blur=False,
+            do_not_post_blur_unlocked=False,
+            policy="text_only",
+            operator_confirmed=True,
+        )
+        assert not gate.allowed
+    finally:
+        session.close()
+    assert _queue_count() == queue_before
+    created = client.post("/api/curation", json={"limit": 0, "include_images": False, "confirmed": True})
+    assert created.status_code == 201, created.text
+    picked = {pick["image"]["id"] for pick in created.json()["picks"]}
+    assert target not in picked and ids["unrated-two.jpg"] not in picked
+    assert _queue_count() == queue_before
+
+
+def test_prefetch_toggle_cap_priority_and_existing_captions(client, app_env) -> None:
+    ids = _seed_prefetch(client, app_env["library"])
+    # Toggle off: only the rated tier runs.
+    assert client.put("/api/enrichment/settings", json={"prefetch_enabled": False}).json()["prefetch_enabled"] is False
+    _batch(redis=FakeRedis())
+    assert enrichment.stored_hashtags(_image(ids["a-clean.jpg"]))
+    assert _image(ids["unrated.jpg"]).gemini_label_status is None
+
+    # Best aesthetics first.
+    session = session_factory()()
+    for name, score in (("unrated.jpg", 0.2), ("unrated-two.jpg", 0.9)):
+        row = session.scalar(select(ImageScore).where(ImageScore.image_id == UUID(ids[name])))
+        if row is None:
+            row = ImageScore(image_id=UUID(ids[name]))
+            session.add(row)
+        row.aesthetic_score = score
+    session.commit()
+    from instamagic.services.recommendations.prefetch import pending_prefetch_ids
+
+    order = [str(i) for i in pending_prefetch_ids(session, max_lingerie=0.25, limit=10)]
+    session.close()
+    assert order == [ids["unrated-two.jpg"], ids["unrated.jpg"]]
+
+    # Prefetch cap: 2 calls = one photo (label + hashtags), the best one.
+    assert client.put(
+        "/api/enrichment/settings", json={"prefetch_enabled": True, "prefetch_daily_cap": 2}
+    ).status_code == 200
+    redis = FakeRedis()
+    _batch(redis=redis, concurrency=1)
+    assert enrichment.calls_today(redis, prefetch=True) == 2
+    assert enrichment.stored_hashtags(_image(ids["unrated-two.jpg"]))
+    assert _image(ids["unrated.jpg"]).enrich_hashtags_json is None
+    assert client.get("/api/enrichment/status").json()["prefetched"] == 1
+
+    # A photo that already has captions is not re-labeled by prefetch (no second caption set).
+    session = session_factory()()
+    image = session.get(Image, UUID(ids["unrated.jpg"]))
+    session.add(Caption(image_id=image.id, style="short", language="en", text="Mine.", original_text="Mine.", status="modified"))
+    session.commit()
+    session.close()
+    client.put("/api/enrichment/settings", json={"prefetch_daily_cap": 300})
+    _batch(redis=FakeRedis())
+    image = _image(ids["unrated.jpg"])
+    assert image.gemini_label_status is None
+    assert _caption_rows(ids["unrated.jpg"]) == [("Mine.", "modified")]

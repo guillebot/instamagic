@@ -20,7 +20,13 @@ const base: EnrichmentStatus = {
 
 describe("enrichment status line", () => {
   it("formats progress and state", () => {
-    expect(enrichmentLine(base)).toBe("Enrichment: 312/1,840 safe photos ready · running");
+    expect(enrichmentLine(base)).toBe("Enrichment: rated-safe ready 312/1,840 · running");
+    expect(
+      enrichmentLine({ ...base, prefetch_enabled: true, prefetched: 150, prefetch_eligible: 21000 }),
+    ).toBe("Enrichment: rated-safe ready 312/1,840 · prefetched 150/21,000 clean unrated · running");
+    expect(enrichmentLine({ ...base, prefetch_enabled: false, prefetched: 150, prefetch_eligible: 21000 })).not.toContain(
+      "prefetched",
+    );
     expect(enrichmentLine({ ...base, state: "paused" })).toContain("· paused");
     expect(enrichmentLine({ ...base, state: "idle", pending: 0 })).toContain("up to date");
   });

@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from instamagic.errors import GeminiBlocked
-from instamagic.services.recommendations.gates import gemini_gate
+from instamagic.services.recommendations.gates import gemini_gate, prefetch_gate
 from pydantic import BaseModel, Field
 
 BANNED_PHRASES = (
@@ -94,6 +94,69 @@ def build_context(
     )
     if not gate.allowed:
         raise GeminiBlocked(" ".join(gate.reasons))
+    return _assemble_context(
+        model_state=model_state,
+        has_approved_covering_blur=has_approved_covering_blur,
+        operator_confirmed=operator_confirmed,
+        content_tags=content_tags,
+        composition=composition,
+        mood=mood,
+        safe_description=safe_description,
+        crop=crop,
+    )
+
+
+def build_prefetch_context(
+    *,
+    attested: bool,
+    human_rating: str | None,
+    model_state: str | None,
+    classifier_clean: bool,
+    has_any_blur: bool,
+    skip_reason: str | None,
+    policy: str,
+    operator_confirmed: bool,
+    content_tags: list[str],
+    composition: str,
+    mood: str,
+    safe_description: str,
+) -> GeminiContext:
+    """Context for background prefetch of an unrated, classifier-clean REVIEW photo (``prefetch_gate``)."""
+    gate = prefetch_gate(
+        attested=attested,
+        human_rating=human_rating,
+        model_state=model_state,
+        classifier_clean=classifier_clean,
+        has_any_blur=has_any_blur,
+        skip_reason=skip_reason,
+        policy=policy,
+        operator_confirmed=operator_confirmed,
+    )
+    if not gate.allowed:
+        raise GeminiBlocked(" ".join(gate.reasons))
+    return _assemble_context(
+        model_state=model_state,
+        has_approved_covering_blur=False,
+        operator_confirmed=operator_confirmed,
+        content_tags=content_tags,
+        composition=composition,
+        mood=mood,
+        safe_description=safe_description,
+        crop=None,
+    )
+
+
+def _assemble_context(
+    *,
+    model_state: str | None,
+    has_approved_covering_blur: bool,
+    operator_confirmed: bool,
+    content_tags: list[str],
+    composition: str,
+    mood: str,
+    safe_description: str,
+    crop: dict[str, Any] | None,
+) -> GeminiContext:
     description = _sanitize_prompt_text(safe_description, max_len=400)
     crop_payload = crop
     if model_state == "SAFE_AFTER_CROP":
