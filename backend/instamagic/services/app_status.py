@@ -116,9 +116,7 @@ def _section_health(settings: Settings, session: Session, redis) -> dict[str, An
     return build_health_status(settings)
 
 
-def scan_progress(
-    job: ProcessingJob | None, expected_total: int | None, now: datetime
-) -> dict[str, Any] | None:
+def scan_progress(job: ProcessingJob | None, expected_total: int | None, now: datetime) -> dict[str, Any] | None:
     if job is None:
         return None
     started = job.started_at
@@ -162,10 +160,7 @@ def scan_progress(
 def _section_scan(settings: Settings, session: Session, redis) -> dict[str, Any]:
     now = datetime.now(UTC)
     latest = session.scalars(
-        select(ProcessingJob)
-        .where(ProcessingJob.kind == "scan")
-        .order_by(ProcessingJob.created_at.desc())
-        .limit(1)
+        select(ProcessingJob).where(ProcessingJob.kind == "scan").order_by(ProcessingJob.created_at.desc()).limit(1)
     ).first()
     last_done = session.scalars(
         select(ProcessingJob)
@@ -212,9 +207,7 @@ def _section_photos(settings: Settings, session: Session, redis) -> dict[str, An
     unlock = _grouped(session, Image.blur_unlock_status, Image.blur_unlock_status != "none")
     duplicates = _count(session, select(func.count()).select_from(ImageDuplicate))
     day_ago = datetime.now(UTC) - timedelta(hours=24)
-    new_24h = _count(
-        session, select(func.count()).select_from(Image).where(Image.ingested_at >= day_ago)
-    )
+    new_24h = _count(session, select(func.count()).select_from(Image).where(Image.ingested_at >= day_ago))
     return {
         "total": total,
         "active": active,
@@ -238,35 +231,25 @@ def _section_photos(settings: Settings, session: Session, redis) -> dict[str, An
 def _section_enrichment(settings: Settings, session: Session, redis) -> dict[str, Any]:
     from instamagic.services.recommendations.enrichment import enrichment_status
 
-    status = enrichment_status(
-        session, redis, prefetch_max_score=settings.enrich_prefetch_max_score
-    )
-    status["captioned_images"] = _count(
-        session, select(func.count(func.distinct(Caption.image_id)))
-    )
+    status = enrichment_status(session, redis, prefetch_max_score=settings.enrich_prefetch_max_score)
+    status["captioned_images"] = _count(session, select(func.count(func.distinct(Caption.image_id))))
     status["hashtagged_images"] = _count(
         session,
         select(func.count()).select_from(Image).where(Image.enrich_hashtags_json.is_not(None)),
     )
-    status["label_status"] = _grouped(
-        session, Image.gemini_label_status, Image.gemini_label_status.is_not(None)
-    )
+    status["label_status"] = _grouped(session, Image.gemini_label_status, Image.gemini_label_status.is_not(None))
     status["rpm"] = settings.enrich_rpm
     status["concurrency"] = settings.enrich_concurrency
     status.pop("last_batch", None)
     return status
 
 
-def open_slots(
-    session: Session, view, now: datetime, *, hours: int = 72, limit: int = 12
-) -> list[datetime]:
+def open_slots(session: Session, view, now: datetime, *, hours: int = 72, limit: int = 12) -> list[datetime]:
     """Slots in the next `hours` a new approved post could take, filled greedily in order."""
     from instamagic.services.posting.slots import _busy_times, best_slots
 
     horizon = now + timedelta(hours=hours)
-    candidates = [
-        s for s in best_slots(view, from_day=now, days=(hours // 24) + 2) if now < s <= horizon
-    ]
+    candidates = [s for s in best_slots(view, from_day=now, days=(hours // 24) + 2) if now < s <= horizon]
     if not candidates:
         return []
     gap = timedelta(hours=view.min_gap_hours)
@@ -311,10 +294,7 @@ def _section_queue(settings: Settings, session: Session, redis) -> dict[str, Any
         session,
         select(func.count())
         .select_from(PublishingQueueItem)
-        .where(
-            PublishingQueueItem.state == QueueState.APPROVED.value,
-            PublishingQueueItem.scheduled_at.is_(None),
-        ),
+        .where(PublishingQueueItem.state == QueueState.APPROVED.value, PublishingQueueItem.scheduled_at.is_(None)),
     )
     slots = open_slots(session, view, now)
     return {
@@ -356,9 +336,7 @@ def _section_publish(settings: Settings, session: Session, redis) -> dict[str, A
         bucket = by_kind.setdefault(str(kind), {"attempts": 0, "succeeded": 0, "failed": 0})
         bucket["attempts"] += int(n)
         bucket["succeeded" if success else "failed"] += int(n)
-    last_attempt = session.scalars(
-        select(PublishAttempt).order_by(PublishAttempt.started_at.desc()).limit(1)
-    ).first()
+    last_attempt = session.scalars(select(PublishAttempt).order_by(PublishAttempt.started_at.desc()).limit(1)).first()
     last_failure = session.scalars(
         select(PublishAttempt)
         .where(PublishAttempt.success.is_(False), PublishAttempt.finished_at.is_not(None))
@@ -394,9 +372,7 @@ def _section_publish(settings: Settings, session: Session, redis) -> dict[str, A
         "posts_total": posts_total,
         "last_attempt_at": _iso(last_attempt.started_at) if last_attempt else None,
         "last_failure": (
-            {"at": _iso(last_failure.started_at), "error": _scrub(last_failure.error)}
-            if last_failure
-            else None
+            {"at": _iso(last_failure.started_at), "error": _scrub(last_failure.error)} if last_failure else None
         ),
         "last_published": (
             {
@@ -423,9 +399,7 @@ def _section_instagram(settings: Settings, session: Session, redis) -> dict[str,
     fields = connection_status_fields(settings, session, configured=configured)
     account = fields.get("account") if isinstance(fields.get("account"), dict) else {}
     snapshot = session.scalars(
-        select(InstagramAccountInsightSnapshot)
-        .order_by(InstagramAccountInsightSnapshot.captured_at.desc())
-        .limit(1)
+        select(InstagramAccountInsightSnapshot).order_by(InstagramAccountInsightSnapshot.captured_at.desc()).limit(1)
     ).first()
     row = get_connection(session)
     granted = fields.get("granted_permissions") or []
@@ -436,8 +410,7 @@ def _section_instagram(settings: Settings, session: Session, redis) -> dict[str,
         "credential_source": fields.get("credential_source"),
         "username": (account or {}).get("username"),
         "expected_username": fields.get("instagram_expected_username"),
-        "followers": snapshot.follower_count
-        if snapshot and snapshot.follower_count is not None
+        "followers": snapshot.follower_count if snapshot and snapshot.follower_count is not None
         else (account or {}).get("followers_count"),
         "media_count": (account or {}).get("media_count"),
         "account_fetched_at": fields.get("account_fetched_at"),
@@ -455,9 +428,7 @@ def _section_sync(settings: Settings, session: Session, redis) -> dict[str, Any]
 
     open_comments = _count(
         session,
-        select(func.count())
-        .select_from(InstagramInboxComment)
-        .where(InstagramInboxComment.status == "open"),
+        select(func.count()).select_from(InstagramInboxComment).where(InstagramInboxComment.status == "open"),
     )
     last_comment_sync = session.scalar(select(func.max(InstagramInboxComment.synced_at)))
     return {
@@ -558,10 +529,7 @@ def _refresh_in_background(name: str, fn, settings: Settings) -> None:
                 value = _run_section(name, fn, settings, bg_session, _redis(settings))
             if "error" not in value:
                 with _cache_lock:
-                    _section_cache[name] = (
-                        time.time(),
-                        {**value, "as_of": datetime.now(UTC).isoformat()},
-                    )
+                    _section_cache[name] = (time.time(), {**value, "as_of": datetime.now(UTC).isoformat()})
         except Exception as exc:  # pragma: no cover - defensive
             log.info("status_section_refresh_failed", section=name, error_type=type(exc).__name__)
         finally:
@@ -571,9 +539,7 @@ def _refresh_in_background(name: str, fn, settings: Settings) -> None:
     threading.Thread(target=worker, name=f"status-{name}", daemon=True).start()
 
 
-def _slow_section(
-    name: str, fn, settings: Settings, session: Session, redis, now: float
-) -> dict[str, Any]:
+def _slow_section(name: str, fn, settings: Settings, session: Session, redis, now: float) -> dict[str, Any]:
     ttl = SLOW_SECTION_TTL[name]
     with _cache_lock:
         cached = _section_cache.get(name)
@@ -600,9 +566,7 @@ def _slow_section(
     return value
 
 
-def build_app_status(
-    settings: Settings, session: Session, *, bypass_cache: bool = False
-) -> dict[str, Any]:
+def build_app_status(settings: Settings, session: Session, *, bypass_cache: bool = False) -> dict[str, Any]:
     global _cache
     now = time.time()
     with _cache_lock:

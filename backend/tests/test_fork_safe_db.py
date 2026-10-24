@@ -81,9 +81,7 @@ def test_scheduler_tick_retries_after_operational_error(monkeypatch) -> None:
         if calls["count"] == 1:
             from sqlalchemy.exc import OperationalError
 
-            raise OperationalError(
-                "SELECT 1", {}, Exception("server closed the connection unexpectedly")
-            )
+            raise OperationalError("SELECT 1", {}, Exception("server closed the connection unexpectedly"))
         return 0
 
     disposed = {"called": False}

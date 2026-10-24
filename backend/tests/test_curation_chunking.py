@@ -46,9 +46,7 @@ def test_send_policy_ceiling() -> None:
     assert resolve_curation_send_policy(env_policy="preview", include_images=True) == "preview"
     assert resolve_curation_send_policy(env_policy="preview", include_images=False) == "text_only"
     assert resolve_curation_send_policy(env_policy="preview", include_images=None) == "preview"
-    assert (
-        resolve_curation_send_policy(env_policy="manual_only", include_images=True) == "manual_only"
-    )
+    assert resolve_curation_send_policy(env_policy="manual_only", include_images=True) == "manual_only"
     assert curation_chunk_size("preview") < curation_chunk_size("text_only")
 
 

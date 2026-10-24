@@ -80,15 +80,11 @@ def stored_hashtags(image: Image) -> list[str]:
         values = json.loads(image.enrich_hashtags_json)
     except json.JSONDecodeError:
         return []
-    return (
-        [str(value) for value in values if str(value).strip()] if isinstance(values, list) else []
-    )
+    return [str(value) for value in values if str(value).strip()] if isinstance(values, list) else []
 
 
 def needs_label(image: Image) -> bool:
-    return should_retry_label(
-        image.gemini_label_status, image.gemini_label_attempts or 0, max_attempts=MAX_ATTEMPTS
-    )
+    return should_retry_label(image.gemini_label_status, image.gemini_label_attempts or 0, max_attempts=MAX_ATTEMPTS)
 
 
 def needs_hashtags(image: Image) -> bool:
@@ -113,11 +109,7 @@ def is_error(image: Image) -> bool:
 
 def is_refused(image: Image) -> bool:
     status = image.gemini_label_status or ""
-    return (
-        status == "empty"
-        or status.startswith("blocked:")
-        or (image.enrich_status or "").startswith("blocked:")
-    )
+    return status == "empty" or status.startswith("blocked:") or (image.enrich_status or "").startswith("blocked:")
 
 
 def eligible_images(session: Session, *, image_ids: list[UUID] | None = None) -> list[Image]:
@@ -134,12 +126,7 @@ def eligible_images(session: Session, *, image_ids: list[UUID] | None = None) ->
 def pending_images(images: list[Image]) -> list[Image]:
     pending = [image for image in images if needs_label(image) or needs_hashtags(image)]
     # Fresh, never-tried images first; retries after.
-    pending.sort(
-        key=lambda image: (
-            (image.gemini_label_attempts or 0) + (image.enrich_attempts or 0),
-            str(image.id),
-        )
-    )
+    pending.sort(key=lambda image: ((image.gemini_label_attempts or 0) + (image.enrich_attempts or 0), str(image.id)))
     return pending
 
 
@@ -226,11 +213,7 @@ class EnrichmentDeps:
 
 
 def _has_captions(session: Session, image: Image) -> bool:
-    return bool(
-        session.scalar(
-            select(func.count()).select_from(Caption).where(Caption.image_id == image.id)
-        )
-    )
+    return bool(session.scalar(select(func.count()).select_from(Caption).where(Caption.image_id == image.id)))
 
 
 def _load_one(session: Session, image_id: UUID) -> Image | None:
@@ -336,9 +319,7 @@ def enrich_one(
             if tier != TIER_PREFETCH:
                 return "skipped"
             image = _load_one(session, image_id)
-            if image is None or not is_prefetch_candidate(
-                session, image, max_score=deps.prefetch_max_score
-            ):
+            if image is None or not is_prefetch_candidate(session, image, max_score=deps.prefetch_max_score):
                 return "skipped"
             prefetch = True
         image = _load_one(session, image_id)
@@ -427,9 +408,7 @@ def enrich_one(
                 image.enrich_at = datetime.now(UTC)
                 session.commit()
                 return "error"
-            if (
-                image.enrich_hashtags_json
-            ):  # filled meanwhile (e.g. by the operator); never overwrite
+            if image.enrich_hashtags_json:  # filled meanwhile (e.g. by the operator); never overwrite
                 session.rollback()
                 return "skipped"
             image.enrich_hashtags_json = json.dumps(hashtags[:15], ensure_ascii=False)
@@ -521,14 +500,7 @@ def run_enrichment_batch(
     with ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(targets)))) as pool:
         futures = [
             pool.submit(
-                enrich_one,
-                image_id,
-                deps,
-                limiter=limiter,
-                redis=redis,
-                budget=budget,
-                stop=stop,
-                tier=tier,
+                enrich_one, image_id, deps, limiter=limiter, redis=redis, budget=budget, stop=stop, tier=tier
             )
             for image_id, tier in targets
         ]
@@ -550,13 +522,7 @@ def run_enrichment_batch(
             except Exception:
                 pass
     summary["outcomes"] = outcomes
-    log.info(
-        "enrichment_batch",
-        targets=len(targets),
-        rated=summary["rated"],
-        prefetch=summary["prefetch"],
-        **outcomes,
-    )
+    log.info("enrichment_batch", targets=len(targets), rated=summary["rated"], prefetch=summary["prefetch"], **outcomes)
     return summary
 
 
@@ -601,21 +567,14 @@ def wake_enrichment(redis_url: str) -> None:
         pass
 
 
-def enrichment_status(
-    session: Session, redis, *, prefetch_max_score: float = 0.10
-) -> dict[str, object]:
+def enrichment_status(session: Session, redis, *, prefetch_max_score: float = 0.10) -> dict[str, object]:
     config = get_or_create_config(session)
     prefetch = prefetch_counts(session, max_score=prefetch_max_score)
     refused_total = int(
-        session.scalar(
-            select(func.count()).select_from(Image).where(Image.gemini_refused_at.is_not(None))
-        )
-        or 0
+        session.scalar(select(func.count()).select_from(Image).where(Image.gemini_refused_at.is_not(None))) or 0
     )
     prefetch_enabled = bool(config.enrichment_prefetch_enabled)
-    prefetch_cap = min(
-        int(config.enrichment_daily_cap or 0), int(config.enrichment_prefetch_daily_cap or 0)
-    )
+    prefetch_cap = min(int(config.enrichment_daily_cap or 0), int(config.enrichment_prefetch_daily_cap or 0))
     prefetch_used = calls_today(redis, prefetch=True)
     images = eligible_images(session)
     ready = sum(1 for image in images if is_ready(image))
@@ -624,10 +583,7 @@ def enrichment_status(
     retryable = sum(
         1
         for image in images
-        if (
-            image.gemini_label_status == "error"
-            and (image.gemini_label_attempts or 0) >= MAX_ATTEMPTS
-        )
+        if (image.gemini_label_status == "error" and (image.gemini_label_attempts or 0) >= MAX_ATTEMPTS)
         or (image.enrich_status == "error" and (image.enrich_attempts or 0) >= MAX_ATTEMPTS)
     )
     refused = sum(1 for image in images if is_refused(image))
@@ -653,9 +609,7 @@ def enrichment_status(
         state = "capped"
     elif pending:
         state = "running"
-    elif (
-        prefetch_enabled and prefetch["pending"] and (used >= cap or prefetch_used >= prefetch_cap)
-    ):
+    elif prefetch_enabled and prefetch["pending"] and (used >= cap or prefetch_used >= prefetch_cap):
         state = "prefetch_capped"
     elif prefetch_enabled and prefetch["pending"]:
         state = "prefetching"
@@ -674,9 +628,7 @@ def enrichment_status(
         "refused": refused,
         "state": state,
         "batch_active": running,
-        "backoff_until": datetime.fromtimestamp(until, UTC).isoformat()
-        if until > time.time()
-        else None,
+        "backoff_until": datetime.fromtimestamp(until, UTC).isoformat() if until > time.time() else None,
         "last_batch": last,
         "prefetch_enabled": prefetch_enabled,
         "prefetch_paused_reason": None

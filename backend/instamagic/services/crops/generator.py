@@ -54,8 +54,7 @@ def generate_crops(
 
 def viable_safety_crop(crops: list[CropWindow]) -> bool:
     return any(
-        crop.aspect_ratio != "original" and crop.contains_face and crop.excludes_unsafe
-        for crop in crops
+        crop.aspect_ratio != "original" and crop.contains_face and crop.excludes_unsafe for crop in crops
     )
 
 

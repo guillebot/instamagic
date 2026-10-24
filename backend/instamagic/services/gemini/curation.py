@@ -83,11 +83,7 @@ class CurationProvider(Protocol):
 
 
 def curation_chunk_size(policy: str) -> int:
-    return (
-        GEMINI_CURATION_PIXEL_CHUNK_SIZE
-        if gemini_allows_pixels(policy)
-        else GEMINI_CURATION_CHUNK_SIZE
-    )
+    return GEMINI_CURATION_PIXEL_CHUNK_SIZE if gemini_allows_pixels(policy) else GEMINI_CURATION_CHUNK_SIZE
 
 
 def curation_max_output_tokens(candidate_count: int) -> int:

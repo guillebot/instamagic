@@ -65,9 +65,7 @@ def test_context_rejects_do_not_post_and_missing_attestation() -> None:
 
 
 def test_text_only_request_drops_image_bytes() -> None:
-    body = build_request_body(
-        _context(), policy="text_only", image_bytes=b"original-bytes-should-not-leave"
-    )
+    body = build_request_body(_context(), policy="text_only", image_bytes=b"original-bytes-should-not-leave")
     blob = json.dumps(body)
     assert "inline_data" not in blob
     assert "original-bytes" not in blob

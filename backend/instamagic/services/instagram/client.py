@@ -114,9 +114,7 @@ class InstagramClient(Protocol):
 
     def list_recent_media(self, *, limit: int = 50) -> list[MediaSummary]: ...
 
-    def fetch_media_insights(
-        self, media_id: str, *, media_type: str | None
-    ) -> MediaInsightSnapshot: ...
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot: ...
 
     def search_hashtag(self, hashtag: str) -> str: ...
 
@@ -172,9 +170,7 @@ class NotConfiguredInstagramClient:
     def list_recent_media(self, *, limit: int = 50) -> list[MediaSummary]:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
-    def fetch_media_insights(
-        self, media_id: str, *, media_type: str | None
-    ) -> MediaInsightSnapshot:
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def search_hashtag(self, hashtag: str) -> str:
@@ -246,9 +242,7 @@ class FakeInstagramClient:
             raise NotConfigured("Caption is required.")
         container_id = f"fake-carousel-{uuid.uuid4().hex[:12]}"
         media_id = f"fake-media-{uuid.uuid4().hex[:12]}"
-        self.carousel_calls.append(
-            {"image_urls": list(image_urls), "caption": caption, "media_id": media_id}
-        )
+        self.carousel_calls.append({"image_urls": list(image_urls), "caption": caption, "media_id": media_id})
         return PublishResult(
             container_id=container_id,
             media_id=media_id,
@@ -323,9 +317,7 @@ class FakeInstagramClient:
             )
         ]
 
-    def fetch_media_insights(
-        self, media_id: str, *, media_type: str | None
-    ) -> MediaInsightSnapshot:
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot:
         del media_id, media_type
         return MediaInsightSnapshot(
             reach=120,
@@ -424,9 +416,7 @@ class GraphInstagramClient:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         if not image_url.startswith("https://"):
-            raise NotConfigured(
-                "Instagram requires a publicly reachable https image_url for stories."
-            )
+            raise NotConfigured("Instagram requires a publicly reachable https image_url for stories.")
         container_id = self._create_container(image_url=image_url, caption="", media_type="STORIES")
         self._wait_for_container(container_id)
         media_id = self._publish_container(container_id)
@@ -683,7 +673,9 @@ class GraphInstagramClient:
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         details = self.fetch_account_details()
         follower_count = details.followers_count
-        metrics = ("reach,profile_views,accounts_engaged",)
+        metrics = (
+            "reach,profile_views,accounts_engaged",
+        )
         params = {
             "metric": metrics[0],
             "period": "day",
@@ -745,9 +737,7 @@ class GraphInstagramClient:
                 break
         return rows
 
-    def fetch_media_insights(
-        self, media_id: str, *, media_type: str | None
-    ) -> MediaInsightSnapshot:
+    def fetch_media_insights(self, media_id: str, *, media_type: str | None) -> MediaInsightSnapshot:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         metric_list = "reach,saved,shares,likes,comments,total_interactions,views"
@@ -790,11 +780,7 @@ class GraphInstagramClient:
         payload = graph_get_page(
             # Root node, not an IG User edge: GET /ig_hashtag_search?user_id=...&q=...
             f"{self._base}/ig_hashtag_search",
-            params={
-                "user_id": self._ig_user_id,
-                "q": hashtag.lstrip("#"),
-                "access_token": self._token,
-            },
+            params={"user_id": self._ig_user_id, "q": hashtag.lstrip("#"), "access_token": self._token},
             timeout=self._timeout,
             action="search hashtag",
         )

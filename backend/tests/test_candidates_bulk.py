@@ -26,12 +26,7 @@ def _library_with_images(client, app_env) -> tuple[str, str, str]:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "BulkCandidates",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": ATTESTATION,
-        },
+        json={"name": "BulkCandidates", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
     )
     assert created.status_code == 201
     library_id = created.json()["id"]

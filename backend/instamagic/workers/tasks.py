@@ -45,9 +45,7 @@ def _scan_failure_message(exc: BaseException) -> str:
     return "Library scan failed."
 
 
-def _mark_scan_job_failed(
-    job_id: str, message: str, *, allow_failed_overwrite: bool = False
-) -> None:
+def _mark_scan_job_failed(job_id: str, message: str, *, allow_failed_overwrite: bool = False) -> None:
     dispose_engine(close=False)
     session = session_factory()()
     try:
@@ -230,10 +228,7 @@ def sync_instagram_insights_job() -> None:
     try:
         client = build_instagram(settings, session)
         result = sync_instagram_insights(session, settings, client)
-        log.info(
-            "insights_sync_finished",
-            **{k: result.get(k) for k in ("ok", "synced_media", "skipped", "error")},
-        )
+        log.info("insights_sync_finished", **{k: result.get(k) for k in ("ok", "synced_media", "skipped", "error")})
     except Exception:
         log.info("insights_sync_failed")
         raise

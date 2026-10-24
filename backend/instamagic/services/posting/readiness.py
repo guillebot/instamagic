@@ -31,9 +31,7 @@ def build_image_publish_readiness(
     *,
     instagram_configured: bool,
 ) -> dict[str, object]:
-    approved_crop = (
-        next((crop for crop in image.crops if crop.approved), None) if image.crops else None
-    )
+    approved_crop = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
     covering_blur = has_approved_covering_blur(session, image)
     attested = is_attested(session, image.library_id)
     # Same gate as queue/publish (incl. rotation-aware coverage and DO_NOT_POST unlock),
@@ -78,12 +76,8 @@ def build_image_publish_readiness(
         "library_attested": attested,
         "queue_item_id": str(queue_item.id) if queue_item else None,
         "queue_state": queue_item.state if queue_item else None,
-        "scheduled_at": queue_item.scheduled_at.isoformat()
-        if queue_item and queue_item.scheduled_at
-        else None,
-        "published_at": queue_item.published_at.isoformat()
-        if queue_item and queue_item.published_at
-        else None,
+        "scheduled_at": queue_item.scheduled_at.isoformat() if queue_item and queue_item.scheduled_at else None,
+        "published_at": queue_item.published_at.isoformat() if queue_item and queue_item.published_at else None,
         "instagram_configured": instagram_configured,
         "instagram_target_username": instagram_target_username(settings, session),
         "uses_approved_crop": approved_crop is not None,

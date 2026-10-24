@@ -23,24 +23,14 @@ def _seed(client, library: Path) -> tuple[str, dict[str, str]]:
     statement = "I confirm that every person depicted in this library is a consenting adult."
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": statement,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": statement},
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
-    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()[
-        "items"
-    ]
+    items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()["items"]
     ids = {item["filename"]: item["id"] for item in items}
     for image_id in ids.values():
-        assert (
-            client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code
-            == 200
-        )
+        assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
     return library_id, ids
 
 
@@ -55,14 +45,7 @@ def test_why_not_picked_reasons_and_safe_thumbnails(client, app_env) -> None:
     # Partial cover over the flagged region (fake classifier box x=140..260, y=72..240).
     cover = client.post(
         f"/api/images/{blocked}/blurs",
-        json={
-            "x": 140,
-            "y": 72,
-            "width": 50,
-            "height": 168,
-            "shape": "rectangle",
-            "strength": "standard",
-        },
+        json={"x": 140, "y": 72, "width": 50, "height": 168, "shape": "rectangle", "strength": "standard"},
     )
     assert cover.status_code == 201, cover.text
     before = {image_id: _state(client, image_id) for image_id in ids.values()}
@@ -123,12 +106,7 @@ def test_since_last_run_summary(client, app_env) -> None:
     assert client.post("/api/curation", json=body).status_code == 201
     time.sleep(1.2)  # SQLite rating timestamps have one-second resolution
     # Re-rate one image after the first run; it counts as "since last run".
-    assert (
-        client.post(
-            f"/api/images/{ids['blocked-frame.jpg']}/rating", json={"rating": "excellent"}
-        ).status_code
-        == 200
-    )
+    assert client.post(f"/api/images/{ids['blocked-frame.jpg']}/rating", json={"rating": "excellent"}).status_code == 200
     second = client.post("/api/curation", json=body).json()
     skipped = second["skipped"]
     assert skipped["since"] is not None

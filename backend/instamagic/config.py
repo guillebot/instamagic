@@ -138,9 +138,7 @@ class Settings(BaseSettings):
         if self.bind_host not in LOOPBACK_HOSTS and not self.allow_container_bind:
             raise ValueError("BIND_HOST must be loopback unless ALLOW_CONTAINER_BIND=true.")
         if self.environment in {"production", "stage"} and self.safety_classifier == "fake":
-            raise ValueError(
-                "SAFETY_CLASSIFIER=fake is refused when ENVIRONMENT is production or stage."
-            )
+            raise ValueError("SAFETY_CLASSIFIER=fake is refused when ENVIRONMENT is production or stage.")
         if self.safety_classifier == "onnx" and not self.safety_model_sha256.strip():
             raise ValueError("SAFETY_MODEL_SHA256 is required when SAFETY_CLASSIFIER=onnx.")
         from instamagic.services.gemini.context import GEMINI_IMAGE_POLICIES
@@ -164,9 +162,7 @@ class Settings(BaseSettings):
     def instagram_configured(self) -> bool:
         if self.instagram_provider == "fake":
             return True
-        return bool(
-            self.instagram_access_token.strip() and self.instagram_business_account_id.strip()
-        )
+        return bool(self.instagram_access_token.strip() and self.instagram_business_account_id.strip())
 
     def resolve_public_base_url(self) -> str:
         """Display / legacy fallback — prefer ``publish_public_base_url()`` for Graph publish."""

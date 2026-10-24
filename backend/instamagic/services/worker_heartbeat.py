@@ -19,9 +19,7 @@ def write_heartbeat(connection: Redis, queue_name: str) -> None:
     connection.set(heartbeat_key(queue_name), str(int(time.time())), ex=HEARTBEAT_TTL_SECONDS)
 
 
-def heartbeat_fresh(
-    connection: Redis, queue_name: str, *, max_age_seconds: int = HEARTBEAT_TTL_SECONDS
-) -> bool:
+def heartbeat_fresh(connection: Redis, queue_name: str, *, max_age_seconds: int = HEARTBEAT_TTL_SECONDS) -> bool:
     raw = connection.get(heartbeat_key(queue_name))
     if not raw:
         return False

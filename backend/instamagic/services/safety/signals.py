@@ -29,11 +29,7 @@ class SafetySignals:
     model_name: str = "none"
 
     def clear_exposed(self) -> list[Region]:
-        return [
-            region
-            for region in self.regions
-            if region.label in EXPOSED_LABELS and region.score >= CLEAR_SCORE
-        ]
+        return [region for region in self.regions if region.label in EXPOSED_LABELS and region.score >= CLEAR_SCORE]
 
     def has_ambiguous_exposure(self) -> bool:
         return any(
@@ -48,11 +44,7 @@ class SafetySignals:
     def skin_ratio(self, image_area: int) -> float:
         if image_area <= 0:
             return 0.0
-        area = sum(
-            region.box.area
-            for region in self.regions
-            if region.label in SKIN_LABELS and region.score >= CLEAR_SCORE
-        )
+        area = sum(region.box.area for region in self.regions if region.label in SKIN_LABELS and region.score >= CLEAR_SCORE)
         return min(1.0, area / image_area)
 
 

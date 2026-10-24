@@ -12,7 +12,9 @@ def test_safe_is_originally_clear_or_human_cleared_review() -> None:
 
 def test_publishable_requires_remediation_and_rating() -> None:
     assert effective_state("safe", "SAFE_AFTER_CROP") == "SAFE_AFTER_CROP"
-    assert effective_state("safe", "SAFE_AFTER_CROP", has_approved_crop=True) == PUBLISHABLE
+    assert (
+        effective_state("safe", "SAFE_AFTER_CROP", has_approved_crop=True) == PUBLISHABLE
+    )
     assert (
         effective_state("excellent", "SAFE_AFTER_CROP", has_approved_covering_blur=True)
         == PUBLISHABLE

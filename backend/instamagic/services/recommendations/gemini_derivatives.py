@@ -61,17 +61,11 @@ def derivative_bytes_for_gemini(
 ) -> bytes | None:
     if require_policy and not gemini_allows_pixels(settings.gemini_image_policy):
         return None
-    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(
-        session, image
-    ):
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(session, image):
         return None
     relative = None
     approved_blur_path = next(
-        (
-            blur.derivative_path
-            for blur in (image.blurs or [])
-            if blur.approved and blur.derivative_path
-        ),
+        (blur.derivative_path for blur in (image.blurs or []) if blur.approved and blur.derivative_path),
         None,
     )
     if has_any_approved_blur(image):
@@ -101,9 +95,7 @@ def derivative_bytes_for_gemini(
 
 
 def curation_derivative_bytes(session: Session, settings: Settings, image: Image) -> bytes | None:
-    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(
-        session, image
-    ):
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(session, image):
         return None
     approved = next((crop for crop in image.crops if crop.approved), None) if image.crops else None
     return gemini_preview_bytes(session, settings, image, approved, require_policy=False)
@@ -127,6 +119,4 @@ def gemini_preview_bytes(
                 raise GeminiBlocked("Approved blur requires a rendered publish derivative.")
             return None
         return path.read_bytes()
-    return derivative_bytes_for_gemini(
-        session, settings, image, approved, require_policy=require_policy
-    )
+    return derivative_bytes_for_gemini(session, settings, image, approved, require_policy=require_policy)

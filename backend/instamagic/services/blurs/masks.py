@@ -15,9 +15,7 @@ def window_center(window: BlurWindow) -> tuple[float, float]:
     return window.x + window.width / 2, window.y + window.height / 2
 
 
-def _rotate_point(
-    px: float, py: float, cx: float, cy: float, theta_rad: float
-) -> tuple[float, float]:
+def _rotate_point(px: float, py: float, cx: float, cy: float, theta_rad: float) -> tuple[float, float]:
     cos_t = math.cos(theta_rad)
     sin_t = math.sin(theta_rad)
     dx = px - cx
@@ -135,7 +133,9 @@ def _feather_mask_from_normalized_dist(
     return mask
 
 
-def _ellipse_normalized_dist(size: tuple[int, int], window: BlurWindow) -> tuple[np.ndarray, float]:
+def _ellipse_normalized_dist(
+    size: tuple[int, int], window: BlurWindow
+) -> tuple[np.ndarray, float]:
     cx, cy = window_center(window)
     rx = max(window.width / 2, 1e-6)
     ry = max(window.height / 2, 1e-6)
@@ -183,7 +183,11 @@ def feathered_shape_mask(size: tuple[int, int], window: BlurWindow) -> Image.Ima
         dist, min_axis = _normalized_shape_dist(size, window)
         mask = _hard_mask_from_normalized_dist(dist, min_axis)
         return Image.fromarray((mask * 255.0).astype(np.uint8), mode="L")
-    if window.shape == "ellipse" and window.rotation_deg == 0.0 and window.corner_radius == 0.0:
+    if (
+        window.shape == "ellipse"
+        and window.rotation_deg == 0.0
+        and window.corner_radius == 0.0
+    ):
         from instamagic.services.blurs.generator import feathered_ellipse_mask
 
         return feathered_ellipse_mask(
@@ -257,9 +261,7 @@ def region_coverages_rotated(
     return rows
 
 
-def covers_unsafe_boxes_rotated(
-    covers: list[BlurWindow], unsafe_boxes: list[Box], image_size: tuple[int, int]
-) -> bool:
+def covers_unsafe_boxes_rotated(covers: list[BlurWindow], unsafe_boxes: list[Box], image_size: tuple[int, int]) -> bool:
     if not unsafe_boxes:
         return True
     if not covers:
@@ -271,17 +273,12 @@ def covers_unsafe_boxes_rotated(
             (box.x + 0.5, box.y + box.height - 0.5),
             (box.x + box.width - 0.5, box.y + box.height - 0.5),
         )
-        if not all(
-            any(_corner_in_core(cover, corner, image_size) for cover in covers)
-            for corner in corners
-        ):
+        if not all(any(_corner_in_core(cover, corner, image_size) for cover in covers) for corner in corners):
             return False
     return True
 
 
-def _corner_in_core(
-    cover: BlurWindow, corner: tuple[float, float], image_size: tuple[int, int]
-) -> bool:
+def _corner_in_core(cover: BlurWindow, corner: tuple[float, float], image_size: tuple[int, int]) -> bool:
     width, height = image_size
     px, py = corner
     if px < 0 or py < 0 or px >= width or py >= height:

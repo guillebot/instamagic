@@ -123,8 +123,7 @@ def _check_library(settings: Settings) -> HealthCheck:
         if allowed:
             root_resolved = root.resolve()
             under_allowed = any(
-                root_resolved == ar.resolve()
-                or str(root_resolved).startswith(str(ar.resolve()) + os.sep)
+                root_resolved == ar.resolve() or str(root_resolved).startswith(str(ar.resolve()) + os.sep)
                 for ar in allowed
             )
             if not under_allowed:
@@ -202,10 +201,7 @@ def probe_instagram_username_live(settings: Settings) -> tuple[str | None, str |
 def _cached_instagram_live_username(settings: Settings) -> tuple[str | None, str | None]:
     global _instagram_live_probe_cache
     now = time.time()
-    if (
-        _instagram_live_probe_cache
-        and now - _instagram_live_probe_cache[0] < _INSTAGRAM_LIVE_PROBE_TTL
-    ):
+    if _instagram_live_probe_cache and now - _instagram_live_probe_cache[0] < _INSTAGRAM_LIVE_PROBE_TTL:
         return _instagram_live_probe_cache[1], _instagram_live_probe_cache[2]
     username, auth_error = probe_instagram_username_live(settings)
     _instagram_live_probe_cache = (now, username, auth_error)
@@ -420,9 +416,7 @@ def _check_queue(settings: Settings) -> HealthCheck:
             detail="PIPELINE_MODE=inline (Redis workers optional).",
         )
     try:
-        connection = Redis.from_url(
-            settings.redis_url, socket_connect_timeout=0.5, socket_timeout=0.5
-        )
+        connection = Redis.from_url(settings.redis_url, socket_connect_timeout=0.5, socket_timeout=0.5)
         connection.ping()
     except Exception as exc:
         return HealthCheck(
@@ -518,9 +512,7 @@ def _run_bounded(fn, *args, timeout: float = _CHECK_TIMEOUT) -> HealthCheck:
                 detail="Timed out.",
             )
         except Exception as exc:
-            label = (
-                getattr(fn, "__name__", "check").removeprefix("_check_").replace("_", " ").title()
-            )
+            label = getattr(fn, "__name__", "check").removeprefix("_check_").replace("_", " ").title()
             return HealthCheck(
                 id=getattr(fn, "__name__", "check").removeprefix("_check_"),
                 label=label,
@@ -545,12 +537,7 @@ def _run_check(fn, settings: Settings) -> HealthCheck:
             fn, settings, timeout=_CHECK_TIMEOUT_OVERRIDES.get(check_id, _CHECK_TIMEOUT)
         )
         if result.id == "check" and check_id:
-            return HealthCheck(
-                id=check_id,
-                label=labels.get(check_id, check_id),
-                status=result.status,
-                detail=result.detail,
-            )
+            return HealthCheck(id=check_id, label=labels.get(check_id, check_id), status=result.status, detail=result.detail)
         return result
     except Exception as exc:
         return HealthCheck(

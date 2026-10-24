@@ -66,9 +66,7 @@ def test_account_refresh_not_configured_returns_ok_false(graph_client) -> None:
     assert body["account"] is None
 
 
-def test_save_credentials_and_refresh_with_fake_graph(
-    graph_client, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_save_credentials_and_refresh_with_fake_graph(graph_client, monkeypatch: pytest.MonkeyPatch) -> None:
     from instamagic.services.instagram import client as ig_client
 
     class StubGraph:
@@ -136,9 +134,7 @@ def test_oauth_start_requires_meta_app(graph_client) -> None:
     assert "META_APP" in detail or "App ID" in detail
 
 
-def test_clear_instagram_credentials_keeps_meta_app(
-    graph_client, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clear_instagram_credentials_keeps_meta_app(graph_client, monkeypatch: pytest.MonkeyPatch) -> None:
     from instamagic.services.instagram import client as ig_client
 
     class StubGraph:

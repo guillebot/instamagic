@@ -186,38 +186,17 @@ def test_soft_hashes_unchanged_for_existing_unlocks() -> None:
     from types import SimpleNamespace
 
     fields = dict(
-        x=5,
-        y=6,
-        width=50,
-        height=60,
-        shape="ellipse",
-        rotation_deg=0.0,
-        corner_radius=0.0,
-        feather=8,
-        radius=20.0,
-        strength="standard",
-        reason="t",
-        covers_unsafe=True,
-        approved=True,
+        x=5, y=6, width=50, height=60, shape="ellipse", rotation_deg=0.0, corner_radius=0.0,
+        feather=8, radius=20.0, strength="standard", reason="t", covers_unsafe=True, approved=True,
     )
     blur = BlurCover(image_id=uuid.uuid4(), edge_mode="soft", **fields)
     legacy_payload = [
         {
-            "x": 5,
-            "y": 6,
-            "width": 50,
-            "height": 60,
-            "shape": "ellipse",
-            "feather": 8,
-            "radius": 20.0,
-            "strength": "standard",
-            "rotation_deg": 0.0,
-            "corner_radius": 0.0,
+            "x": 5, "y": 6, "width": 50, "height": 60, "shape": "ellipse", "feather": 8,
+            "radius": 20.0, "strength": "standard", "rotation_deg": 0.0, "corner_radius": 0.0,
         }
     ]
-    legacy = hashlib.sha256(
-        json.dumps(legacy_payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    legacy = hashlib.sha256(json.dumps(legacy_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert blur_geometry_hash([blur]) == legacy
     pre = SimpleNamespace(id=blur.id, **fields)  # row shape before the column existed
     assert version_geometry_hash([blur]) == version_geometry_hash([pre])

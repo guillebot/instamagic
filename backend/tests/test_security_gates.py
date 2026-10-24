@@ -63,12 +63,7 @@ def test_do_not_post_cannot_be_queued_or_cropped(client, app_env) -> None:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": ATTESTATION,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
@@ -80,9 +75,7 @@ def test_do_not_post_cannot_be_queued_or_cropped(client, app_env) -> None:
     assert client.post("/api/queue", json={"image_id": image_id}).status_code == 409
     crops = client.get(f"/api/images/{image_id}/crops").json()
     if crops:
-        assert (
-            client.post(f"/api/images/{image_id}/crops/{crops[0]['id']}/approve").status_code == 409
-        )
+        assert client.post(f"/api/images/{image_id}/crops/{crops[0]['id']}/approve").status_code == 409
     captions = client.post(f"/api/images/{image_id}/captions", json={"confirmed": True})
     assert captions.status_code == 409
 

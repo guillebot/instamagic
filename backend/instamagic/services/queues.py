@@ -70,7 +70,6 @@ def snapshot_queues(redis_url: str) -> QueuesOut:
             available=False,
             detail="queue unavailable",
             queues=[
-                QueueOut(name=name, available=False, detail="queue unavailable")
-                for name in QUEUE_NAMES
+                QueueOut(name=name, available=False, detail="queue unavailable") for name in QUEUE_NAMES
             ],
         )

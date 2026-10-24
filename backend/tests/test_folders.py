@@ -30,12 +30,7 @@ def test_folders_and_folder_filter(client, app_env) -> None:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": STATEMENT,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
@@ -43,23 +38,16 @@ def test_folders_and_folder_filter(client, app_env) -> None:
     top = client.get(f"/api/libraries/{library_id}/folders").json()
     assert top["path"] == "" and top["parent"] is None and top["source"] == "db"
     assert top["image_count"] == 1
-    assert [(f["name"], f["image_count"]) for f in top["folders"]] == [
-        ("2015 Shoot_A", 3),
-        ("2016 B", 1),
-    ]
+    assert [(f["name"], f["image_count"]) for f in top["folders"]] == [("2015 Shoot_A", 3), ("2016 B", 1)]
     assert all(f["thumbnail_url"] for f in top["folders"])
 
-    shoot = client.get(
-        f"/api/libraries/{library_id}/folders", params={"path": "2015 Shoot_A"}
-    ).json()
+    shoot = client.get(f"/api/libraries/{library_id}/folders", params={"path": "2015 Shoot_A"}).json()
     assert shoot["parent"] == ""
     assert [c["path"] for c in shoot["breadcrumbs"]] == ["", "2015 Shoot_A"]
     assert [(f["path"], f["image_count"]) for f in shoot["folders"]] == [("2015 Shoot_A/picks", 1)]
     assert shoot["image_count"] == 2
 
-    empty = client.get(
-        f"/api/libraries/{library_id}/folders", params={"path": "Empty Session"}
-    ).json()
+    empty = client.get(f"/api/libraries/{library_id}/folders", params={"path": "Empty Session"}).json()
     assert empty["folders"] == [] and empty["image_count"] == 0
 
     bad = client.get(f"/api/libraries/{library_id}/folders", params={"path": "../.."})
@@ -84,12 +72,7 @@ def test_folders_fall_back_to_filesystem(client, app_env) -> None:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": STATEMENT,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
     )
     library_id = created.json()["id"]
     top = client.get(f"/api/libraries/{library_id}/folders").json()

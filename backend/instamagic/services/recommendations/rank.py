@@ -104,9 +104,7 @@ def _reasons(item: CandidateInput, held: int, *, performance_weight: float = 0.0
     elif performance_weight > 0:
         reasons.append("Little Instagram history yet — rank leans on local quality signals.")
     else:
-        reasons.append(
-            "No Instagram performance history yet, so this rank uses local signals only."
-        )
+        reasons.append("No Instagram performance history yet, so this rank uses local signals only.")
     return reasons
 
 

@@ -58,9 +58,7 @@ def get_engine(settings: Settings | None = None) -> Engine:
         settings = settings or get_settings()
         url = settings.database_url
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        _engine = create_engine(
-            url, pool_pre_ping=not url.startswith("sqlite"), connect_args=connect_args
-        )
+        _engine = create_engine(url, pool_pre_ping=not url.startswith("sqlite"), connect_args=connect_args)
         _install_pool_pid_guard(_engine)
         _ensure_fork_hooks()
         if url.startswith("sqlite"):

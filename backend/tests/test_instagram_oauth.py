@@ -97,9 +97,7 @@ def test_oauth_redirect_uses_frontend_origin_not_public_base() -> None:
 
 
 def test_oauth_redirect_explicit_override() -> None:
-    settings = _settings(
-        meta_oauth_redirect_uri="https://custom.example/api/instagram/oauth/callback"
-    )
+    settings = _settings(meta_oauth_redirect_uri="https://custom.example/api/instagram/oauth/callback")
     assert oauth_redirect_uri(settings) == "https://custom.example/api/instagram/oauth/callback"
 
 
@@ -114,7 +112,9 @@ def test_build_authorize_url_includes_signed_state_and_scopes() -> None:
     assert parsed.netloc == "www.facebook.com"
     qs = parse_qs(parsed.query)
     assert qs["client_id"] == ["app-id-123"]
-    assert qs["redirect_uri"] == ["https://instamagic.schimmel.homes/api/instagram/oauth/callback"]
+    assert qs["redirect_uri"] == [
+        "https://instamagic.schimmel.homes/api/instagram/oauth/callback"
+    ]
     assert qs["scope"] == [OAUTH_SCOPES]
     assert qs["response_type"] == ["code"]
     assert qs["state"] == [state]

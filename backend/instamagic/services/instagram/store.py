@@ -74,11 +74,7 @@ def resolve_credentials(settings: Settings, session: Session | None) -> Resolved
     if session is None:
         return None
     row = get_connection(session)
-    if (
-        row is None
-        or not row.access_token_ciphertext.strip()
-        or not row.business_account_id.strip()
-    ):
+    if row is None or not row.access_token_ciphertext.strip() or not row.business_account_id.strip():
         return None
     try:
         token = open_sealed(row.access_token_ciphertext, app_secret=settings.app_secret)
@@ -212,18 +208,12 @@ def clear_meta_app_credentials(session: Session) -> None:
     row.meta_app_id = ""
     row.meta_app_secret_ciphertext = ""
     row.updated_at = datetime.now(UTC)
-    if (
-        not row.access_token_ciphertext.strip()
-        and not row.business_account_id.strip()
-        and not row.account_json
-    ):
+    if not row.access_token_ciphertext.strip() and not row.business_account_id.strip() and not row.account_json:
         session.delete(row)
     session.commit()
 
 
-def save_account_profile(
-    session: Session, details: InstagramAccountDetails
-) -> InstagramConnection | None:
+def save_account_profile(session: Session, details: InstagramAccountDetails) -> InstagramConnection | None:
     row = get_connection(session)
     if row is None:
         # Env-only credentials: still cache a profile row without a token ciphertext.
@@ -304,8 +294,7 @@ def connection_status_fields(
         "token_configured": bool(creds) and source != "none",
         "token_masked": token_masked,
         "business_account_id": business_id,
-        "business_account_id_configured": bool(business_id)
-        or settings.instagram_provider == "fake",
+        "business_account_id_configured": bool(business_id) or settings.instagram_provider == "fake",
         "oauth_available": oauth_ready,
         "oauth_redirect_uri": oauth_redirect_uri(settings),
         "oauth_scopes": OAUTH_SCOPES,
@@ -323,17 +312,13 @@ def connection_status_fields(
         "meta_app_source": meta.source if meta else "none",
         "can_edit_meta_app": settings.instagram_provider != "fake",
         "account": cached,
-        "account_fetched_at": row.account_fetched_at.isoformat()
-        if row and row.account_fetched_at
-        else None,
+        "account_fetched_at": row.account_fetched_at.isoformat() if row and row.account_fetched_at else None,
         "can_edit_database_credentials": settings.instagram_provider != "fake"
         and not (
-            settings.instagram_access_token.strip()
-            and settings.instagram_business_account_id.strip()
+            settings.instagram_access_token.strip() and settings.instagram_business_account_id.strip()
         ),
         "env_overrides_database": bool(
-            settings.instagram_access_token.strip()
-            and settings.instagram_business_account_id.strip()
+            settings.instagram_access_token.strip() and settings.instagram_business_account_id.strip()
         )
         and settings.instagram_provider != "fake",
     }

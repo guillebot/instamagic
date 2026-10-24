@@ -30,17 +30,13 @@ def test_library_root_must_stay_inside_allowed_roots(tmp_path: Path) -> None:
         assert_library_root(outside, [library])
 
 
-def test_assert_external_mount_rejects_plain_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_assert_external_mount_rejects_plain_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("instamagic.services.images.paths.is_mount_point", lambda _path: False)
     with pytest.raises(ValueError, match="not an external mount"):
         assert_external_mount(tmp_path)
 
 
-def test_assert_external_mount_accepts_mount_point(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_assert_external_mount_accepts_mount_point(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("instamagic.services.images.paths.is_mount_point", lambda _path: True)
     assert assert_external_mount(tmp_path) == tmp_path.resolve()
 

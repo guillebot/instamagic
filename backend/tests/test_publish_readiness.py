@@ -12,12 +12,7 @@ ATTESTATION = "I confirm that every person depicted in this library is a consent
 def _attested_library(client, library: Path) -> str:
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": ATTESTATION,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
     )
     assert created.status_code == 201, created.text
     library_id = created.json()["id"]

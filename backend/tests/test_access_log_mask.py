@@ -6,9 +6,7 @@ from instamagic.logging_config import AccessLogQueryMask, install_access_log_mas
 
 
 def test_callback_code_and_state_are_masked() -> None:
-    out = mask_url_for_log(
-        "/api/instagram/oauth/callback?code=AQabc-_123&state=1792.ig-oauth%7Cxyz.ff"
-    )
+    out = mask_url_for_log("/api/instagram/oauth/callback?code=AQabc-_123&state=1792.ig-oauth%7Cxyz.ff")
     assert "AQabc" not in out and "xyz" not in out
     assert out == "/api/instagram/oauth/callback?code=[REDACTED]&state=[REDACTED]"
 
@@ -20,9 +18,7 @@ def test_callback_error_params_kept() -> None:
 
 def test_code_not_masked_outside_callback_but_tokens_are() -> None:
     out = mask_url_for_log("/api/x?code=keep&access_token=EAAsecret&token=t&pending=p&page=2")
-    assert (
-        out == "/api/x?code=keep&access_token=[REDACTED]&token=[REDACTED]&pending=[REDACTED]&page=2"
-    )
+    assert out == "/api/x?code=keep&access_token=[REDACTED]&token=[REDACTED]&pending=[REDACTED]&page=2"
 
 
 def test_plain_paths_untouched() -> None:
@@ -49,7 +45,5 @@ def test_uvicorn_access_record_rewritten() -> None:
 def test_install_is_idempotent() -> None:
     install_access_log_mask()
     install_access_log_mask()
-    filters = [
-        f for f in logging.getLogger("uvicorn.access").filters if isinstance(f, AccessLogQueryMask)
-    ]
+    filters = [f for f in logging.getLogger("uvicorn.access").filters if isinstance(f, AccessLogQueryMask)]
     assert len(filters) == 1

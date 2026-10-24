@@ -24,9 +24,7 @@ def _fake_rq(monkeypatch):
             waiting.append(rq_id)
 
     monkeypatch.setattr("instamagic.workers.resume.Queue", FakeQueue)
-    monkeypatch.setattr(
-        "instamagic.workers.resume.Redis", SimpleNamespace(from_url=lambda _url: object())
-    )
+    monkeypatch.setattr("instamagic.workers.resume.Redis", SimpleNamespace(from_url=lambda _url: object()))
     monkeypatch.setattr(
         "instamagic.workers.resume.Job",
         SimpleNamespace(fetch=lambda rq_id, connection=None: jobs[rq_id]),
@@ -64,9 +62,7 @@ def test_resume_marks_interrupted_and_enqueues_once(app_env, monkeypatch) -> Non
     assert fresh is not None
     assert fresh.status == JobStatus.QUEUED.value
     active = db.scalars(
-        select(ProcessingJob).where(
-            ProcessingJob.status.in_((JobStatus.RUNNING.value, JobStatus.QUEUED.value))
-        )
+        select(ProcessingJob).where(ProcessingJob.status.in_((JobStatus.RUNNING.value, JobStatus.QUEUED.value)))
     ).all()
     assert [job.id for job in active] == [fresh.id]
     db.close()
@@ -79,12 +75,7 @@ def test_rescan_skips_unchanged_files_without_hashing(client, app_env, monkeypat
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": STATEMENT,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": STATEMENT},
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").json()["status"] == "succeeded"
@@ -104,12 +95,7 @@ def test_scan_reuses_active_job(client, app_env) -> None:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(app_env["library"]),
-            "confirmed": True,
-            "statement": STATEMENT,
-        },
+        json={"name": "Archive", "root_path": str(app_env["library"]), "confirmed": True, "statement": STATEMENT},
     )
     library_id = UUID(created.json()["id"])
     db = session_factory()()
@@ -155,10 +141,7 @@ def test_killed_scan_work_horse_marks_row_failed(app_env) -> None:
     db.close()
 
     handle_killed_work_horse(
-        SimpleNamespace(func_name=SCAN_FUNC, args=(str(library.id), str(running_id))),
-        None,
-        None,
-        None,
+        SimpleNamespace(func_name=SCAN_FUNC, args=(str(library.id), str(running_id))), None, None, None
     )
     db = session_factory()()
     job = db.get(ProcessingJob, running_id)

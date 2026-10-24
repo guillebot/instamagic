@@ -31,9 +31,7 @@ def require_lan_session(request: Request, settings: Settings = Depends(settings_
         return
     peer = client_ip(request)
     if not _is_private_or_loopback(peer):
-        raise HTTPException(
-            status_code=403, detail="Story preview is only available on the local network."
-        )
+        raise HTTPException(status_code=403, detail="Story preview is only available on the local network.")
 
 
 db_dep = Depends(get_db)

@@ -34,12 +34,7 @@ def _setup(client, app_env) -> str:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": ATTESTATION,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
     )
     assert created.status_code == 201, created.text
     library_id = created.json()["id"]
@@ -62,14 +57,7 @@ def test_first_blur_is_rendered_immediately(client, app_env) -> None:
     image_id = _setup(client, app_env)
     created = client.post(
         f"/api/images/{image_id}/blurs",
-        json={
-            "x": 20,
-            "y": 20,
-            "width": 80,
-            "height": 80,
-            "shape": "rectangle",
-            "strength": "strong",
-        },
+        json={"x": 20, "y": 20, "width": 80, "height": 80, "shape": "rectangle", "strength": "strong"},
     )
     assert created.status_code == 201, created.text
     url = created.json()["preview_url"]
@@ -84,14 +72,7 @@ def test_move_changes_url_and_pixels(client, app_env) -> None:
     image_id = _setup(client, app_env)
     blur = client.post(
         f"/api/images/{image_id}/blurs",
-        json={
-            "x": 20,
-            "y": 20,
-            "width": 80,
-            "height": 80,
-            "shape": "rectangle",
-            "strength": "strong",
-        },
+        json={"x": 20, "y": 20, "width": 80, "height": 80, "shape": "rectangle", "strength": "strong"},
     ).json()
     first_url = blur["preview_url"]
     first = client.get(first_url)
@@ -115,21 +96,10 @@ def test_rotation_shape_and_corner_change_the_version(client, app_env) -> None:
     image_id = _setup(client, app_env)
     blur = client.post(
         f"/api/images/{image_id}/blurs",
-        json={
-            "x": 40,
-            "y": 40,
-            "width": 120,
-            "height": 60,
-            "shape": "rectangle",
-            "strength": "strong",
-        },
+        json={"x": 40, "y": 40, "width": 120, "height": 60, "shape": "rectangle", "strength": "strong"},
     ).json()
     seen = {blur["preview_url"]}
-    for patch in (
-        {"rotation_deg": 30},
-        {"shape": "ellipse"},
-        {"shape": "rectangle", "corner_radius": 0.4},
-    ):
+    for patch in ({"rotation_deg": 30}, {"shape": "ellipse"}, {"shape": "rectangle", "corner_radius": 0.4}):
         response = client.patch(f"/api/images/{image_id}/blurs/{blur['id']}", json=patch)
         assert response.status_code == 200, response.text
         url = response.json()["preview_url"]
@@ -158,25 +128,11 @@ def test_second_cover_and_delete_render_the_exact_set(client, app_env) -> None:
     image_id = _setup(client, app_env)
     first = client.post(
         f"/api/images/{image_id}/blurs",
-        json={
-            "x": 10,
-            "y": 10,
-            "width": 70,
-            "height": 70,
-            "shape": "rectangle",
-            "strength": "strong",
-        },
+        json={"x": 10, "y": 10, "width": 70, "height": 70, "shape": "rectangle", "strength": "strong"},
     ).json()
     second = client.post(
         f"/api/images/{image_id}/blurs",
-        json={
-            "x": 150,
-            "y": 150,
-            "width": 70,
-            "height": 70,
-            "shape": "rectangle",
-            "strength": "strong",
-        },
+        json={"x": 150, "y": 150, "width": 70, "height": 70, "shape": "rectangle", "strength": "strong"},
     ).json()
     body = client.get(second["preview_url"]).content
     assert _sharpness(body, 33, 33) < 40
@@ -194,14 +150,7 @@ def test_edit_after_queue_regates_and_publish_uses_new_geometry(client, app_env)
     image_id = _setup(client, app_env)
     blur = client.post(
         f"/api/images/{image_id}/blurs",
-        json={
-            "x": 20,
-            "y": 20,
-            "width": 80,
-            "height": 80,
-            "shape": "rectangle",
-            "strength": "strong",
-        },
+        json={"x": 20, "y": 20, "width": 80, "height": 80, "shape": "rectangle", "strength": "strong"},
     ).json()
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     assert client.post("/api/queue", json={"image_id": image_id}).status_code in (200, 201)

@@ -121,7 +121,9 @@ def exchange_code_for_credentials(
 ) -> OAuthTokens:
     tokens, selection, _user = exchange_code_for_credentials_with_pages(settings, meta, code=code)
     if selection is not None:
-        names = ", ".join(f"{o.page_name} (@{o.ig_username or '?'})" for o in selection.options[:5])
+        names = ", ".join(
+            f"{o.page_name} (@{o.ig_username or '?'})" for o in selection.options[:5]
+        )
         extra = "" if len(selection.options) <= 5 else f" (+{len(selection.options) - 5} more)"
         raise NotConfigured(
             "Multiple Facebook Pages with Instagram accounts were found. "
@@ -163,11 +165,7 @@ def exchange_code_for_credentials_with_pages(
         options = _options_from_pages(candidates)
         picked = _pick_page_option(settings, options)
         if isinstance(picked, OAuthPageSelectionRequired):
-            return (
-                None,
-                OAuthPageSelectionRequired(options=options, user_access_token=user_token),
-                user_token,
-            )
+            return None, OAuthPageSelectionRequired(options=options, user_access_token=user_token), user_token
         for page in candidates:
             ig = page.get("instagram_business_account")
             ig_id = ig.get("id") if isinstance(ig, dict) else None

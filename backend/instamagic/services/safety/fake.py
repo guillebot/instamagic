@@ -24,9 +24,7 @@ class FakeSafetyClassifier:
             regions = [Region("FEMALE_BREAST_EXPOSED", 0.93, box)]
         else:
             regions = []
-        return SafetySignals(
-            regions=regions, detector_available=True, uncertain=False, model_name=self.model_name
-        )
+        return SafetySignals(regions=regions, detector_available=True, uncertain=False, model_name=self.model_name)
 
 
 class FakeFaceDetector:

@@ -24,12 +24,7 @@ def _marked(path: Path, color: tuple[int, int, int], box: tuple[int, int, int, i
 def _attested_library(client, library: Path) -> str:
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": ATTESTATION,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
     )
     assert created.status_code == 201, created.text
     library_id = created.json()["id"]
@@ -152,11 +147,7 @@ def test_related_accounts_crud_and_comment_drafts(client, app_env) -> None:
     assert len(listed) == 1
     drafts = client.post(
         "/api/comment-drafts",
-        json={
-            "related_account_id": account_id,
-            "target_context": "Their latest window portrait",
-            "confirmed": True,
-        },
+        json={"related_account_id": account_id, "target_context": "Their latest window portrait", "confirmed": True},
     )
     assert drafts.status_code == 201, drafts.text
     assert len(drafts.json()) >= 1

@@ -82,9 +82,7 @@ def _do_not_post_reason(session: Session, image: Image) -> tuple[str, str, dict[
     status = verification.get("status") or image.blur_unlock_status or "none"
     detections = verification.get("classifier_detections") or []
     if verification.get("recheck") == "fail" and detections:
-        labels = sorted(
-            {str(d.get("label", d)) if isinstance(d, dict) else str(d) for d in detections}
-        )
+        labels = sorted({str(d.get("label", d)) if isinstance(d, dict) else str(d) for d in detections})
         return (
             "dnp_recheck",
             f"DO_NOT_POST, the re-check still detects {', '.join(labels[:4])} on the blurred render (fix in editor)",
@@ -98,11 +96,7 @@ def _do_not_post_reason(session: Session, image: Image) -> tuple[str, str, dict[
         )
     if status == "failed":
         return "dnp_failed", "DO_NOT_POST, blur verification failed (open the blur editor)", extra
-    return (
-        "dnp_unverified",
-        "DO_NOT_POST, blur not verified (approve covers in the blur editor)",
-        extra,
-    )
+    return "dnp_unverified", "DO_NOT_POST, blur not verified (approve covers in the blur editor)", extra
 
 
 def _ineligible_reason(
@@ -127,9 +121,7 @@ def _ineligible_reason(
         attested[image.library_id] = is_attested(session, image.library_id)
     if not attested[image.library_id]:
         return "not_attested", "library not attested (confirm it in Settings)", {}
-    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(
-        session, image
-    ):
+    if image.model_state == SafetyState.DO_NOT_POST.value and not blur_unlock_effective(session, image):
         return _do_not_post_reason(session, image)
     approved = next((crop for crop in image.crops if crop.approved), None)
     if (
@@ -150,9 +142,7 @@ def _ineligible_reason(
 
 
 def _queue_note(image: Image) -> str | None:
-    states = sorted(
-        {item.state for item in (image.queue_items or []) if getattr(item, "state", None)}
-    )
+    states = sorted({item.state for item in (image.queue_items or []) if getattr(item, "state", None)})
     return f"already in queue ({', '.join(states)})" if states else None
 
 
@@ -175,11 +165,7 @@ def build_skipped_report(
 
     stmt = (
         select(Image)
-        .where(
-            func.lower(Image.human_rating).in_(
-                [HumanRating.SAFE.value, HumanRating.EXCELLENT.value]
-            )
-        )
+        .where(func.lower(Image.human_rating).in_([HumanRating.SAFE.value, HumanRating.EXCELLENT.value]))
         .options(
             selectinload(Image.crops),
             selectinload(Image.blurs),

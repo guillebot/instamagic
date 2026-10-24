@@ -171,9 +171,7 @@ class FakeGeminiProvider:
         picks: list[CurationPickDraft] = []
         for index, item in enumerate(ordered, start=1):
             mood = item.mood if item.mood != "unspecified" else "quiet"
-            tags = list(dict.fromkeys([*item.content_tags, mood.replace(" ", "")[:32], "curated"]))[
-                :8
-            ]
+            tags = list(dict.fromkeys([*item.content_tags, mood.replace(" ", "")[:32], "curated"]))[:8]
             captions = [
                 CaptionDraft(
                     style=style,

@@ -47,9 +47,7 @@ def session_expiry(settings: Settings, token: str | None) -> int | None:
     return int(token.rsplit(".", 1)[0])
 
 
-def session_should_renew(
-    settings: Settings, token: str | None, *, now: float | None = None
-) -> bool:
+def session_should_renew(settings: Settings, token: str | None, *, now: float | None = None) -> bool:
     """Sliding renewal: re-issue once the cookie is older than SESSION_RENEW_AFTER_SECONDS."""
     expires = session_expiry(settings, token)
     if expires is None:
@@ -234,17 +232,13 @@ def lan_auth_bypass(request: Request, settings: Settings) -> bool:
     return any(real_ip in network for network in networks)
 
 
-def login_is_blocked(
-    failures: Mapping[str, list[float]], ip: str, *, now: float | None = None
-) -> bool:
+def login_is_blocked(failures: Mapping[str, list[float]], ip: str, *, now: float | None = None) -> bool:
     stamp = time.time() if now is None else now
     recent = [item for item in failures.get(ip, []) if stamp - item < LOGIN_WINDOW_SECONDS]
     return len(recent) >= LOGIN_MAX_FAILURES
 
 
-def record_login_failure(
-    failures: dict[str, list[float]], ip: str, *, now: float | None = None
-) -> None:
+def record_login_failure(failures: dict[str, list[float]], ip: str, *, now: float | None = None) -> None:
     stamp = time.time() if now is None else now
     recent = [item for item in failures.get(ip, []) if stamp - item < LOGIN_WINDOW_SECONDS]
     recent.append(stamp)

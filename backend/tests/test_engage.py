@@ -34,9 +34,7 @@ class EngageFakeClient(FakeInstagramClient):
     def search_hashtag(self, hashtag: str) -> str:
         self.read_calls.append(f"search:{hashtag}")
         if self.deny_hashtags:
-            raise NotConfigured(
-                "Instagram search hashtag failed: requires Instagram Public Content Access (#10)"
-            )
+            raise NotConfigured("Instagram search hashtag failed: requires Instagram Public Content Access (#10)")
         return f"hid-{hashtag}"
 
     def _media(self, hashtag_id: str, edge: str) -> list[dict]:
@@ -54,16 +52,9 @@ class EngageFakeClient(FakeInstagramClient):
                     "permalink": f"https://www.instagram.com/p/{hashtag_id}-{edge}-{i}/",
                 }
             )
+        rows.append({"id": "reel", "media_type": "VIDEO", "permalink": "https://www.instagram.com/reel/x/"})
         rows.append(
-            {"id": "reel", "media_type": "VIDEO", "permalink": "https://www.instagram.com/reel/x/"}
-        )
-        rows.append(
-            {
-                "id": "spam",
-                "media_type": "IMAGE",
-                "caption": "follow for follow!!",
-                "permalink": "https://www.instagram.com/p/spam/",
-            }
+            {"id": "spam", "media_type": "IMAGE", "caption": "follow for follow!!", "permalink": "https://www.instagram.com/p/spam/"}
         )
         return rows
 
@@ -112,9 +103,7 @@ def test_run_builds_daily_list_without_sending_anything(app_env) -> None:
     session = session_factory()()
     _seed_accounts(session, ["alice.photo", "bob_frames"])
     client = EngageFakeClient()
-    run = engage.run_engage(
-        session, client, FakeGrowthDraftProvider(), account_voice="quiet", now=NOW
-    )
+    run = engage.run_engage(session, client, FakeGrowthDraftProvider(), account_voice="quiet", now=NOW)
     assert run.status == "ok", run.error
     targets = session.scalars(select(EngageTarget)).all()
     assert len(targets) == 18
@@ -139,13 +128,9 @@ def test_accounts_not_repeated_within_cooldown(app_env) -> None:
     del app_env
     session = session_factory()()
     _seed_accounts(session, ["alice.photo"])
-    engage.run_engage(
-        session, EngageFakeClient(), FakeGrowthDraftProvider(), account_voice="q", now=NOW
-    )
+    engage.run_engage(session, EngageFakeClient(), FakeGrowthDraftProvider(), account_voice="q", now=NOW)
     client = EngageFakeClient()
-    engage.run_engage(
-        session, client, FakeGrowthDraftProvider(), account_voice="q", now=NOW + timedelta(days=1)
-    )
+    engage.run_engage(session, client, FakeGrowthDraftProvider(), account_voice="q", now=NOW + timedelta(days=1))
     assert "bd:alice.photo" not in client.read_calls
     rows = session.scalars(select(EngageTarget).where(EngageTarget.username == "alice.photo")).all()
     assert len(rows) == 1
@@ -156,11 +141,7 @@ def test_hashtag_permission_missing_is_graceful(app_env) -> None:
     del app_env
     session = session_factory()()
     run = engage.run_engage(
-        session,
-        EngageFakeClient(deny_hashtags=True),
-        FakeGrowthDraftProvider(),
-        account_voice="q",
-        now=NOW,
+        session, EngageFakeClient(deny_hashtags=True), FakeGrowthDraftProvider(), account_voice="q", now=NOW
     )
     assert run.status == "blocked"
     assert run.error_code == "hashtag_permission"
@@ -200,19 +181,13 @@ def test_engage_gemini_payload_text_only(monkeypatch) -> None:
     def fake_post(self, body):
         captured["body"] = body
         return json.dumps(
-            {
-                "comments": [
-                    {"id": "0", "text": "The fog layering here is lovely."},
-                    {"id": "1", "text": "Follow me back!"},
-                ]
-            }
+            {"comments": [{"id": "0", "text": "The fog layering here is lovely."}, {"id": "1", "text": "Follow me back!"}]}
         )
 
     monkeypatch.setattr(GoogleGeminiProvider, "_post", fake_post)
     provider = GoogleGeminiProvider("key", "gemini-2.5-flash")
     batch = provider.draft_engage_comments(
-        [EngageTargetText(id="0", caption="fog"), EngageTargetText(id="1", caption="pier")],
-        account_voice="q",
+        [EngageTargetText(id="0", caption="fog"), EngageTargetText(id="1", caption="pier")], account_voice="q"
     )
     blob = json.dumps(captured["body"]).lower()
     assert "inline_data" not in blob and "file_data" not in blob
@@ -221,9 +196,7 @@ def test_engage_gemini_payload_text_only(monkeypatch) -> None:
 
 
 def test_sanitize_caption_avoids_forbidden_markers() -> None:
-    text = engage._sanitize_caption(
-        "See my Originals at https://x.y/photos/1 and /photos/ file://z"
-    )
+    text = engage._sanitize_caption("See my Originals at https://x.y/photos/1 and /photos/ file://z")
     assert "originals" not in text.lower() and "/photos/" not in text and "file://" not in text
 
 
@@ -246,12 +219,8 @@ def test_engage_api_flow(client) -> None:
     assert data["days"][0]["done"] == 1
     bad = client.patch(f"/api/engage/targets/{target['id']}", json={"status": "liked"})
     assert bad.status_code == 422
-    saved = client.patch(
-        "/api/engage/settings", json={"daily_target": 15, "seed_hashtags": ["streetportrait"]}
-    )
-    assert saved.json()["daily_target"] == 15 and saved.json()["seed_hashtags"] == [
-        "streetportrait"
-    ]
+    saved = client.patch("/api/engage/settings", json={"daily_target": 15, "seed_hashtags": ["streetportrait"]})
+    assert saved.json()["daily_target"] == 15 and saved.json()["seed_hashtags"] == ["streetportrait"]
 
 
 def test_engage_due_respects_hour_and_once_per_day(app_env) -> None:

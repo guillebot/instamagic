@@ -60,8 +60,6 @@ def login(client: TestClient) -> None:
     assert response.status_code == 200
 
 
-def write_jpeg(
-    path: Path, size: tuple[int, int] = (400, 600), color: tuple[int, int, int] = (20, 40, 80)
-) -> None:
+def write_jpeg(path: Path, size: tuple[int, int] = (400, 600), color: tuple[int, int, int] = (20, 40, 80)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", size, color).save(path, format="JPEG", quality=90)

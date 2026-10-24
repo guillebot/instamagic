@@ -28,12 +28,7 @@ def _setup_approved_item(client, app_env) -> tuple[str, str, str]:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "Archive",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": ATTESTATION,
-        },
+        json={"name": "Archive", "root_path": str(library), "confirmed": True, "statement": ATTESTATION},
     )
     library_id = created.json()["id"]
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
@@ -91,7 +86,6 @@ def test_scheduler_idempotent_single_publish(client, app_env) -> None:
         json={"mode": "explicit", "scheduled_at": past, "caption_id": caption_id},
     )
     from instamagic.db import session_factory
-
     settings = get_settings()
     fake = FakeInstagramClient()
     session = session_factory()()

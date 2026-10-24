@@ -11,16 +11,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 
-def best_slots(
-    config: ScheduleConfigView, *, from_day: datetime | None = None, days: int = 14
-) -> list[datetime]:
+def best_slots(config: ScheduleConfigView, *, from_day: datetime | None = None, days: int = 14) -> list[datetime]:
     """Return candidate UTC datetimes for the next `days` calendar days in config timezone."""
     tz = ZoneInfo(config.timezone)
-    start_local = (
-        (from_day or datetime.now(UTC))
-        .astimezone(tz)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-    )
+    start_local = (from_day or datetime.now(UTC)).astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
     slots: list[datetime] = []
     for offset in range(days):
         day = start_local + timedelta(days=offset)
@@ -82,9 +76,7 @@ def _busy_times(session: Session, start: datetime, end: datetime) -> list[dateti
     return out
 
 
-def next_available_slot(
-    session: Session, config: ScheduleConfigView, now: datetime | None = None
-) -> datetime | None:
+def next_available_slot(session: Session, config: ScheduleConfigView, now: datetime | None = None) -> datetime | None:
     """Pick the earliest open slot respecting max_posts_per_day and min_gap_hours.
 
     The min gap is checked against neighbouring posts on both sides (scheduled or
@@ -109,9 +101,7 @@ def next_available_slot(
     return None
 
 
-def assign_auto_slots(
-    session: Session, items: list[PublishingQueueItem], config: ScheduleConfigView
-) -> int:
+def assign_auto_slots(session: Session, items: list[PublishingQueueItem], config: ScheduleConfigView) -> int:
     """Assign scheduled_at for approved auto-slot items without a time yet."""
     assigned = 0
     now = datetime.now(UTC)

@@ -65,9 +65,7 @@ def _already_searched_recently(session: Session, hashtag: str) -> bool:
     )
 
 
-def research_hashtag(
-    session: Session, client: InstagramClient, raw_tag: str, *, force: bool = False
-) -> dict[str, object]:
+def research_hashtag(session: Session, client: InstagramClient, raw_tag: str, *, force: bool = False) -> dict[str, object]:
     if not client.configured():
         raise NotConfigured("Instagram is not configured.")
     tag = normalize_hashtag(raw_tag)
@@ -76,11 +74,7 @@ def research_hashtag(
         return _cache_out(cached, budget_status(session))
 
     budget = budget_status(session)
-    if (
-        not force
-        and not _already_searched_recently(session, tag)
-        and budget["remaining_unique_hashtags_7d"] <= 0
-    ):
+    if not force and not _already_searched_recently(session, tag) and budget["remaining_unique_hashtags_7d"] <= 0:
         raise NotAllowed(
             "Hashtag research budget exhausted (30 unique hashtags per 7 days). "
             "Reuse cached tags or wait for the rolling window."

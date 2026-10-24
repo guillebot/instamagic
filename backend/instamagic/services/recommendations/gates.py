@@ -29,11 +29,7 @@ def publishing_gate(
         reasons.append("A human safe or excellent rating is required.")
     if model_state == SafetyState.DO_NOT_POST.value and not do_not_post_blur_unlocked:
         reasons.append("The local model marked this image DO_NOT_POST.")
-    if (
-        model_state == SafetyState.DO_NOT_POST.value
-        and do_not_post_blur_unlocked
-        and not has_approved_blur
-    ):
+    if model_state == SafetyState.DO_NOT_POST.value and do_not_post_blur_unlocked and not has_approved_blur:
         reasons.append("Verified blur unlock requires approved blur covers.")
     if needs_crop and not (has_approved_crop or has_approved_covering_blur):
         reasons.append("SAFE_AFTER_CROP requires an approved crop or covering blur.")

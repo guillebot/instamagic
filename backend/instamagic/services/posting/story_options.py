@@ -21,11 +21,7 @@ class StoryOptions:
 
 def effective_story_options(session: Session, item: PublishingQueueItem) -> StoryOptions:
     cfg = get_or_create_config(session)
-    render = (
-        item.story_render_mode
-        or cfg.story_render_mode_default
-        or StoryRenderMode.BLUR_BACKDROP.value
-    )
+    render = item.story_render_mode or cfg.story_render_mode_default or StoryRenderMode.BLUR_BACKDROP.value
     if render not in StoryRenderMode._value2member_map_:
         render = StoryRenderMode.BLUR_BACKDROP.value
     border = (item.story_border_color or cfg.story_border_color_default or "black").strip().lower()

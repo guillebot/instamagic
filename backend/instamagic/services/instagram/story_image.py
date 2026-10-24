@@ -75,11 +75,7 @@ def render_story_from_feed_file(
     if not feed_path.is_file():
         raise NotConfigured("Feed publish file was not found for story render.")
     source = oriented_rgb(read_image(feed_path))
-    render_mode = (
-        StoryRenderMode(mode)
-        if mode in StoryRenderMode._value2member_map_
-        else StoryRenderMode.BLUR_BACKDROP
-    )
+    render_mode = StoryRenderMode(mode) if mode in StoryRenderMode._value2member_map_ else StoryRenderMode.BLUR_BACKDROP
 
     if render_mode == StoryRenderMode.CROP_FILL:
         box = _smart_crop_box(source)
@@ -121,11 +117,7 @@ def write_story_jpeg(image: Image.Image, dest: Path) -> None:
 def assert_story_uses_feed_source(feed_path: Path, story_image: Image.Image, mode: str) -> None:
     """Ensure story pixels are derived from the feed publish file (never a sharper original)."""
     feed = oriented_rgb(read_image(feed_path))
-    render_mode = (
-        StoryRenderMode(mode)
-        if mode in StoryRenderMode._value2member_map_
-        else StoryRenderMode.BLUR_BACKDROP
-    )
+    render_mode = StoryRenderMode(mode) if mode in StoryRenderMode._value2member_map_ else StoryRenderMode.BLUR_BACKDROP
     if render_mode == StoryRenderMode.CROP_FILL:
         box = _smart_crop_box(feed)
         expected = feed.crop(box).resize((STORY_WIDTH, STORY_HEIGHT), Image.Resampling.LANCZOS)
@@ -191,9 +183,7 @@ def assert_story_file_matches_feed(
     The feed publish file was blur-integrity-verified against the original; this proves the
     uploaded story pixels (foreground and backdrop) come from it and contain nothing sharper.
     """
-    expected = render_story_from_feed_file(feed_path, mode=mode, border_color=border_color).convert(
-        "RGB"
-    )
+    expected = render_story_from_feed_file(feed_path, mode=mode, border_color=border_color).convert("RGB")
     story = oriented_rgb(read_image(story_path)).convert("RGB")
     if story.size != expected.size:
         raise NotAllowed("Story file size does not match the expected 9:16 render.")
@@ -204,13 +194,9 @@ def assert_story_file_matches_feed(
     if float(diff.mean()) > _STORY_MAX_GLOBAL_MEAN_ABS_DIFF:
         raise NotAllowed("Story file does not match the verified feed publish derivative.")
     if float(_tile_mean(diff, _STORY_TILE).max()) > _STORY_MAX_TILE_MEAN_ABS_DIFF:
-        raise NotAllowed(
-            "Story file does not match the verified feed publish derivative in some areas."
-        )
+        raise NotAllowed("Story file does not match the verified feed publish derivative in some areas.")
     full_tile = _STORY_TILE * _STORY_DOWNSCALE
     got_sharp = _tile_mean(_laplacian_abs(_gray(story)), full_tile)
     want_sharp = _tile_mean(_laplacian_abs(_gray(expected)), full_tile)
     if bool((got_sharp > want_sharp * _STORY_SHARPNESS_RATIO + _STORY_SHARPNESS_MARGIN).any()):
-        raise NotAllowed(
-            "Story file is sharper than the verified feed derivative; refusing to upload."
-        )
+        raise NotAllowed("Story file is sharper than the verified feed derivative; refusing to upload.")

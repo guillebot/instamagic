@@ -28,11 +28,7 @@ def test_auto_publish_requires_ack() -> None:
         Settings(**_base(auto_publish=True, auto_publish_ack=""))
     from instamagic.config import AUTO_PUBLISH_ACK_PHRASE
 
-    enabled = Settings(
-        **_base(
-            auto_publish=True, auto_publish_ack=AUTO_PUBLISH_ACK_PHRASE, instagram_provider="fake"
-        )
-    )
+    enabled = Settings(**_base(auto_publish=True, auto_publish_ack=AUTO_PUBLISH_ACK_PHRASE, instagram_provider="fake"))
     assert enabled.auto_publish is True
 
 

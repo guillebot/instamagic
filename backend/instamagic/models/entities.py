@@ -75,28 +75,20 @@ class AdultAttestation(Base):
     __tablename__ = "adult_attestations"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    library_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("libraries.id", ondelete="CASCADE"), index=True
-    )
+    library_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("libraries.id", ondelete="CASCADE"), index=True)
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     statement: Mapped[str] = mapped_column(Text)
-    attested_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    attested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     library: Mapped[Library] = relationship(back_populates="attestations")
 
 
 class Image(Base):
     __tablename__ = "images"
-    __table_args__ = (
-        UniqueConstraint("library_id", "relative_path", name="uq_image_library_path"),
-    )
+    __table_args__ = (UniqueConstraint("library_id", "relative_path", name="uq_image_library_path"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    library_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("libraries.id", ondelete="CASCADE"), index=True
-    )
+    library_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("libraries.id", ondelete="CASCADE"), index=True)
     relative_path: Mapped[str] = mapped_column(String(1024))
     filename: Mapped[str] = mapped_column(String(512))
     file_size: Mapped[int] = mapped_column(Integer)
@@ -104,9 +96,7 @@ class Image(Base):
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     orientation: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
-    captured_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     camera: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     lens: Mapped[str | None] = mapped_column(String(200), nullable=True)
     focal_length_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -131,22 +121,14 @@ class Image(Base):
     enrich_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     enrich_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Set when Gemini refused this photo (PROHIBITED_CONTENT / blocked). Permanent: never resent.
-    gemini_refused_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    gemini_refused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     gemini_refused_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     enrich_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    blur_unlock_status: Mapped[str] = mapped_column(
-        String(16), default="none", server_default="none"
-    )
-    blur_unlock_verified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    blur_unlock_status: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
+    blur_unlock_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blur_unlock_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     blur_unlock_geometry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    ingested_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now(), index=True
-    )
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
 
     library: Mapped[Library] = relationship(back_populates="images")
     ratings: Mapped[list[ImageRating]] = relationship(back_populates="image")
@@ -164,25 +146,17 @@ class ImageDuplicate(Base):
     __table_args__ = (UniqueConstraint("library_id", "relative_path", name="uq_duplicate_path"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
-    library_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("libraries.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
+    library_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("libraries.id", ondelete="CASCADE"), index=True)
     relative_path: Mapped[str] = mapped_column(String(1024))
-    discovered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ImageRating(Base):
     __tablename__ = "image_ratings"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     rating: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -193,9 +167,7 @@ class SafetyAssessment(Base):
     __tablename__ = "safety_assessments"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     nudity_score: Mapped[float] = mapped_column(Float, default=0)
     explicit_score: Mapped[float] = mapped_column(Float, default=0)
     lingerie_score: Mapped[float] = mapped_column(Float, default=0)
@@ -208,9 +180,7 @@ class SafetyAssessment(Base):
     uncertain: Mapped[bool] = mapped_column(Boolean, default=False)
     model_state: Mapped[str] = mapped_column(String(32))
     model_name: Mapped[str] = mapped_column(String(64), default="none")
-    assessed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    assessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     image: Mapped[Image] = relationship(back_populates="assessments")
     regions: Mapped[list[SafetyRegion]] = relationship(back_populates="assessment")
@@ -238,9 +208,7 @@ class CropSuggestion(Base):
     __tablename__ = "crop_suggestions"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     x: Mapped[int] = mapped_column(Integer)
     y: Mapped[int] = mapped_column(Integer)
     width: Mapped[int] = mapped_column(Integer)
@@ -262,9 +230,7 @@ class BlurCover(Base):
     __tablename__ = "blur_covers"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     x: Mapped[int] = mapped_column(Integer)
     y: Mapped[int] = mapped_column(Integer)
     width: Mapped[int] = mapped_column(Integer)
@@ -288,9 +254,7 @@ class BlurCover(Base):
 class ImageScore(Base):
     __tablename__ = "image_scores"
 
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), primary_key=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), primary_key=True)
     sharpness: Mapped[float] = mapped_column(Float, default=0)
     composition: Mapped[float] = mapped_column(Float, default=0)
     face_quality: Mapped[float] = mapped_column(Float, default=0)
@@ -314,12 +278,8 @@ class ImageTag(Base):
     __table_args__ = (UniqueConstraint("image_id", "tag_id", name="uq_image_tag"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
-    tag_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("content_tags.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
+    tag_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("content_tags.id", ondelete="CASCADE"), index=True)
     source: Mapped[str] = mapped_column(String(16), default=TagSource.HUMAN.value)
 
     image: Mapped[Image] = relationship(back_populates="tags")
@@ -330,17 +290,13 @@ class Caption(Base):
     __tablename__ = "captions"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     style: Mapped[str] = mapped_column(String(32))
     language: Mapped[str] = mapped_column(String(16))
     text: Mapped[str] = mapped_column(Text)
     original_text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default=CaptionStatus.GENERATED.value)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
     image: Mapped[Image] = relationship(back_populates="captions")
 
@@ -349,9 +305,7 @@ class PublishingQueueItem(Base):
     __tablename__ = "publishing_queue_items"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     crop_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("crop_suggestions.id", ondelete="SET NULL"), nullable=True
     )
@@ -361,33 +315,19 @@ class PublishingQueueItem(Base):
     state: Mapped[str] = mapped_column(String(16), default=QueueState.CANDIDATE.value, index=True)
     media_type: Mapped[str] = mapped_column(String(16), default="IMAGE", index=True)
     schedule_mode: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
-    scheduled_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-    publish_retry_after: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    publish_retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    story_share_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false"
-    )
+    story_share_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     story_render_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     story_border_color: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    story_timing_mode: Mapped[str] = mapped_column(
-        String(16), default="with_post", server_default="with_post"
-    )
+    story_timing_mode: Mapped[str] = mapped_column(String(16), default="with_post", server_default="with_post")
     story_delay_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    story_scheduled_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    story_published_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    story_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    story_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     story_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     feed_publish_relative_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
@@ -406,9 +346,7 @@ class PublishingQueueSlide(Base):
     queue_item_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("publishing_queue_items.id", ondelete="CASCADE"), index=True
     )
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     crop_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("crop_suggestions.id", ondelete="SET NULL"), nullable=True
     )
@@ -429,30 +367,20 @@ class PostingScheduleConfig(Base):
     max_posts_per_day: Mapped[int] = mapped_column(Integer, default=2)
     min_gap_hours: Mapped[float] = mapped_column(Float, default=4.0)
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
-    story_share_default: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false"
-    )
+    story_share_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     story_render_mode_default: Mapped[str] = mapped_column(
         String(32), default="blur_backdrop", server_default="blur_backdrop"
     )
-    story_border_color_default: Mapped[str] = mapped_column(
-        String(16), default="black", server_default="black"
-    )
+    story_border_color_default: Mapped[str] = mapped_column(String(16), default="black", server_default="black")
     blur_coverage_threshold: Mapped[int] = mapped_column(Integer, default=95, server_default="95")
     blur_region_padding_px: Mapped[int] = mapped_column(Integer, default=6, server_default="6")
     enrichment_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     enrichment_paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     enrichment_daily_cap: Mapped[int] = mapped_column(Integer, default=400, server_default="400")
-    enrichment_prefetch_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=True, server_default="true"
-    )
-    enrichment_prefetch_daily_cap: Mapped[int] = mapped_column(
-        Integer, default=300, server_default="300"
-    )
+    enrichment_prefetch_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    enrichment_prefetch_daily_cap: Mapped[int] = mapped_column(Integer, default=300, server_default="300")
     enrichment_prefetch_paused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    enrichment_prefetch_paused_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    enrichment_prefetch_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )
@@ -468,9 +396,7 @@ class PublishAttempt(Base):
     attempt_number: Mapped[int] = mapped_column(Integer, default=1)
     kind: Mapped[str] = mapped_column(String(16), default="feed", server_default="feed")
     trigger: Mapped[str] = mapped_column(String(16), default="manual")
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -484,9 +410,7 @@ class GeminiRequest(Base):
     __tablename__ = "gemini_requests"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     policy: Mapped[str] = mapped_column(String(32))
     context_sha256: Mapped[str] = mapped_column(String(64))
     context_json: Mapped[str] = mapped_column(Text)
@@ -515,9 +439,7 @@ class ProcessingJob(Base):
     files_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     current_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     current_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -525,9 +447,7 @@ class ProcessingJob(Base):
 class ImageEmbedding(Base):
     __tablename__ = "image_embeddings"
 
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), primary_key=True
-    )
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), primary_key=True)
     model_name: Mapped[str] = mapped_column(String(64), default="pending")
     embedding: Mapped[str | None] = mapped_column(EmbeddingType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -551,9 +471,7 @@ class InstagramInboxComment(Base):
     suggested_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    synced_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
 
 class InstagramPost(Base):
@@ -594,13 +512,9 @@ class InstagramConnection(Base):
     meta_app_id: Mapped[str] = mapped_column(String(64), default="")
     meta_app_secret_ciphertext: Mapped[str] = mapped_column(Text, default="")
     account_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    account_fetched_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    account_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     token_scopes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    insights_last_sync_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    insights_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )
@@ -613,9 +527,7 @@ class HashtagResearchEvent(Base):
     hashtag: Mapped[str] = mapped_column(String(128), index=True)
     hashtag_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     action: Mapped[str] = mapped_column(String(32), default="search")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now(), index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
 
 
 class HashtagResearchCache(Base):
@@ -625,9 +537,7 @@ class HashtagResearchCache(Base):
     hashtag_id: Mapped[str] = mapped_column(String(64))
     top_media_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     recent_media_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
 
 class RelatedAccountDiscovery(Base):
@@ -642,9 +552,7 @@ class RelatedAccountDiscovery(Base):
     common_hashtags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     avg_likes: Mapped[float | None] = mapped_column(Float, nullable=True)
     posts_per_week: Mapped[float | None] = mapped_column(Float, nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
 
 class RelatedAccount(Base):
@@ -658,9 +566,7 @@ class RelatedAccount(Base):
     profile_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     why_relevant: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )
@@ -681,9 +587,7 @@ class CommentDraft(Base):
     target_context: Mapped[str] = mapped_column(Text, default="")
     text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default=CommentDraftStatus.DRAFT.value)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
 
 class InstagramAccountInsightSnapshot(Base):
@@ -692,9 +596,7 @@ class InstagramAccountInsightSnapshot(Base):
     __tablename__ = "instagram_account_insight_snapshots"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    captured_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now(), index=True
-    )
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
     follower_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
     profile_views: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -706,12 +608,8 @@ class InstagramMetrics(Base):
     __tablename__ = "instagram_metrics"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    post_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("instagram_posts.id", ondelete="CASCADE"), index=True
-    )
-    captured_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    post_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instagram_posts.id", ondelete="CASCADE"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     likes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     comments: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -741,53 +639,37 @@ class CurationBatch(Base):
         ForeignKey("libraries.id", ondelete="CASCADE"), nullable=True, index=True
     )
     folder: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(16), default=CurationBatchStatus.READY.value, index=True
-    )
+    status: Mapped[str] = mapped_column(String(16), default=CurationBatchStatus.READY.value, index=True)
     limit: Mapped[int] = mapped_column(Integer, default=12)
     detail: Mapped[str | None] = mapped_column(String(512), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     # Read-only "why not picked" explanation computed when the run finished (JSON).
     skipped_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    picks: Mapped[list[CurationPick]] = relationship(
-        back_populates="batch", order_by="CurationPick.sort_order"
-    )
+    picks: Mapped[list[CurationPick]] = relationship(back_populates="batch", order_by="CurationPick.sort_order")
 
 
 class CurationPick(Base):
     """One Gemini/local suggestion. Human reorders, accepts, then may send to the publish queue."""
 
     __tablename__ = "curation_picks"
-    __table_args__ = (
-        UniqueConstraint("batch_id", "image_id", name="uq_curation_pick_batch_image"),
-    )
+    __table_args__ = (UniqueConstraint("batch_id", "image_id", name="uq_curation_pick_batch_image"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    batch_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("curation_batches.id", ondelete="CASCADE"), index=True
-    )
-    image_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), index=True
-    )
+    batch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("curation_batches.id", ondelete="CASCADE"), index=True)
+    image_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     gemini_rank: Mapped[int] = mapped_column(Integer, default=0)
     local_score: Mapped[int] = mapped_column(Integer, default=0)
     reasons_json: Mapped[str] = mapped_column(Text, default="[]")
     suggested_tags_json: Mapped[str] = mapped_column(Text, default="[]")
-    status: Mapped[str] = mapped_column(
-        String(16), default=CurationPickStatus.SUGGESTED.value, index=True
-    )
+    status: Mapped[str] = mapped_column(String(16), default=CurationPickStatus.SUGGESTED.value, index=True)
     preferred_caption_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("captions.id", ondelete="SET NULL"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
     batch: Mapped[CurationBatch] = relationship(back_populates="picks")
     image: Mapped[Image] = relationship()
@@ -823,9 +705,7 @@ class EngageRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     detail_json: Mapped[str] = mapped_column(Text, default="{}")
     targets_created: Mapped[int] = mapped_column(Integer, default=0)
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -854,9 +734,7 @@ class EngageTarget(Base):
     suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)
     acted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
 
 # Imported by decision code via the string values stored on Image.

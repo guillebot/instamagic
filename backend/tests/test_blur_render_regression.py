@@ -249,14 +249,7 @@ def test_rot0_mask_matches_legacy_ellipse_mask() -> None:
         covers_unsafe=True,
     )
     legacy = np.asarray(
-        feathered_ellipse_mask(
-            size,
-            x=cover.x,
-            y=cover.y,
-            width=cover.width,
-            height=cover.height,
-            feather=cover.feather,
-        )
+        feathered_ellipse_mask(size, x=cover.x, y=cover.y, width=cover.width, height=cover.height, feather=cover.feather)
     )
     modern = np.asarray(feathered_shape_mask(size, cover))
     assert np.max(np.abs(legacy.astype(np.int16) - modern.astype(np.int16))) == 0

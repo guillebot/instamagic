@@ -16,9 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 
 
 def _gate_image(session: Session, image: Image) -> None:
-    gate = publishing_gate(
-        attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image)
-    )
+    gate = publishing_gate(attested=is_attested(session, image.library_id), **publishing_gate_kwargs(session, image))
     blur_pending = blur_drawn_not_approved_reason(image)
     if not gate.allowed or blur_pending:
         reasons = list(gate.reasons)
@@ -65,9 +63,7 @@ def create_carousel_queue_item(session: Session, image_ids: list[UUID]) -> Publi
     return item
 
 
-def reorder_carousel_slides(
-    session: Session, item_id: UUID, image_ids: list[UUID]
-) -> PublishingQueueItem:
+def reorder_carousel_slides(session: Session, item_id: UUID, image_ids: list[UUID]) -> PublishingQueueItem:
     item = session.get(
         PublishingQueueItem,
         item_id,

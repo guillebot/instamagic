@@ -15,18 +15,7 @@ from instamagic.services.pipeline import min_hamming_distances
 from instamagic.services.queues import QUEUE_NAMES, QUEUE_SOCIAL
 from tests.conftest import login, write_jpeg
 
-SECTIONS = (
-    "health",
-    "scan",
-    "photos",
-    "enrichment",
-    "queue",
-    "publish",
-    "instagram",
-    "sync",
-    "engage",
-    "workers",
-)
+SECTIONS = ("health", "scan", "photos", "enrichment", "queue", "publish", "instagram", "sync", "engage", "workers")
 
 
 def test_status_requires_session(client) -> None:
@@ -40,12 +29,7 @@ def test_status_shape_and_no_secrets(client, app_env) -> None:
     login(client)
     created = client.post(
         "/api/libraries",
-        json={
-            "name": "L",
-            "root_path": str(library),
-            "confirmed": True,
-            "statement": ATTESTATION_STATEMENT,
-        },
+        json={"name": "L", "root_path": str(library), "confirmed": True, "statement": ATTESTATION_STATEMENT},
     )
     assert created.status_code == 201
     client.post(f"/api/libraries/{created.json()['id']}/scan")
@@ -100,9 +84,7 @@ def test_min_hamming_matches_pairwise() -> None:
     hashes.append(hashes[3])  # exact duplicate → distance 0
     result = min_hamming_distances(hashes)
     for i, left in enumerate(hashes):
-        usable = [
-            d for j, right in enumerate(hashes) if j != i if (d := hamming(left, right)) is not None
-        ]
+        usable = [d for j, right in enumerate(hashes) if j != i if (d := hamming(left, right)) is not None]
         assert result[i] == (min(usable) if usable else None)
     assert result[3] == 0
 
@@ -122,9 +104,7 @@ def test_slow_section_served_stale_and_refreshed_in_background(monkeypatch):
         calls.append("x")
         return {"value": len(calls)}
 
-    monkeypatch.setattr(
-        app_status, "_refresh_in_background", lambda name, fn, settings: started.append(name)
-    )
+    monkeypatch.setattr(app_status, "_refresh_in_background", lambda name, fn, settings: started.append(name))
     first = app_status._slow_section("enrichment", fake, None, None, None, 1000.0)
     assert first["value"] == 1 and "as_of" in first
     fresh = app_status._slow_section("enrichment", fake, None, None, None, 1010.0)

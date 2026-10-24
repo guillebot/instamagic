@@ -39,17 +39,14 @@ def analyze_image(
     signals = classifier.classify(working, hint=filename)  # type: ignore[attr-defined]
     if scale != 1.0:
         signals.regions = [
-            type(region)(region.label, region.score, _scale_box(region.box, scale))
-            for region in signals.regions
+            type(region)(region.label, region.score, _scale_box(region.box, scale)) for region in signals.regions
         ]
     faces = [_scale_box(box, scale) for box in face_detector.detect(working)]  # type: ignore[attr-defined]
     clear = signals.clear_exposed()
     unsafe_boxes = [region.box for region in clear]
     crops = generate_crops(rgb.size[0], rgb.size[1], faces, unsafe_boxes)
     viable = viable_safety_crop(crops) if clear else False
-    uncertain = signals.uncertain or (
-        signals.detector_available and signals.has_ambiguous_exposure()
-    )
+    uncertain = signals.uncertain or (signals.detector_available and signals.has_ambiguous_exposure())
     state = decide(
         DecisionInput(
             attested=attested,

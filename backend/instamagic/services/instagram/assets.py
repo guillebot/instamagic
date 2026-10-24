@@ -69,9 +69,7 @@ def _decode_opaque_token(token: str) -> bytes:
         raise NotAllowed("Publish asset token is invalid.") from exc
 
 
-def mint_publish_token(
-    *, relative_path: str, secret: str, ttl_seconds: int = DEFAULT_TTL_SECONDS
-) -> str:
+def mint_publish_token(*, relative_path: str, secret: str, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> str:
     if not is_allowed_publish_relative_path(relative_path):
         raise NotAllowed("Publish asset path is not allowed.")
     expires_at = int(time.time()) + max(60, ttl_seconds)
