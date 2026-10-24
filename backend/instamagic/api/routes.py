@@ -102,6 +102,7 @@ from instamagic.schemas.dto import (
     TagIn,
 )
 from instamagic.services.blurs.coverage_report import blur_coverage_report
+from instamagic.services.blurs.coverage_settings import blur_coverage_settings
 from instamagic.services.blurs.detector_probe import probe_blurred_detector
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.blurs.generator import (
@@ -1274,7 +1275,10 @@ def approve_blurs(
     for blur in image.blurs:
         blur.approved = True
     session.flush()
-    if image.model_state != SafetyState.DO_NOT_POST.value:
+    # With "Detector pass overrules coverage" on, the geometric pre-check is advisory: the
+    # detector re-check on the blurred render (verify_blur_unlock below) decides.
+    strict_coverage = not blur_coverage_settings(session).detector_overrules_coverage
+    if image.model_state != SafetyState.DO_NOT_POST.value and strict_coverage:
         if image.width is None or image.height is None:
             raise NotAllowed("Image dimensions are unknown.")
         if unsafe and not covers_unsafe_boxes(windows, unsafe, (image.width, image.height)):
