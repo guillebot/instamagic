@@ -26,7 +26,6 @@ from instamagic.services.recommendations.gemini_derivatives import (
 )
 from instamagic.services.recommendations.label_job import run_gemini_label_job
 from redis import Redis
-from rq import Queue
 
 log = get_logger("worker.tasks")
 
@@ -220,12 +219,7 @@ def sync_instagram_comments_job() -> None:
         raise
     finally:
         session.close()
-    try:
-        connection = Redis.from_url(settings.redis_url)
-        queue = Queue("io", connection=connection)
-        queue.enqueue_in(timedelta(hours=2), sync_instagram_comments_job)
-    except Exception:
-        log.info("comments_sync_reschedule_failed")
+    # Recurring cadence now lives in workers.social_loop (not blocked by scans); no reschedule here.
 
 
 def sync_instagram_insights_job() -> None:
@@ -240,9 +234,4 @@ def sync_instagram_insights_job() -> None:
         raise
     finally:
         session.close()
-    try:
-        connection = Redis.from_url(settings.redis_url)
-        queue = Queue("io", connection=connection)
-        queue.enqueue_in(timedelta(seconds=INSIGHTS_RESCHEDULE_SECONDS), sync_instagram_insights_job)
-    except Exception:
-        log.info("insights_sync_reschedule_failed")
+    # Recurring cadence now lives in workers.social_loop (not blocked by scans); no reschedule here.

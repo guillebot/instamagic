@@ -2125,6 +2125,14 @@ def _reload_instagram_client(request: Request, settings: Settings, session: Sess
     request.app.state.instagram = build_instagram(settings, session)
 
 
+def _kick_social(settings: Settings) -> None:
+    """After a reconnect: ask worker-io's social lane to sync insights/comments and fill Engage."""
+    if settings.pipeline_mode != "inline":
+        from instamagic.workers.social_loop import kick_social
+
+        kick_social(settings.redis_url)
+
+
 @router.get("/api/instagram/status")
 def instagram_status(
     request: Request,
@@ -2422,6 +2430,7 @@ def instagram_oauth_callback(
         client = request.app.state.instagram
         details = client.fetch_account_details()
         save_account_profile(session, details)
+        _kick_social(settings)
     except (NotConfigured, NotAllowed, ValueError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)
         return _fail(detail)
@@ -2469,6 +2478,7 @@ def instagram_oauth_select_page(
     client = request.app.state.instagram
     details = client.fetch_account_details()
     save_account_profile(session, details)
+    _kick_social(settings)
     status = connection_status_fields(settings, session, configured=True)
     return {
         **status,

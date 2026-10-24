@@ -27,9 +27,13 @@ from instamagic.services.gemini.curation import (
 )
 from instamagic.services.gemini.growth import (
     CommentDraftBatch,
+    EngageCommentBatch,
+    EngageTargetText,
     HashtagSuggestion,
     comment_request_text,
     comment_system_instruction,
+    engage_request_text,
+    engage_system_instruction,
     hashtag_request_text,
 )
 from instamagic.services.gemini.labeling import (
@@ -152,6 +156,39 @@ class GoogleGeminiProvider:
         }
         assert_safe_gemini_payload(body, policy="text_only")
         return HashtagSuggestion.model_validate_json(self._post(body))
+
+    def draft_engage_comments(self, targets: list[EngageTargetText], *, account_voice: str) -> EngageCommentBatch:
+        """Text-only: captions of other accounts' posts in, short manual-comment suggestions out."""
+        if not self._api_key:
+            raise NotConfigured("GEMINI_API_KEY is not configured.")
+        body = {
+            "system_instruction": {"parts": [{"text": engage_system_instruction()}]},
+            "contents": [
+                {"role": "user", "parts": [{"text": engage_request_text(targets=targets, account_voice=account_voice)}]}
+            ],
+            "generationConfig": {
+                "temperature": 0.8,
+                "maxOutputTokens": 4096,
+                "thinkingConfig": {"thinkingBudget": 256},
+                "responseMimeType": "application/json",
+                "responseSchema": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "comments": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {"id": {"type": "STRING"}, "text": {"type": "STRING"}},
+                                "required": ["id", "text"],
+                            },
+                        }
+                    },
+                    "required": ["comments"],
+                },
+            },
+        }
+        assert_safe_gemini_payload(body, policy="text_only")
+        return EngageCommentBatch.lenient(self._post(body))
 
     def curate_batch(
         self,
