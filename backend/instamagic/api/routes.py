@@ -2521,7 +2521,9 @@ def public_publish_asset(
         asset = parse_publish_token(token, secret=settings.app_secret)
         path = resolve_publish_file(settings.derivatives_root, asset)
     except (NotAllowed, NotFound):
-        raise HTTPException(status_code=404, detail="Not Found") from None
+        raise HTTPException(
+            status_code=404, detail="Not Found", headers={"X-Instamagic-Asset": "rejected"}
+        ) from None
     cache = {"Cache-Control": "private, max-age=60"}
     if request.method == "HEAD":
         stat = path.stat()
