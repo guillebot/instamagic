@@ -1088,3 +1088,24 @@ input, select, textarea {
   vertical-align: -2px;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Engage: a manual daily list; nothing here sends anything to Instagram. */
+.engage-page .card-list { overflow: visible; }
+.engage-card { grid-template-columns: 140px 1fr; align-items: start; }
+.engage-card.engage-closed { opacity: 0.55; }
+.engage-thumb img, .engage-thumb-empty { width: 140px; height: 140px; object-fit: cover; border-radius: 8px; }
+.engage-thumb-empty { display: grid; place-items: center; background: #101216; color: #9a948a; font-size: 12px; }
+.engage-body { display: grid; gap: 6px; min-width: 0; }
+.engage-body textarea { width: 100%; }
+.engage-head { gap: 8px; align-items: center; }
+.engage-caption { margin: 0; color: #cfc8be; font-size: 13px; overflow-wrap: anywhere; }
+.engage-toolbar { gap: 12px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; }
+.engage-suggested { flex-wrap: wrap; gap: 6px; }
+.badge.engage-done { background: #245c45; }
+.badge.engage-skipped { background: #4a4f57; }
+.engage-settings { display: grid; gap: 8px; max-width: 420px; }
+.engage-settings label { display: grid; gap: 4px; font-size: 13px; }
+@media (max-width: 560px) {
+  .engage-card { grid-template-columns: 1fr; }
+  .engage-thumb img, .engage-thumb-empty { width: 100%; height: auto; aspect-ratio: 1; }
+}

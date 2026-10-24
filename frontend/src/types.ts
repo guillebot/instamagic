@@ -465,3 +465,62 @@ export type BlurCoverageReport = {
     message?: string | null;
   };
 };
+
+export type EngageTarget = {
+  id: string;
+  run_date: string;
+  source: "account" | "hashtag";
+  source_value: string;
+  username: string | null;
+  permalink: string;
+  media_url: string | null;
+  media_type: string | null;
+  caption_snippet: string;
+  like_count: number | null;
+  comments_count: number | null;
+  posted_at: string | null;
+  reason: string;
+  suggestion: string | null;
+  status: "open" | "done" | "skipped";
+  acted_at: string | null;
+};
+
+export type EngageSettings = {
+  enabled: boolean;
+  daily_target: number;
+  account_cooldown_days: number;
+  run_hour_local: number;
+  hashtags_per_run: number;
+  seed_hashtags: string[];
+};
+
+export type EngageRunInfo = {
+  id: string;
+  run_date: string;
+  trigger: string;
+  status: string;
+  error_code: string | null;
+  error: string | null;
+  targets_created: number;
+  started_at: string | null;
+  finished_at: string | null;
+  detail: Record<string, unknown>;
+};
+
+export type EngageOverview = {
+  today: string;
+  list_date: string;
+  settings: EngageSettings;
+  permission: { ok: boolean; code: string | null; missing: string[]; message: string | null };
+  running: boolean;
+  last_run: EngageRunInfo | null;
+  targets: EngageTarget[];
+  days: { date: string; done: number; skipped: number; total: number }[];
+  niche_hashtags: { tag: string; why: string }[];
+  hashtag_budget: {
+    used_unique_hashtags_7d: number;
+    remaining_unique_hashtags_7d: number;
+    limit_unique_hashtags_7d: number;
+  };
+  similar_accounts: string[];
+};

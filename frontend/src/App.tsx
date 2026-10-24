@@ -8,6 +8,7 @@ import { CandidatesPage } from "./pages/Candidates";
 import { CuratePage } from "./pages/Curate";
 import { InstagramPage } from "./pages/Instagram";
 import { QueuePage } from "./pages/Queue";
+import { EngagePage } from "./pages/Engage";
 import { InboxPage } from "./pages/Inbox";
 import { InsightsPage } from "./pages/Insights";
 import { SchedulePage } from "./pages/Schedule";
@@ -49,6 +50,7 @@ function Shell() {
           <NavLink to="/related">Related</NavLink>
           <NavLink to="/insights">Insights</NavLink>
           <NavLink to="/inbox">Inbox</NavLink>
+          <NavLink to="/engage">Engage</NavLink>
           <NavLink to="/instagram">Instagram</NavLink>
           <button
             className="ghost"
@@ -80,6 +82,7 @@ export function App() {
         <Route path="/related" element={<RelatedAccountsPage />} />
         <Route path="/insights" element={<InsightsPage />} />
         <Route path="/inbox" element={<InboxPage />} />
+        <Route path="/engage" element={<EngagePage />} />
         <Route path="/instagram" element={<InstagramPage />} />
       </Route>
     </Routes>

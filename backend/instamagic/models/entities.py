@@ -670,6 +670,68 @@ class CurationPick(Base):
     image: Mapped[Image] = relationship()
 
 
+class EngageSettings(Base):
+    """Singleton config for the daily Engage list (manual engagement only; nothing is sent)."""
+
+    __tablename__ = "engage_settings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    daily_target: Mapped[int] = mapped_column(Integer, default=18, server_default="18")
+    account_cooldown_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
+    run_hour_local: Mapped[int] = mapped_column(Integer, default=8, server_default="8")
+    hashtags_per_run: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
+    seed_hashtags_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
+    )
+
+
+class EngageRun(Base):
+    """One generation of the Engage list (daily scheduler or Refresh now)."""
+
+    __tablename__ = "engage_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    run_date: Mapped[str] = mapped_column(String(10), index=True)
+    trigger: Mapped[str] = mapped_column(String(16), default="schedule")
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    targets_created: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EngageTarget(Base):
+    """A post the operator may open and engage with himself in Instagram. Never acted on by the app."""
+
+    __tablename__ = "engage_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("engage_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    run_date: Mapped[str] = mapped_column(String(10), index=True)
+    source: Mapped[str] = mapped_column(String(16))
+    source_value: Mapped[str] = mapped_column(String(128))
+    ig_media_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    permalink: Mapped[str] = mapped_column(String(512), unique=True)
+    media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    like_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comments_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    acted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+
 # Imported by decision code via the string values stored on Image.
 SAFETY_VALUES = {state.value for state in SafetyState}
 RATING_VALUES = {rating.value for rating in HumanRating}

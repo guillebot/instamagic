@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from instamagic.api.engage_routes import router as engage_router
 from instamagic.api.routes import router
 from instamagic.config import get_settings
 from instamagic.db import get_engine, session_factory
@@ -72,6 +73,7 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type"],
     )
     app.include_router(router)
+    app.include_router(engage_router)
 
     @app.exception_handler(AppError)
     async def app_error(_request: Request, exc: AppError) -> JSONResponse:

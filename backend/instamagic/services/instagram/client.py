@@ -800,7 +800,7 @@ class GraphInstagramClient:
     def _hashtag_media_edge(self, hashtag_id: str, *, edge: str) -> list[dict]:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
-        fields = "caption,like_count,comments_count,timestamp,media_type,permalink"
+        fields = "id,caption,like_count,comments_count,timestamp,media_type,media_url,permalink"
         rows: list[dict] = []
         for item in graph_paginate(
             self._base,
@@ -820,7 +820,8 @@ class GraphInstagramClient:
         handle = username.lstrip("@")
         fields = (
             f"business_discovery.username({handle})"
-            "{followers_count,media_count,media{caption,like_count,comments_count,timestamp,media_type,permalink}}"
+            "{username,followers_count,media_count,"
+            "media{id,caption,like_count,comments_count,timestamp,media_type,media_url,permalink}}"
         )
         payload = graph_get_page(
             f"{self._base}/{self._ig_user_id}",
