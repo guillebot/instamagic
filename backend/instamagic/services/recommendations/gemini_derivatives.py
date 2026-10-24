@@ -40,6 +40,9 @@ def has_approved_covering_blur(session: Session, image: Image) -> bool:
     approved = [blur for blur in image.blurs if blur.approved]
     if not approved:
         return False
+    if blur_covers_verified(session, image):
+        # Verified on the blurred render (coverage passed, or overruled by a detector pass).
+        return True
     unsafe = clear_exposed_boxes(session, image.id)
     if not unsafe:
         return True
