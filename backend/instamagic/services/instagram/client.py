@@ -807,7 +807,8 @@ class GraphInstagramClient:
             self._base,
             f"{hashtag_id}/{edge}",
             access_token=self._token,
-            params={"user_id": self._ig_user_id, "fields": fields, "limit": "25"},
+            # Large pages with media_url trip Graph error #1 ("reduce the amount of data").
+            params={"user_id": self._ig_user_id, "fields": fields, "limit": "10"},
             timeout=self._timeout,
             action=f"fetch hashtag {edge}",
             max_pages=2,
