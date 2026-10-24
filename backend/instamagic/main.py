@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from instamagic.api.engage_routes import router as engage_router
 from instamagic.api.routes import router
+from instamagic.auth import COOKIE_NAME, session_should_renew, set_session_cookie
 from instamagic.config import get_settings
 from instamagic.db import get_engine, session_factory
 from instamagic.errors import AppError
@@ -74,6 +75,24 @@ def create_app() -> FastAPI:
     )
     app.include_router(router)
     app.include_router(engage_router)
+
+    @app.middleware("http")
+    async def sliding_session(request: Request, call_next):
+        # Sliding renewal: an active browser keeps its session indefinitely; an idle
+        # one expires after SESSION_TTL_SECONDS. Never touch public/logout responses.
+        response = await call_next(request)
+        path = request.url.path
+        if (
+            path.startswith("/api/")
+            and not path.startswith("/api/public/")
+            and path not in {"/api/auth/logout", "/api/auth/login"}
+            and response.status_code < 400
+            and "set-cookie" not in response.headers
+        ):
+            current = get_settings()
+            if session_should_renew(current, request.cookies.get(COOKIE_NAME)):
+                set_session_cookie(response, current)
+        return response
 
     @app.exception_handler(AppError)
     async def app_error(_request: Request, exc: AppError) -> JSONResponse:

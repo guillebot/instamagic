@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -96,7 +98,16 @@ class Settings(BaseSettings):
     curate_performance_weight: float = 0.15
     # None derives from FRONTEND_ORIGIN (https → Secure cookies). Explicit true/false overrides.
     cookie_secure: bool | None = None
-    session_ttl_seconds: int = 60 * 60 * 12
+    # Long-lived, sliding: any authenticated request re-issues the cookie once it is
+    # older than SESSION_RENEW_AFTER_SECONDS, so an active browser never expires.
+    session_ttl_seconds: int = 60 * 60 * 24 * 30
+    session_renew_after_seconds: int = 60 * 60 * 6
+    # Trusted-IP auto-login (LAN only). Comma-separated CIDRs/IPs, e.g. "10.1.1.150".
+    # Empty = disabled. Only honored when the request Host is one of
+    # TRUSTED_LOGIN_HOSTS (default: the FRONTEND_ORIGIN host) and the client IP comes
+    # from the in-stack nginx X-Real-IP header (never from client-sent headers).
+    trusted_login_ips: str = ""
+    trusted_login_hosts: str = ""
     log_level: str = "INFO"
 
     @model_validator(mode="after")
@@ -111,6 +122,17 @@ class Settings(BaseSettings):
             raise ValueError("APP_PASSWORD must be at least 12 characters and not a placeholder.")
         if len(self.app_secret.strip()) < 16:
             raise ValueError("APP_SECRET must be at least 16 characters.")
+        try:
+            trusted = self.trusted_login_networks()
+        except ValueError as exc:
+            raise ValueError(f"TRUSTED_LOGIN_IPS has an invalid entry: {exc}") from exc
+        for network in trusted:
+            if not network.is_private or network.prefixlen < (24 if network.version == 4 else 64):
+                raise ValueError(
+                    "TRUSTED_LOGIN_IPS must list private LAN addresses only (IPv4 /24 or narrower)."
+                )
+        if self.session_ttl_seconds < 300:
+            raise ValueError("SESSION_TTL_SECONDS must be at least 300.")
         if self.bind_host not in LOOPBACK_HOSTS and not self.allow_container_bind:
             raise ValueError("BIND_HOST must be loopback unless ALLOW_CONTAINER_BIND=true.")
         if self.environment in {"production", "stage"} and self.safety_classifier == "fake":
@@ -178,6 +200,22 @@ class Settings(BaseSettings):
             return explicit
         base = self.frontend_origin.strip().rstrip("/")
         return base
+
+    def trusted_login_networks(self) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        for part in self.trusted_login_ips.replace(";", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            networks.append(ipaddress.ip_network(part, strict=False))
+        return networks
+
+    def trusted_login_host_set(self) -> set[str]:
+        raw = self.trusted_login_hosts.strip()
+        if raw:
+            return {h.strip().lower() for h in raw.split(",") if h.strip()}
+        host = urlparse(self.frontend_origin.strip()).hostname or ""
+        return {host.lower()} if host else set()
 
     def session_cookie_secure(self) -> bool:
         if self.cookie_secure is not None:

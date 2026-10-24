@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Request
-from instamagic.auth import COOKIE_NAME, _is_private_or_loopback, client_ip, session_is_valid
+from instamagic.auth import (
+    COOKIE_NAME,
+    _is_private_or_loopback,
+    client_ip,
+    session_is_valid,
+    trusted_login_ip,
+)
 from instamagic.config import Settings, get_settings
 from instamagic.db import get_db
 
@@ -12,8 +18,12 @@ def settings_dep() -> Settings:
 
 def require_session(request: Request, settings: Settings = Depends(settings_dep)) -> None:
     token = request.cookies.get(COOKIE_NAME)
-    if not session_is_valid(settings, token):
-        raise HTTPException(status_code=401, detail="Login required.")
+    if session_is_valid(settings, token):
+        return
+    if trusted_login_ip(request, settings) is not None:
+        request.state.trusted_login = True
+        return
+    raise HTTPException(status_code=401, detail="Login required.")
 
 
 def require_lan_session(request: Request, settings: Settings = Depends(settings_dep)) -> None:

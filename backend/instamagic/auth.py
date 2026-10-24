@@ -7,6 +7,7 @@ import time
 from collections.abc import Mapping
 
 from starlette.requests import Request
+from starlette.responses import Response
 
 from instamagic.config import Settings
 from instamagic.security.signing import (
@@ -38,10 +39,40 @@ def _legacy_session_key(settings: Settings) -> bytes:
     return settings.app_secret.encode("utf-8")
 
 
+def session_expiry(settings: Settings, token: str | None) -> int | None:
+    """Expiry (unix seconds) of a valid session token, else None."""
+    if not session_is_valid(settings, token):
+        return None
+    assert token is not None
+    return int(token.rsplit(".", 1)[0])
+
+
+def session_should_renew(settings: Settings, token: str | None, *, now: float | None = None) -> bool:
+    """Sliding renewal: re-issue once the cookie is older than SESSION_RENEW_AFTER_SECONDS."""
+    expires = session_expiry(settings, token)
+    if expires is None:
+        return False
+    stamp = int(time.time() if now is None else now)
+    issued = expires - settings.session_ttl_seconds
+    return stamp - issued >= settings.session_renew_after_seconds
+
+
 def sign_session(settings: Settings) -> str:
     payload = str(int(time.time()) + settings.session_ttl_seconds)
     signature = hmac_sha256_hex(_session_key(settings), payload)
     return f"{payload}.{signature}"
+
+
+def set_session_cookie(response: Response, settings: Settings) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        sign_session(settings),
+        max_age=settings.session_ttl_seconds,
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure(),
+        path="/",
+    )
 
 
 def session_is_valid(settings: Settings, token: str | None) -> bool:
@@ -104,10 +135,21 @@ def _is_private_or_loopback(host: str) -> bool:
 
 
 def client_ip(request: Request) -> str:
-    """Prefer X-Forwarded-For / X-Real-IP only when the peer is a private proxy (Docker/Traefik)."""
+    """Prefer X-Real-IP / X-Forwarded-For only when the peer is a private proxy (Docker/Traefik).
+
+    The stack nginx overwrites both headers with the real TCP peer it resolved from
+    Traefik (see docker/nginx.conf), so client-supplied values never reach here.
+    """
     peer = request.client.host if request.client else "local"
     if not _is_private_or_loopback(peer):
         return peer
+    real_first = request.headers.get("x-real-ip", "").strip()
+    if real_first:
+        try:
+            ipaddress.ip_address(real_first)
+            return real_first
+        except ValueError:
+            pass
     forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     if forwarded:
         try:
@@ -123,6 +165,61 @@ def client_ip(request: Request) -> str:
         except ValueError:
             pass
     return peer
+
+
+def trusted_login_ip(request: Request, settings: Settings) -> str | None:
+    """Return the client IP when this request qualifies for trusted-IP auto-login, else None.
+
+    Fail-closed rules (all must hold):
+    - TRUSTED_LOGIN_IPS is configured.
+    - Host header is a LAN UI host (never the public instamagic.schimmel.com.ar).
+    - The path is not a public endpoint.
+    - The TCP peer is the in-stack nginx (private/loopback address).
+    - X-Real-IP is a single valid IP and X-Forwarded-For, if present, is exactly the
+      same single IP (nginx overwrites both with $remote_addr; any appended/spoofed
+      chain such as "10.1.1.150, 1.2.3.4" is refused).
+    - That IP is inside TRUSTED_LOGIN_IPS.
+    """
+    networks = settings.trusted_login_networks()
+    if not networks:
+        return None
+    host = (request.headers.get("host") or "").strip().lower()
+    if host.startswith("["):
+        return None
+    host = host.split(":", 1)[0]
+    if not host or host not in settings.trusted_login_host_set():
+        return None
+    if request.url.path.startswith("/api/public/"):
+        return None
+    peer = request.client.host if request.client else ""
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return None
+    if not (peer_ip.is_private or peer_ip.is_loopback):
+        return None
+    real_values = request.headers.getlist("x-real-ip") if hasattr(request.headers, "getlist") else [
+        request.headers.get("x-real-ip", "")
+    ]
+    if len(real_values) != 1:
+        return None
+    real = real_values[0].strip()
+    if not real or "," in real:
+        return None
+    try:
+        real_ip = ipaddress.ip_address(real)
+    except ValueError:
+        return None
+    forwarded_values = (
+        request.headers.getlist("x-forwarded-for") if hasattr(request.headers, "getlist") else []
+    )
+    if len(forwarded_values) > 1:
+        return None
+    if forwarded_values and forwarded_values[0].strip() != real:
+        return None
+    if not any(real_ip in network for network in networks):
+        return None
+    return str(real_ip)
 
 
 def login_is_blocked(failures: Mapping[str, list[float]], ip: str, *, now: float | None = None) -> bool:

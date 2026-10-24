@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { VersionChip } from "../VersionChip";
@@ -9,6 +9,19 @@ export function LoginPage() {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+
+  // Already signed in (valid cookie or trusted LAN device)? Skip the password form.
+  useEffect(() => {
+    let cancelled = false;
+    api<{ authenticated: boolean }>("/api/auth/session")
+      .then(() => {
+        if (!cancelled) navigate("/", { replace: true });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();

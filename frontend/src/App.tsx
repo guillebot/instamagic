@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
-import { api } from "./api";
+import { ApiError, api } from "./api";
 import { SystemHealthBar } from "./SystemHealthBar";
 import { VersionChip } from "./VersionChip";
 import { LoginPage } from "./pages/Login";
@@ -22,14 +22,21 @@ function Shell() {
   const session = useQuery({
     queryKey: ["session"],
     queryFn: () => api<{ authenticated: boolean }>("/api/auth/session"),
-    retry: false,
+    // Only a real 401 means "logged out". A 502/504 or network error while the
+    // stack restarts or deploys must not bounce you to the login page.
+    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 401) && failureCount < 1000,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
   });
 
-  if (session.isLoading) {
-    return <p className="page">Loading session…</p>;
-  }
-  if (session.isError) {
+  if (session.isError && session.error instanceof ApiError && session.error.status === 401) {
     return <Navigate to="/login" replace />;
+  }
+  if (session.isLoading || session.isError) {
+    return (
+      <p className="page">
+        {session.failureCount > 0 ? "Instamagic is restarting… reconnecting" : "Loading session…"}
+      </p>
+    );
   }
 
   return (
