@@ -4,8 +4,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0024_engage"
-down_revision = "0023_enrichment_prefetch"
+revision = "0025_engage"
+down_revision = "0024_gemini_refusals"
 branch_labels = None
 depends_on = None
 
