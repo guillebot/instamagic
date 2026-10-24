@@ -14,6 +14,7 @@ import { InsightsPage } from "./pages/Insights";
 import { SchedulePage } from "./pages/Schedule";
 import { RelatedAccountsPage } from "./pages/RelatedAccounts";
 import { ReviewPage } from "./pages/Review";
+import { StatusPage } from "./pages/Status";
 import { Route, Routes } from "react-router-dom";
 
 function Shell() {
@@ -52,6 +53,7 @@ function Shell() {
           <NavLink to="/inbox">Inbox</NavLink>
           <NavLink to="/engage">Engage</NavLink>
           <NavLink to="/instagram">Instagram</NavLink>
+          <NavLink to="/status">Status</NavLink>
           <button
             className="ghost"
             onClick={() => {
@@ -84,6 +86,7 @@ export function App() {
         <Route path="/inbox" element={<InboxPage />} />
         <Route path="/engage" element={<EngagePage />} />
         <Route path="/instagram" element={<InstagramPage />} />
+        <Route path="/status" element={<StatusPage />} />
       </Route>
     </Routes>
   );
