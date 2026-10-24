@@ -117,6 +117,7 @@ class PostingScheduleConfigIn(BaseModel):
     story_border_color_default: str | None = Field(default=None, max_length=16)
     blur_coverage_threshold: int | None = Field(default=None, ge=60, le=100)
     blur_region_padding_px: int | None = Field(default=None, ge=0, le=20)
+    blur_detector_overrules_coverage: bool | None = None
 
 
 class RelatedAccountIn(BaseModel):
@@ -382,6 +383,9 @@ class ImageOut(BaseModel):
     publish_preview_url: str | None = None
     blur_unlock_status: str = "none"
     blur_unlock_message: str | None = None
+    # Flagged (DO_NOT_POST) or any blur covers: safe/excellent needs a verified blur first.
+    blur_verification_required: bool = False
+    blur_verified: bool = False
     blur_unlock_highlights: list[dict[str, object]] = Field(default_factory=list)
     gemini_label_status: str | None = None
     gemini_label_at: datetime | None = None

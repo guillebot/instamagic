@@ -32,6 +32,7 @@ from instamagic.models import (
 )
 from instamagic.models.enums import JobKind
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
+from instamagic.services.blurs.rating_gate import BLUR_NOT_VERIFIED_GEMINI, fresh_blur_gate_passes
 from instamagic.services.blurs.unlock import blur_unlock_effective
 from instamagic.services.gemini.context import (
     build_context,
@@ -278,6 +279,7 @@ def label_one_image(
                 has_approved_covering_blur=covering,
                 has_approved_blur=bool(gate_kwargs["has_approved_blur"]),
                 do_not_post_blur_unlocked=bool(gate_kwargs["do_not_post_blur_unlocked"]),
+                blur_verification_pending=bool(gate_kwargs["blur_verification_pending"]),
                 policy=policy,
                 operator_confirmed=True,
                 content_tags=tags,
@@ -295,6 +297,12 @@ def label_one_image(
 
         # Final pre-send re-check (raises PrefetchIneligible; caller rolls back, nothing is sent).
         assert_prefetch_safe(session, image, max_score=get_settings().enrich_prefetch_max_score)
+    # Final pre-send blur re-check straight from the database: a flagged or blurred photo goes out
+    # only with a verified blur matching its current covers.
+    if not fresh_blur_gate_passes(session, image):
+        image.gemini_label_status = format_blocked_status(BLUR_NOT_VERIFIED_GEMINI)
+        image.gemini_label_at = datetime.now(UTC)
+        return "blocked"
     try:
         result = provider.label_image(
             context,

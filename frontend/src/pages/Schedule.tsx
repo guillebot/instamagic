@@ -21,6 +21,7 @@ export function SchedulePage() {
   const [storyDefault, setStoryDefault] = useState(false);
   const [blurCoverageThreshold, setBlurCoverageThreshold] = useState(95);
   const [blurRegionPadding, setBlurRegionPadding] = useState(6);
+  const [detectorOverrules, setDetectorOverrules] = useState(true);
 
   const saveConfig = useMutation({
     mutationFn: () =>
@@ -35,6 +36,7 @@ export function SchedulePage() {
           story_share_default: storyDefault,
           blur_coverage_threshold: blurCoverageThreshold,
           blur_region_padding_px: blurRegionPadding,
+          blur_detector_overrules_coverage: detectorOverrules,
         }),
       }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["posting-schedule-config"] }),
@@ -65,6 +67,7 @@ export function SchedulePage() {
     setStoryDefault(config.data.story_share_default ?? false);
     setBlurCoverageThreshold(config.data.blur_coverage_threshold ?? 95);
     setBlurRegionPadding(config.data.blur_region_padding_px ?? 6);
+    setDetectorOverrules(config.data.blur_detector_overrules_coverage ?? true);
   }, [config.data]);
 
   const paused = config.data?.paused ?? false;
@@ -145,6 +148,14 @@ export function SchedulePage() {
                 value={blurRegionPadding}
                 onChange={(e) => setBlurRegionPadding(Number(e.target.value))}
               />
+            </label>
+            <label title="When the detector re-check on the blurred render finds nothing, the blur is verified even if coverage is below the threshold (shown as a warning). A detector hit always blocks.">
+              <input
+                type="checkbox"
+                checked={detectorOverrules}
+                onChange={(e) => setDetectorOverrules(e.target.checked)}
+              />{" "}
+              Detector pass overrules coverage
             </label>
           </div>
         </section>

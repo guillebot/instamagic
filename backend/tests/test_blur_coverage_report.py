@@ -120,6 +120,10 @@ def test_coverage_endpoint_tracks_current_geometry_and_names_failed_check(client
     assert not any(row["covered"] for row in report["regions"])
     assert report["verification"]["recheck"] == "not_run"
 
+    # Strict mode: coverage is a hard gate only when the detector-overrule setting is off.
+    off = client.put("/api/posting-schedule/config", json={"blur_detector_overrules_coverage": False})
+    assert off.status_code == 200, off.text
+    assert off.json()["blur_detector_overrules_coverage"] is False
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     detail = client.get(f"/api/images/{image_id}").json()
     assert detail["blur_unlock_status"] == "failed"
@@ -165,3 +169,51 @@ def test_hard_cover_counts_fully_in_coverage() -> None:
     hard_cov = region_coverage_rows([hard], [box], (400, 400))[0]["coverage"]
     assert hard_cov >= 0.99
     assert hard_cov > soft_cov
+
+
+def test_detector_pass_overrules_low_coverage(client, app_env) -> None:
+    image_id = _blocked_image(client, app_env)
+    assert client.get("/api/posting-schedule/config").json()["blur_detector_overrules_coverage"] is True
+    suggested = client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"})
+    assert suggested.status_code == 200, suggested.text
+    blur = suggested.json()[0]
+    moved = client.patch(f"/api/images/{image_id}/blurs/{blur['id']}", json={"x": 0, "y": 500, "height": 60})
+    assert moved.status_code == 200, moved.text
+    assert client.get(f"/api/images/{image_id}/blur-coverage").json()["coverage_check"] == "fail"
+
+    assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
+    detail = client.get(f"/api/images/{image_id}").json()
+    assert detail["blur_unlock_status"] == "verified"
+    assert detail["blur_verified"] is True
+    message = detail["blur_unlock_message"]
+    assert message.startswith("SAFE · BLURRED")
+    assert "below 95%" in message and "overruled by detector pass" in message
+    report = client.get(f"/api/images/{image_id}/blur-coverage").json()
+    assert report["verification"]["coverage_overruled"] is True
+
+    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
+    assert client.post("/api/queue", json={"image_id": image_id}).status_code == 201
+
+    # Turning the setting off revokes the overruled verification (gate re-checks coverage).
+    client.put("/api/posting-schedule/config", json={"blur_detector_overrules_coverage": False})
+    detail = client.get(f"/api/images/{image_id}").json()
+    assert detail["blur_verified"] is False
+
+
+def test_detector_fail_still_blocks_with_overrule_on(client, app_env) -> None:
+    image_id = _blocked_image(client, app_env)
+    suggested = client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"})
+    blur = suggested.json()[0]
+    client.patch(f"/api/images/{image_id}/blurs/{blur['id']}", json={"x": 0, "y": 500, "height": 60})
+    unsafe = SafetySignals(
+        regions=[Region("FEMALE_BREAST_EXPOSED", 0.96, Box(10, 10, 80, 80))],
+        detector_available=True,
+        uncertain=False,
+        model_name="test",
+    )
+    with patch("instamagic.services.blurs.unlock._classify_render", return_value=unsafe):
+        assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
+    detail = client.get(f"/api/images/{image_id}").json()
+    assert detail["blur_unlock_status"] == "failed"
+    assert detail["blur_verified"] is False
+    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 409

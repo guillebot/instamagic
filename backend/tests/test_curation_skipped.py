@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from tests.conftest import login
+from tests.conftest import legacy_rate, login
 
 
 def _marked(path: Path, color: tuple[int, int, int], box: tuple[int, int, int, int]) -> None:
@@ -29,8 +29,15 @@ def _seed(client, library: Path) -> tuple[str, dict[str, str]]:
     assert client.post(f"/api/libraries/{library_id}/scan").status_code == 202
     items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()["items"]
     ids = {item["filename"]: item["id"] for item in items}
-    for image_id in ids.values():
-        assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
+    for name, image_id in ids.items():
+        response = client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
+        if name == "blocked-frame.jpg":
+            # The API refuses safe on a flagged, unverified photo; seed it as a legacy row so
+            # the skipped/why-not-picked gates are still exercised on their own.
+            assert response.status_code == 409, response.text
+            legacy_rate(image_id, "safe")
+        else:
+            assert response.status_code == 200
     return library_id, ids
 
 
@@ -48,6 +55,9 @@ def test_why_not_picked_reasons_and_safe_thumbnails(client, app_env) -> None:
         json={"x": 140, "y": 72, "width": 50, "height": 168, "shape": "rectangle", "strength": "standard"},
     )
     assert cover.status_code == 201, cover.text
+    # A blur edit on an unverified photo drops it back to review (blur and verify first).
+    assert client.get(f"/api/images/{blocked}").json()["human_rating"] == "review"
+    legacy_rate(blocked, "safe")  # legacy row: the curation gate must still skip it on its own
     before = {image_id: _state(client, image_id) for image_id in ids.values()}
 
     created = client.post(
@@ -106,7 +116,8 @@ def test_since_last_run_summary(client, app_env) -> None:
     assert client.post("/api/curation", json=body).status_code == 201
     time.sleep(1.2)  # SQLite rating timestamps have one-second resolution
     # Re-rate one image after the first run; it counts as "since last run".
-    assert client.post(f"/api/images/{ids['blocked-frame.jpg']}/rating", json={"rating": "excellent"}).status_code == 200
+    assert client.post(f"/api/images/{ids['blocked-frame.jpg']}/rating", json={"rating": "excellent"}).status_code == 409
+    legacy_rate(ids["blocked-frame.jpg"], "excellent")
     second = client.post("/api/curation", json=body).json()
     skipped = second["skipped"]
     assert skipped["since"] is not None

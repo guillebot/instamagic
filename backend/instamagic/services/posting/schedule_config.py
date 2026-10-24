@@ -43,6 +43,7 @@ class ScheduleConfigView:
     blur_coverage_threshold: int
     blur_region_padding_px: int
     updated_at: datetime | None
+    blur_detector_overrules_coverage: bool = True
 
 
 def _parse_slots(raw: str) -> dict[str, list[str]]:
@@ -77,6 +78,7 @@ def get_or_create_config(session: Session) -> PostingScheduleConfig:
             story_border_color_default="black",
             blur_coverage_threshold=DEFAULT_COVERAGE_THRESHOLD_PERCENT,
             blur_region_padding_px=DEFAULT_REGION_PADDING_PX,
+            blur_detector_overrules_coverage=True,
         )
         session.add(row)
         session.commit()
@@ -100,6 +102,7 @@ def config_view(session: Session) -> ScheduleConfigView:
         story_border_color_default=row.story_border_color_default,
         blur_coverage_threshold=int(row.blur_coverage_threshold or DEFAULT_COVERAGE_THRESHOLD_PERCENT),
         blur_region_padding_px=int(row.blur_region_padding_px or DEFAULT_REGION_PADDING_PX),
+        blur_detector_overrules_coverage=row.blur_detector_overrules_coverage is not False,
         updated_at=row.updated_at,
     )
 
@@ -117,6 +120,7 @@ def update_config(
     story_border_color_default: str | None = None,
     blur_coverage_threshold: int | None = None,
     blur_region_padding_px: int | None = None,
+    blur_detector_overrules_coverage: bool | None = None,
 ) -> ScheduleConfigView:
     row = get_or_create_config(session)
     if timezone is not None:
@@ -140,6 +144,8 @@ def update_config(
         row.blur_coverage_threshold = validate_threshold_percent(blur_coverage_threshold)
     if blur_region_padding_px is not None:
         row.blur_region_padding_px = validate_padding_px(blur_region_padding_px)
+    if blur_detector_overrules_coverage is not None:
+        row.blur_detector_overrules_coverage = bool(blur_detector_overrules_coverage)
     session.commit()
     return config_view(session)
 
@@ -156,5 +162,6 @@ def config_as_dict(view: ScheduleConfigView) -> dict[str, Any]:
         "story_border_color_default": view.story_border_color_default,
         "blur_coverage_threshold": view.blur_coverage_threshold,
         "blur_region_padding_px": view.blur_region_padding_px,
+        "blur_detector_overrules_coverage": view.blur_detector_overrules_coverage,
         "updated_at": view.updated_at,
     }

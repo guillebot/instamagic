@@ -374,6 +374,7 @@ class PostingScheduleConfig(Base):
     story_border_color_default: Mapped[str] = mapped_column(String(16), default="black", server_default="black")
     blur_coverage_threshold: Mapped[int] = mapped_column(Integer, default=95, server_default="95")
     blur_region_padding_px: Mapped[int] = mapped_column(Integer, default=6, server_default="6")
+    blur_detector_overrules_coverage: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     enrichment_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     enrichment_paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     enrichment_daily_cap: Mapped[int] = mapped_column(Integer, default=400, server_default="400")

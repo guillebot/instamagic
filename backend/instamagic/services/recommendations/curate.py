@@ -31,6 +31,7 @@ from instamagic.models import (
     TagSource,
 )
 from instamagic.models.enums import CurationBatchStatus, CurationPickStatus, JobKind, JobStatus
+from instamagic.services.blurs.unlock import blur_gate_passes
 from instamagic.services.gemini.captions import CaptionDraft
 from instamagic.services.gemini.context import (
     build_context,
@@ -507,6 +508,7 @@ def execute_curation_batch(
             safe_description=sample.description,
             crop=sample_crop if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value else None,
             gemini_refused=any(is_gemini_refused(item.image) for item in shortlist),
+            blur_verification_pending=any(not blur_gate_passes(session, item.image) for item in shortlist),
         ),
         account_voice=account_voice,
     )
@@ -783,6 +785,7 @@ def run_curation(
             safe_description=sample.description,
             crop=sample_crop if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value else None,
             gemini_refused=any(is_gemini_refused(item.image) for item in shortlist),
+            blur_verification_pending=any(not blur_gate_passes(session, item.image) for item in shortlist),
         ),
         account_voice=account_voice,
     )

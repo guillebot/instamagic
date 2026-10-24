@@ -19,6 +19,7 @@ MAX_REGION_PADDING_PX = 20
 class BlurCoverageSettings:
     threshold_percent: int
     padding_px: int
+    detector_overrules_coverage: bool = True
 
     @property
     def min_ratio(self) -> float:
@@ -54,6 +55,7 @@ def _from_row(row: object) -> BlurCoverageSettings:
     return BlurCoverageSettings(
         threshold_percent=_clamp_threshold(threshold if threshold is not None else DEFAULT_COVERAGE_THRESHOLD_PERCENT),
         padding_px=_clamp_padding(padding if padding is not None else DEFAULT_REGION_PADDING_PX),
+        detector_overrules_coverage=getattr(row, "blur_detector_overrules_coverage", True) is not False,
     )
 
 

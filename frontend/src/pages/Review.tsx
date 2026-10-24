@@ -12,7 +12,7 @@ import {
 } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
-import { BlurPanel } from "../BlurPanel";
+import { BLUR_VERIFY_FIRST, BlurPanel, ratingNeedsBlur } from "../BlurPanel";
 import { ClassifyPublishPanel } from "../ClassifyPublishPanel";
 import { CropPanel } from "../CropPanel";
 import { ActionLabel, KeyHint } from "../KeyHint";
@@ -650,6 +650,8 @@ export function ReviewPage() {
     setRatingBusy(true);
     try {
       await applyRating(current.id, rating);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setRatingBusy(false);
     }
@@ -677,6 +679,8 @@ export function ReviewPage() {
     try {
       await applyRating(current.id, rating);
       advanceInClassifySet();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setRatingBusy(false);
     }
@@ -859,6 +863,11 @@ export function ReviewPage() {
         // 1–4 always rate-and-advance so crop/blur + rate stays one stop.
         if (RATINGS[event.key]) {
           event.preventDefault();
+          if (ratingNeedsBlur(current, RATINGS[event.key])) {
+            setPrepMode("blur");
+            setMessage(`${BLUR_VERIFY_FIRST}: approve the covers so the blurred photo is checked, then rate.`);
+            return;
+          }
           setPrepMode("rate");
           void rateAndAdvance(RATINGS[event.key]);
           return;
@@ -1271,21 +1280,36 @@ export function ReviewPage() {
             />
             <div className="classify-toolbar">
               <div className="classify-ratings">
-                {RATING_KEYS.map(({ key, rating, label }) => (
-                  <button
-                    key={rating}
-                    type="button"
-                    className={current.human_rating === rating ? "button active-rating" : "ghost"}
-                    disabled={ratingBusy}
-                    onClick={() => {
-                      setPrepMode("rate");
-                      void rateAndAdvance(rating);
-                    }}
-                  >
-                    <ActionLabel label={label} shortcut={key} />
-                  </button>
-                ))}
+                {RATING_KEYS.map(({ key, rating, label }) => {
+                  const locked = ratingNeedsBlur(current, rating);
+                  return (
+                    <button
+                      key={rating}
+                      type="button"
+                      className={current.human_rating === rating ? "button active-rating" : "ghost"}
+                      disabled={ratingBusy || locked}
+                      title={locked ? BLUR_VERIFY_FIRST : undefined}
+                      data-testid={`rate-${rating}`}
+                      onClick={() => {
+                        setPrepMode("rate");
+                        void rateAndAdvance(rating);
+                      }}
+                    >
+                      <ActionLabel label={label} shortcut={key} />
+                    </button>
+                  );
+                })}
               </div>
+              {ratingNeedsBlur(current, "safe") ? (
+                <div className="classify-blur-first" role="status" data-testid="blur-verify-first">
+                  <span>{BLUR_VERIFY_FIRST}</span>
+                  {prepMode !== "blur" ? (
+                    <button type="button" className="button" onClick={() => setPrepMode("blur")}>
+                      <ActionLabel label="Open blur editor" shortcut="B" />
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <p className="classify-meta">
                 model {current.model_state ?? "unreviewed"} · rating {current.human_rating ?? "none"}
                 {current.has_approved_crop ? " · crop ✓" : ""}

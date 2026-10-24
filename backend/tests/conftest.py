@@ -63,3 +63,25 @@ def login(client: TestClient) -> None:
 def write_jpeg(path: Path, size: tuple[int, int] = (400, 600), color: tuple[int, int, int] = (20, 40, 80)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", size, color).save(path, format="JPEG", quality=90)
+
+
+def legacy_rate(image_id: str, rating: str) -> None:
+    """Rate an image bypassing the blur-verify-first API gate.
+
+    Simulates rows rated before the gate existed (the audit demotes those); tests use it to
+    prove every downstream gate still blocks such legacy rows on its own.
+    """
+    from uuid import UUID
+
+    from instamagic.db import session_factory
+    from instamagic.models import Image
+    from instamagic.services.pipeline import rate_image
+
+    session = session_factory()()
+    try:
+        image = session.get(Image, UUID(str(image_id)))
+        assert image is not None
+        rate_image(session, image, rating)
+        session.commit()
+    finally:
+        session.close()

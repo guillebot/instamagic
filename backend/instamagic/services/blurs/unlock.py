@@ -1,4 +1,4 @@
-"""Blur-to-unlock verification for DO_NOT_POST images."""
+"""Blur verification: DO_NOT_POST unlock, and the rule that any blurred photo must be verified."""
 
 from __future__ import annotations
 
@@ -121,9 +121,27 @@ def coverage_gate_passes(
     return all(row.coverage >= gate.min_ratio for row in coverages)
 
 
+def requires_blur_verification(image: Image) -> bool:
+    """A photo the model flagged, or any photo with blur covers, must pass blur verification
+    before it can be rated safe/excellent or have any pixels sent to Gemini."""
+    return image.model_state == SafetyState.DO_NOT_POST.value or bool(image.blurs)
+
+
 def blur_unlock_effective(session: Session, image: Image) -> bool:
     if image.model_state != SafetyState.DO_NOT_POST.value:
         return False
+    return blur_covers_verified(session, image)
+
+
+def blur_gate_passes(session: Session, image: Image) -> bool:
+    """True when the photo needs no blur verification, or its current covers are verified."""
+    if not requires_blur_verification(image):
+        return True
+    return blur_covers_verified(session, image)
+
+
+def blur_covers_verified(session: Session, image: Image) -> bool:
+    """Verified unlock that still matches the current approved covers (any model_state)."""
     if image.blur_unlock_status != BlurUnlockStatus.VERIFIED.value:
         return False
     if not image.blur_unlock_geometry_hash:
@@ -133,21 +151,43 @@ def blur_unlock_effective(session: Session, image: Image) -> bool:
     if blur_geometry_hash(image.blurs) != image.blur_unlock_geometry_hash:
         return False
     gate = blur_coverage_settings(session)
+    details: dict[str, Any] = {}
     if image.blur_unlock_details_json:
         try:
             details = json.loads(image.blur_unlock_details_json)
         except json.JSONDecodeError:
             details = {}
+    if details.get("coverage_overruled"):
+        # The detector re-check passed on exactly this geometry (hash matched above);
+        # coverage is advisory while the overrule setting stays on.
+        return gate.detector_overrules_coverage
+    if details:
         verified_min = float(details.get("coverage_min", gate.min_ratio))
         if gate.min_ratio > verified_min:
             return False
     return coverage_gate_passes(session, image, gate)
 
 
-def unlock_summary_message(session: Session, image: Image) -> str | None:
-    if image.model_state != SafetyState.DO_NOT_POST.value:
+def coverage_warning(image: Image) -> str | None:
+    """Advisory coverage line when a detector pass overruled the coverage gate."""
+    if not image.blur_unlock_details_json:
         return None
-    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_unlock_effective(session, image):
+    try:
+        details = json.loads(image.blur_unlock_details_json)
+    except json.JSONDecodeError:
+        return None
+    if not details.get("coverage_overruled"):
+        return None
+    return details.get("coverage_warning") or "Coverage below threshold — overruled by detector pass"
+
+
+def unlock_summary_message(session: Session, image: Image) -> str | None:
+    if not requires_blur_verification(image):
+        return None
+    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_covers_verified(session, image):
+        warning = coverage_warning(image)
+        if warning:
+            return f"SAFE · BLURRED (verified by detector) · {warning}"
         return "SAFE · BLURRED (verified)"
     if image.blur_unlock_status == BlurUnlockStatus.FAILED.value and image.blur_unlock_details_json:
         try:
@@ -161,6 +201,10 @@ def unlock_summary_message(session: Session, image: Image) -> str | None:
         )
     if image.blurs and image.blur_unlock_status == BlurUnlockStatus.PENDING.value:
         return "Blur unlock pending verification."
+    if image.blurs:
+        return "Blur not verified. Approve the blur to verify it."
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        return "Flagged photo: blur and verify first."
     return None
 
 
@@ -202,8 +246,6 @@ def verify_blur_unlock(
     image: Image,
     classifier: object,
 ) -> UnlockVerification:
-    if image.model_state != SafetyState.DO_NOT_POST.value:
-        raise ValueError("Blur unlock applies only to DO_NOT_POST images.")
     if not image.blurs or not all(blur.approved for blur in image.blurs):
         raise ValueError("All blur covers must be approved before verification.")
 
@@ -275,7 +317,9 @@ def verify_blur_unlock(
         "geometry_version": blur_geometry_version(list(image.blurs)),
     }
 
-    if uncovered or detections:
+    details["detector_overrules_coverage"] = gate.detector_overrules_coverage
+    overruled = bool(uncovered) and not detections and gate.detector_overrules_coverage
+    if (uncovered and not overruled) or detections:
         message = unlock_summary_message_from_parts(uncovered, detections, coverage_min=gate.min_ratio)
         details["message"] = message
         return UnlockVerification(
@@ -286,6 +330,14 @@ def verify_blur_unlock(
         )
 
     details["message"] = "SAFE · BLURRED (verified)"
+    if overruled:
+        lowest = min(row["coverage"] for row in uncovered)
+        warning = (
+            f"Coverage {round(lowest * 100)}% (below {gate.threshold_percent}%) — overruled by detector pass"
+        )
+        details["coverage_overruled"] = True
+        details["coverage_warning"] = warning
+        details["message"] = f"SAFE · BLURRED (verified by detector) · {warning}"
     return UnlockVerification(
         status=BlurUnlockStatus.VERIFIED,
         geometry_hash=geometry_hash,
