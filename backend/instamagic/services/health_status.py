@@ -55,9 +55,17 @@ def publish_assets_probe_path() -> str:
     return f"/api/public/publish-assets/{_PUBLISH_PROBE_BOGUS_TOKEN}"
 
 
-def classify_publish_probe_status(status_code: int) -> tuple[HealthLevel, str]:
-    """Map HEAD publish-assets probe HTTP status to health level."""
-    if status_code == 409:
+PUBLISH_ASSET_REJECT_HEADER = "X-Instamagic-Asset"
+
+
+def classify_publish_probe_status(status_code: int, app_marker: bool = False) -> tuple[HealthLevel, str]:
+    """Map HEAD publish-assets probe HTTP status to health level.
+
+    The app answers bad tokens with 404 plus the X-Instamagic-Asset marker header
+    (identical for every bad token, so no oracle); a bare 404 means Traefik/nginx
+    never reached the app.
+    """
+    if status_code == 409 or (status_code == 404 and app_marker):
         return "ok", "publish-assets route reachable (token rejected)"
     if status_code == 404:
         return "warning", "public route not reaching the app"
@@ -289,7 +297,10 @@ def _probe_public_url(settings: Settings) -> tuple[HealthLevel, str]:
     try:
         with httpx.Client(timeout=1.5, follow_redirects=True) as client:
             response = client.head(url)
-        level, note = classify_publish_probe_status(response.status_code)
+        level, note = classify_publish_probe_status(
+            response.status_code,
+            app_marker=response.headers.get(PUBLISH_ASSET_REJECT_HEADER) == "rejected",
+        )
     except (httpx.ConnectError, httpx.NetworkError, httpx.TimeoutException) as exc:
         level, note = "down", f"connection failed ({type(exc).__name__})"
     except httpx.HTTPError as exc:
