@@ -51,30 +51,51 @@ def _scheduled_today_count(session: Session, config: ScheduleConfigView, now: da
     return int(count or 0)
 
 
-def _last_scheduled_at(session: Session) -> datetime | None:
-    return session.scalar(
-        select(func.max(PublishingQueueItem.scheduled_at)).where(PublishingQueueItem.scheduled_at.is_not(None))
-    )
+def _busy_times(session: Session, start: datetime, end: datetime) -> list[datetime]:
+    """Scheduled (approved/publishing) and published post times in [start, end]."""
+    scheduled = session.scalars(
+        select(PublishingQueueItem.scheduled_at).where(
+            PublishingQueueItem.scheduled_at.is_not(None),
+            PublishingQueueItem.scheduled_at >= start,
+            PublishingQueueItem.scheduled_at <= end,
+            PublishingQueueItem.state.in_([QueueState.APPROVED.value, QueueState.PUBLISHING.value]),
+        )
+    ).all()
+    published = session.scalars(
+        select(PublishingQueueItem.published_at).where(
+            PublishingQueueItem.published_at.is_not(None),
+            PublishingQueueItem.published_at >= start,
+            PublishingQueueItem.published_at <= end,
+        )
+    ).all()
+    out: list[datetime] = []
+    for value in [*scheduled, *published]:
+        if value is None:
+            continue
+        out.append(value if value.tzinfo else value.replace(tzinfo=UTC))
+    return out
 
 
 def next_available_slot(session: Session, config: ScheduleConfigView, now: datetime | None = None) -> datetime | None:
-    """Pick the next open slot respecting max_posts_per_day, min_gap_hours, and existing schedule."""
-    now = now or datetime.now(UTC)
-    if _scheduled_today_count(session, config, now) >= config.max_posts_per_day:
-        # Try tomorrow onward
-        tz = ZoneInfo(config.timezone)
-        tomorrow = now.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        candidates = best_slots(config, from_day=tomorrow.astimezone(UTC), days=21)
-    else:
-        candidates = [s for s in best_slots(config, from_day=now, days=21) if s > now]
+    """Pick the earliest open slot respecting max_posts_per_day and min_gap_hours.
 
-    last = _last_scheduled_at(session)
+    The min gap is checked against neighbouring posts on both sides (scheduled or
+    already published), so empty slots before a later scheduled item get filled
+    instead of always appending after the last scheduled post. Existing items are
+    never moved.
+    """
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    candidates = [s for s in best_slots(config, from_day=now, days=21) if s > now]
+    if not candidates:
+        return None
     min_gap = timedelta(hours=config.min_gap_hours)
+    busy = _busy_times(session, candidates[0] - min_gap, candidates[-1] + min_gap)
     for slot in candidates:
-        if last is not None and slot - last < min_gap:
+        if any(abs(slot - b) < min_gap for b in busy):
             continue
-        day_count = _scheduled_today_count(session, config, slot)
-        if day_count >= config.max_posts_per_day:
+        if _scheduled_today_count(session, config, slot) >= config.max_posts_per_day:
             continue
         return slot
     return None
@@ -94,6 +115,5 @@ def assign_auto_slots(session: Session, items: list[PublishingQueueItem], config
         item.schedule_mode = "auto_slot"
         session.flush()
         assigned += 1
-        now = slot
     session.commit()
     return assigned
