@@ -70,8 +70,15 @@ def _seed(client, library: Path) -> dict[str, str]:
     items = client.get("/api/images", params={"library_id": library_id, "limit": 50}).json()["items"]
     ids = {item["filename"]: item["id"] for item in items}
     for name, image_id in ids.items():
-        if name != "unrated.jpg":
-            assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
+        if name == "unrated.jpg":
+            continue
+        response = client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
+        if name == "blocked-frame.jpg":
+            # Flagged without a verified blur: rating safe is refused (blur and verify first).
+            assert response.status_code == 409, response.text
+            assert "Blur and verify first" in response.json()["detail"]
+        else:
+            assert response.status_code == 200
     return ids
 
 

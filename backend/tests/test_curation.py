@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from tests.conftest import login
+from tests.conftest import legacy_rate, login
 
 
 def _marked(path: Path, color: tuple[int, int, int], box: tuple[int, int, int, int]) -> None:
@@ -45,7 +45,8 @@ def _seed_rated_library(client, library: Path) -> tuple[str, str, str]:
         json={"x": crop["x"], "y": crop["y"], "width": crop["width"], "height": crop["height"]},
     )
     assert approved.status_code == 200
-    assert client.post(f"/api/images/{blocked_id}/rating", json={"rating": "safe"}).status_code == 200
+    assert client.post(f"/api/images/{blocked_id}/rating", json={"rating": "safe"}).status_code == 409
+    legacy_rate(blocked_id, "safe")
     return library_id, clean_id, blocked_id
 
 

@@ -153,6 +153,8 @@ def test_edit_after_queue_regates_and_publish_uses_new_geometry(client, app_env)
         json={"x": 20, "y": 20, "width": 80, "height": 80, "shape": "rectangle", "strength": "strong"},
     ).json()
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
+    # Adding the cover dropped the rating to review; rate after the blur is verified.
+    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
     assert client.post("/api/queue", json={"image_id": image_id}).status_code in (200, 201)
     before = client.get(f"/api/images/{image_id}/publish-preview").content
     story_before = client.get(f"/api/images/{image_id}/story-preview", headers=LAN).content

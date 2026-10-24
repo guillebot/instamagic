@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from instamagic.models.enums import HumanRating, SafetyState
 
+BLUR_NOT_VERIFIED_REASON = "Blur covers are not verified. Blur and verify first."
+
 
 @dataclass(frozen=True)
 class GateResult:
@@ -21,6 +23,7 @@ def publishing_gate(
     has_approved_covering_blur: bool = False,
     has_approved_blur: bool = False,
     do_not_post_blur_unlocked: bool = False,
+    blur_verification_pending: bool = False,
 ) -> GateResult:
     reasons: list[str] = []
     if not attested:
@@ -33,6 +36,8 @@ def publishing_gate(
         reasons.append("Verified blur unlock requires approved blur covers.")
     if needs_crop and not (has_approved_crop or has_approved_covering_blur):
         reasons.append("SAFE_AFTER_CROP requires an approved crop or covering blur.")
+    if blur_verification_pending:
+        reasons.append(BLUR_NOT_VERIFIED_REASON)
     return GateResult(allowed=not reasons, reasons=reasons)
 
 
@@ -48,6 +53,7 @@ def gemini_gate(
     has_approved_covering_blur: bool = False,
     has_approved_blur: bool = False,
     do_not_post_blur_unlocked: bool = False,
+    blur_verification_pending: bool = False,
 ) -> GateResult:
     result = publishing_gate(
         attested=attested,
@@ -58,6 +64,7 @@ def gemini_gate(
         has_approved_covering_blur=has_approved_covering_blur,
         has_approved_blur=has_approved_blur,
         do_not_post_blur_unlocked=do_not_post_blur_unlocked,
+        blur_verification_pending=blur_verification_pending,
     )
     reasons = list(result.reasons)
     # Human "review" rating is blocked. Classifier REVIEW with human safe/excellent is allowed.

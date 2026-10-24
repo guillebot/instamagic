@@ -190,13 +190,14 @@ def _blurred_published_with_delayed_story(client, app_env, name: str) -> tuple[s
     library_id = _library(client, library)
     items = client.get("/api/images", params={"library_id": library_id}).json()["items"]
     image_id = items[0]["id"]
-    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "excellent"}).status_code == 200
     manual = client.post(
         f"/api/images/{image_id}/blurs",
         json={"x": 200, "y": 250, "width": 400, "height": 400, "strength": "standard", "reason": "Cover."},
     )
     assert manual.status_code == 201, manual.text
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
+    # Blur first, verify, then rate.
+    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "excellent"}).status_code == 200
     captions = client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).json()
     queue = client.post(
         "/api/queue",

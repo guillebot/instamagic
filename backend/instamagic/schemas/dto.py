@@ -382,6 +382,9 @@ class ImageOut(BaseModel):
     publish_preview_url: str | None = None
     blur_unlock_status: str = "none"
     blur_unlock_message: str | None = None
+    # Flagged (DO_NOT_POST) or any blur covers: safe/excellent needs a verified blur first.
+    blur_verification_required: bool = False
+    blur_verified: bool = False
     blur_unlock_highlights: list[dict[str, object]] = Field(default_factory=list)
     gemini_label_status: str | None = None
     gemini_label_at: datetime | None = None

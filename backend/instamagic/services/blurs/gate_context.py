@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from instamagic.models import Image
 from instamagic.models.enums import SafetyState
-from instamagic.services.blurs.unlock import blur_unlock_effective
+from instamagic.services.blurs.unlock import blur_gate_passes, blur_unlock_effective
 from instamagic.services.recommendations.gemini_derivatives import has_approved_covering_blur
 from sqlalchemy.orm import Session
 
@@ -21,4 +21,5 @@ def publishing_gate_kwargs(session: Session, image: Image) -> dict:
         "has_approved_covering_blur": covering,
         "has_approved_blur": has_blur,
         "do_not_post_blur_unlocked": blur_unlock_effective(session, image),
+        "blur_verification_pending": not blur_gate_passes(session, image),
     }

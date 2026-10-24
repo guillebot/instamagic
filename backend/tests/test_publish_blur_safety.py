@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import UUID
 
 import numpy as np
+import pytest
 from instamagic.services.images.presentation import publish_variant, publish_variant_label
 from PIL import Image as PilImage
 from PIL import ImageDraw
@@ -54,9 +55,13 @@ def test_unapproved_blur_blocks_queue(client, app_env) -> None:
         json={"x": 40, "y": 40, "width": 80, "height": 80, "strength": "strong"},
     )
     assert drawn.status_code == 201, drawn.text
+    # Drawing a cover drops the rating to review until the blur is approved and verified.
+    assert client.get(f"/api/images/{image_id}").json()["human_rating"] == "review"
     queued = client.post("/api/queue", json={"image_id": image_id})
     assert queued.status_code == 409
-    assert "Blur drawn but not approved" in queued.text
+    assert "Blur covers are not verified" in queued.text
+    refused = client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
+    assert refused.status_code == 409 and "Blur and verify first" in refused.text
 
 
 def test_api_returns_blurred_thumbnail_url(client, app_env) -> None:
@@ -67,14 +72,15 @@ def test_api_returns_blurred_thumbnail_url(client, app_env) -> None:
     items = client.get("/api/images", params={"library_id": library_id}).json()["items"]
     unsafe = next(item for item in items if item["model_state"] == "SAFE_AFTER_CROP")
     image_id = unsafe["id"]
-    client.post(f"/api/images/{unsafe['id']}/rating", json={"rating": "safe"})
     assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "standard"}).status_code == 200
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
+    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
     detail = client.get(f"/api/images/{image_id}").json()
     assert detail["thumbnail_url"].startswith(f"/api/derivatives/{image_id}/blurred-thumbnail?v=")
     assert detail["preview_url"].startswith(f"/api/derivatives/{image_id}/blurred-preview?v=")
     assert detail["publish_variant"] == "BLURRED"
-    assert detail["publish_variant_label"] == "SAFE · BLURRED"
+    assert detail["publish_variant_label"].startswith("SAFE · BLURRED")
+    assert detail["blur_verified"] is True
     thumb = client.get(detail["thumbnail_url"])
     assert thumb.status_code == 200
 
@@ -103,7 +109,9 @@ def test_crop_plus_blur_publish_uses_blurred_pixels(client, app_env) -> None:
     """Regression: approved crop must be taken from the blurred canvas, not the original."""
     from instamagic.config import get_settings
     from instamagic.db import session_factory
+    from instamagic.errors import NotAllowed
     from instamagic.models import BlurCover, CropSuggestion, Image
+    from instamagic.services.blurs.unlock import apply_unlock_result, verify_blur_unlock
     from instamagic.services.instagram.publish_derivative import ensure_publish_derivative
     from sqlalchemy.orm import selectinload
 
@@ -150,6 +158,16 @@ def test_crop_plus_blur_publish_uses_blurred_pixels(client, app_env) -> None:
             approved=True,
         )
         session.add_all([blur, crop])
+        session.commit()
+        session.refresh(image)
+
+        # Unverified covers never reach a publish render.
+        with pytest.raises(NotAllowed):
+            ensure_publish_derivative(session, settings, image, crop)
+        session.rollback()
+        session.refresh(image)
+        result = verify_blur_unlock(session, settings, image, client.app.state.classifier)
+        apply_unlock_result(image, result)
         session.commit()
         session.refresh(image)
 

@@ -30,6 +30,7 @@ from instamagic.errors import GeminiBlocked, GeminiEmpty, GeminiRateLimited, Gem
 from instamagic.logging_config import get_logger
 from instamagic.models import Caption, Image, ImageTag, SafetyState
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
+from instamagic.services.blurs.rating_gate import BLUR_NOT_VERIFIED_GEMINI, fresh_blur_gate_passes
 from instamagic.services.gemini.context import build_context, build_prefetch_context
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.gemini.labeling import format_blocked_status, should_retry_label
@@ -263,6 +264,8 @@ def generate_hashtags(
         )
         # Final pre-send re-check (raises PrefetchIneligible; nothing is sent).
         assert_prefetch_safe(session, image, max_score=max_score)
+        if not fresh_blur_gate_passes(session, image):
+            raise GeminiBlocked(BLUR_NOT_VERIFIED_GEMINI)
         suggestion = growth_provider.suggest_hashtags(context, account_voice=account_voice)
         return suggest_tags_from_research(session, suggestion.tags)
     context = append_voice_to_context(
@@ -275,6 +278,7 @@ def generate_hashtags(
             has_approved_covering_blur=bool(gate_kwargs["has_approved_covering_blur"]),
             has_approved_blur=bool(gate_kwargs["has_approved_blur"]),
             do_not_post_blur_unlocked=bool(gate_kwargs["do_not_post_blur_unlocked"]),
+            blur_verification_pending=bool(gate_kwargs["blur_verification_pending"]),
             policy="text_only",
             operator_confirmed=True,
             content_tags=tags,
@@ -286,6 +290,8 @@ def generate_hashtags(
         ),
         account_voice=account_voice,
     )
+    if not fresh_blur_gate_passes(session, image):
+        raise GeminiBlocked(BLUR_NOT_VERIFIED_GEMINI)
     suggestion = growth_provider.suggest_hashtags(context, account_voice=account_voice)
     return suggest_tags_from_research(session, suggestion.tags)
 

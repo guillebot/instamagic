@@ -134,15 +134,18 @@ def test_captions_allowed_after_verified_blur_unlock(client, app_env) -> None:
     login(client)
     library_id = _attested_library(client, library)
     image_id = client.get("/api/images", params={"library_id": library_id}).json()["items"][0]["id"]
-    client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
-    # Before any verified unlock, DO_NOT_POST still blocks caption generation.
+    # Flagged and unverified: rating safe is refused, and caption generation is blocked.
+    refused = client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
+    assert refused.status_code == 409 and "Blur and verify first" in refused.text
     assert client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409
     assert client.post(f"/api/images/{image_id}/blurs/suggest", json={"strength": "strong"}).status_code == 200
     assert client.post(f"/api/images/{image_id}/blurs/approve").status_code == 200
     assert client.get(f"/api/images/{image_id}").json()["blur_unlock_status"] == "verified"
+    assert client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"}).status_code == 200
     captions = client.post(f"/api/images/{image_id}/captions", json={"confirmed": True})
     assert captions.status_code == 201, captions.text
     assert captions.json()
     # Editing covers after verification resets the unlock and blocks captions again.
     assert client.post(f"/api/images/{image_id}/blurs/strength", json={"strength": "subtle"}).status_code == 200
+    assert client.get(f"/api/images/{image_id}").json()["human_rating"] == "review"
     assert client.post(f"/api/images/{image_id}/captions", json={"confirmed": True}).status_code == 409

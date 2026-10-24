@@ -80,6 +80,7 @@ def build_context(
     has_approved_blur: bool = False,
     do_not_post_blur_unlocked: bool = False,
     gemini_refused: bool = False,
+    blur_verification_pending: bool = False,
 ) -> GeminiContext:
     if gemini_refused:
         raise GeminiBlocked("Gemini previously refused this photo; it is never sent again.")
@@ -92,6 +93,7 @@ def build_context(
         has_approved_covering_blur=has_approved_covering_blur,
         has_approved_blur=has_approved_blur,
         do_not_post_blur_unlocked=do_not_post_blur_unlocked,
+        blur_verification_pending=blur_verification_pending,
         operator_confirmed=operator_confirmed,
         policy=policy,
     )

@@ -110,8 +110,18 @@ from instamagic.services.blurs.generator import (
     manual_blur,
     with_strength,
 )
+from instamagic.services.blurs.rating_gate import (
+    BLUR_NOT_VERIFIED_GEMINI,
+    BLUR_VERIFY_FIRST,
+    demote_if_unverified,
+    fresh_blur_gate_passes,
+    rating_blocked_reason,
+)
 from instamagic.services.blurs.unlock import (
     apply_unlock_result,
+    blur_covers_verified,
+    blur_gate_passes,
+    requires_blur_verification,
     reset_blur_unlock,
     unlock_summary_message,
     verify_blur_unlock,
@@ -425,6 +435,8 @@ def _image_out(session: Session, image: Image, *, settings: Settings | None = No
         publish_variant_label=variant_label,
         blur_unlock_status=image.blur_unlock_status,
         blur_unlock_message=unlock_message,
+        blur_verification_required=requires_blur_verification(image),
+        blur_verified=requires_blur_verification(image) and blur_covers_verified(session, image),
         blur_unlock_highlights=highlights,
         thumbnail_url=thumbnail_url,
         preview_url=preview_url,
@@ -908,6 +920,9 @@ def rate(
         rating = body.normalized()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+    blocked = rating_blocked_reason(session, image, rating)
+    if blocked:
+        raise NotAllowed(blocked)
     rate_image(session, image, rating)
     session.refresh(image)
     if rating in {HumanRating.SAFE.value, HumanRating.EXCELLENT.value} and should_retry_label(
@@ -983,8 +998,25 @@ def approve_crop(
         item.approved = item.id == crop.id
     for blur in image.blurs:
         blur.approved = False
+    if image.blurs:
+        _blur_changed(session, image, reason="crop_approved_blurs_unapproved")
     session.commit()
     return _crop_out(image, crop)
+
+
+def _queue_item_images(session: Session, item: PublishingQueueItem) -> list[Image]:
+    images = [item.image] if item.image is not None else []
+    for slide in getattr(item, "slides", []) or []:
+        if slide.image is not None and slide.image not in images:
+            images.append(slide.image)
+    return images
+
+
+def _blur_changed(session: Session, image: Image, *, reason: str) -> None:
+    """Any blur edit invalidates verification; a safe/excellent rating drops back to review."""
+    reset_blur_unlock(image)
+    session.flush()
+    demote_if_unverified(session, image, reason=reason)
 
 
 @router.get("/api/images/{image_id}/blurs", response_model=list[BlurOut])
@@ -1045,8 +1077,7 @@ def create_blur(
     session.add(row)
     _reload_blurs(session, image)
     _refresh_blur_derivative(session, settings, image)
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        reset_blur_unlock(image)
+    _blur_changed(session, image, reason="blur_edit")
     session.commit()
     session.refresh(row)
     return _blur_out(image, row, settings)
@@ -1084,8 +1115,7 @@ def suggest_blur_covers(
     _refresh_blur_derivative(session, settings, image)
     for crop in image.crops:
         crop.approved = False
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        reset_blur_unlock(image)
+    _blur_changed(session, image, reason="blur_edit")
     session.commit()
     return [_blur_out(image, row, settings) for row in rows]
 
@@ -1108,8 +1138,7 @@ def set_blur_strength(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _refresh_blur_derivative(session, settings, image)
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        reset_blur_unlock(image)
+    _blur_changed(session, image, reason="blur_edit")
     session.commit()
     return [_blur_out(image, blur, settings) for blur in image.blurs]
 
@@ -1171,8 +1200,7 @@ def update_blur(
         if other.id != blur.id:
             other.approved = False
     _refresh_blur_derivative(session, settings, image)
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        reset_blur_unlock(image)
+    _blur_changed(session, image, reason="blur_edit")
     session.commit()
     session.refresh(blur)
     return _blur_out(image, blur, settings)
@@ -1193,8 +1221,7 @@ def delete_blur(
     session.delete(blur)
     _reload_blurs(session, image)
     _refresh_blur_derivative(session, settings, image)
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        reset_blur_unlock(image)
+    _blur_changed(session, image, reason="blur_edit")
     session.commit()
 
 
@@ -1247,20 +1274,24 @@ def approve_blurs(
     for blur in image.blurs:
         blur.approved = True
     session.flush()
-    if image.model_state == SafetyState.DO_NOT_POST.value:
-        try:
-            result = verify_blur_unlock(session, settings, image, request.app.state.classifier)
-        except ValueError as exc:
-            raise NotAllowed(str(exc)) from exc
-        apply_unlock_result(image, result)
-    else:
+    if image.model_state != SafetyState.DO_NOT_POST.value:
         if image.width is None or image.height is None:
             raise NotAllowed("Image dimensions are unknown.")
         if unsafe and not covers_unsafe_boxes(windows, unsafe, (image.width, image.height)):
             for blur in image.blurs:
                 blur.approved = False
+            _blur_changed(session, image, reason="blur_approve_uncovered")
             session.commit()
             raise NotAllowed("These blur covers do not fully cover every detected unsafe region.")
+    # Every blurred photo (flagged or not) is verified on the blurred render before it can be
+    # rated safe/excellent or sent to Gemini.
+    try:
+        result = verify_blur_unlock(session, settings, image, request.app.state.classifier)
+    except ValueError as exc:
+        raise NotAllowed(str(exc)) from exc
+    apply_unlock_result(image, result)
+    session.flush()
+    demote_if_unverified(session, image, reason="blur_verify_failed")
     session.commit()
     return [_blur_out(image, blur, settings) for blur in image.blurs]
 
@@ -1544,6 +1575,9 @@ def approve_queue_item(item_id: UUID, _auth: None = Depends(require_session), se
         raise NotFound("Queue item was not found.")
     if item.state != QueueState.CANDIDATE.value:
         raise NotAllowed("Only a candidate can be approved.")
+    for gated in _queue_item_images(session, item):
+        if not blur_gate_passes(session, gated):
+            raise NotAllowed(BLUR_VERIFY_FIRST)
     item.state = QueueState.APPROVED.value
     item.approved_at = datetime.now(UTC)
     session.commit()
@@ -1696,6 +1730,7 @@ def create_captions(
             has_approved_covering_blur=covering_blur,
             has_approved_blur=bool(gate_kwargs["has_approved_blur"]),
             do_not_post_blur_unlocked=bool(gate_kwargs["do_not_post_blur_unlocked"]),
+            blur_verification_pending=bool(gate_kwargs["blur_verification_pending"]),
             policy=settings.gemini_image_policy,
             operator_confirmed=body.confirmed,
             content_tags=tags,
@@ -1717,6 +1752,11 @@ def create_captions(
     )
     session.add(audit)
     session.commit()
+    # Final pre-send blur re-check from the database (another request may have edited the blur).
+    if not fresh_blur_gate_passes(session, image):
+        audit.status = "failed"
+        session.commit()
+        raise GeminiBlocked(BLUR_NOT_VERIFIED_GEMINI)
     try:
         batch = request.app.state.gemini.generate_captions(
             context, policy=settings.gemini_image_policy, image_bytes=pixels
@@ -2806,6 +2846,7 @@ def create_comment_drafts(
                 safe_description=f"A {composition} photograph.",
                 crop=None,
                 gemini_refused=is_gemini_refused(image),
+                blur_verification_pending=not blur_gate_passes(session, image),
             ),
             account_voice=settings.account_voice,
             research_notes=research,

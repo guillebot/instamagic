@@ -1,4 +1,4 @@
-"""Blur-to-unlock verification for DO_NOT_POST images."""
+"""Blur verification: DO_NOT_POST unlock, and the rule that any blurred photo must be verified."""
 
 from __future__ import annotations
 
@@ -121,9 +121,27 @@ def coverage_gate_passes(
     return all(row.coverage >= gate.min_ratio for row in coverages)
 
 
+def requires_blur_verification(image: Image) -> bool:
+    """A photo the model flagged, or any photo with blur covers, must pass blur verification
+    before it can be rated safe/excellent or have any pixels sent to Gemini."""
+    return image.model_state == SafetyState.DO_NOT_POST.value or bool(image.blurs)
+
+
 def blur_unlock_effective(session: Session, image: Image) -> bool:
     if image.model_state != SafetyState.DO_NOT_POST.value:
         return False
+    return blur_covers_verified(session, image)
+
+
+def blur_gate_passes(session: Session, image: Image) -> bool:
+    """True when the photo needs no blur verification, or its current covers are verified."""
+    if not requires_blur_verification(image):
+        return True
+    return blur_covers_verified(session, image)
+
+
+def blur_covers_verified(session: Session, image: Image) -> bool:
+    """Verified unlock that still matches the current approved covers (any model_state)."""
     if image.blur_unlock_status != BlurUnlockStatus.VERIFIED.value:
         return False
     if not image.blur_unlock_geometry_hash:
@@ -145,9 +163,9 @@ def blur_unlock_effective(session: Session, image: Image) -> bool:
 
 
 def unlock_summary_message(session: Session, image: Image) -> str | None:
-    if image.model_state != SafetyState.DO_NOT_POST.value:
+    if not requires_blur_verification(image):
         return None
-    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_unlock_effective(session, image):
+    if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_covers_verified(session, image):
         return "SAFE · BLURRED (verified)"
     if image.blur_unlock_status == BlurUnlockStatus.FAILED.value and image.blur_unlock_details_json:
         try:
@@ -161,6 +179,10 @@ def unlock_summary_message(session: Session, image: Image) -> str | None:
         )
     if image.blurs and image.blur_unlock_status == BlurUnlockStatus.PENDING.value:
         return "Blur unlock pending verification."
+    if image.blurs:
+        return "Blur not verified. Approve the blur to verify it."
+    if image.model_state == SafetyState.DO_NOT_POST.value:
+        return "Flagged photo: blur and verify first."
     return None
 
 
@@ -202,8 +224,6 @@ def verify_blur_unlock(
     image: Image,
     classifier: object,
 ) -> UnlockVerification:
-    if image.model_state != SafetyState.DO_NOT_POST.value:
-        raise ValueError("Blur unlock applies only to DO_NOT_POST images.")
     if not image.blurs or not all(blur.approved for blur in image.blurs):
         raise ValueError("All blur covers must be approved before verification.")
 
