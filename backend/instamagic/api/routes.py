@@ -252,6 +252,12 @@ from instamagic.services.recommendations.performance import (
     load_performance_signals,
 )
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
+from instamagic.services.recommendations.refusals import (
+    is_gemini_refused,
+    is_provider_refusal,
+    mark_gemini_refused,
+)
+from instamagic.services.recommendations.refusals import reset_breaker as reset_prefetch_breaker
 from instamagic.workers.resume import SCAN_TIMEOUT
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -429,6 +435,8 @@ def _image_out(session: Session, image: Image, *, settings: Settings | None = No
         gemini_description=image.gemini_description,
         gemini_mood=image.gemini_mood,
         enrich_hashtags=stored_hashtags(image),
+        gemini_refused=is_gemini_refused(image),
+        gemini_refused_reason=image.gemini_refused_reason,
     )
 
 
@@ -1691,6 +1699,7 @@ def create_captions(
             mood=", ".join(mood_names) if mood_names else "unspecified",
             safe_description=description,
             crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
+            gemini_refused=is_gemini_refused(image),
         ),
         account_voice=settings.account_voice,
     )
@@ -1708,8 +1717,10 @@ def create_captions(
         batch = request.app.state.gemini.generate_captions(
             context, policy=settings.gemini_image_policy, image_bytes=pixels
         )
-    except (GeminiBlocked, NotConfigured):
+    except (GeminiBlocked, NotConfigured) as exc:
         audit.status = "failed"
+        if is_provider_refusal(exc):
+            mark_gemini_refused(image, f"blocked:{getattr(exc, 'reason', 'refused')}")
         session.commit()
         raise
     except Exception:
@@ -2776,6 +2787,7 @@ def create_comment_drafts(
                 mood=", ".join(mood_names) if mood_names else "unspecified",
                 safe_description=f"A {composition} photograph.",
                 crop=None,
+                gemini_refused=is_gemini_refused(image),
             ),
             account_voice=settings.account_voice,
             research_notes=research,
@@ -2854,7 +2866,10 @@ def suggest_hashtags(
         merged = generate_enrichment_hashtags(
             session, request.app.state.growth, image, account_voice=settings.account_voice
         )
-    except (GeminiBlocked, NotConfigured):
+    except (GeminiBlocked, NotConfigured) as exc:
+        if is_provider_refusal(exc):
+            mark_gemini_refused(image, f"blocked:{getattr(exc, 'reason', 'refused')}")
+            session.commit()
         raise
     except Exception:
         raise NotConfigured("Gemini request failed.") from None
@@ -2872,7 +2887,7 @@ def get_enrichment_status(
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
     status = enrichment_status(
-        session, _enrich_redis(settings), prefetch_max_lingerie=settings.enrich_prefetch_max_lingerie
+        session, _enrich_redis(settings), prefetch_max_score=settings.enrich_prefetch_max_score
     )
     status["rpm"] = settings.enrich_rpm
     status["concurrency"] = settings.enrich_concurrency
@@ -2920,6 +2935,11 @@ def update_enrichment_settings(
         fields["enrichment_daily_cap"] = body.daily_cap
     if body.prefetch_enabled is not None:
         fields["enrichment_prefetch_enabled"] = body.prefetch_enabled
+        if body.prefetch_enabled:
+            # Operator turned prefetch back on: clear the breaker reason and its window.
+            fields["enrichment_prefetch_paused_reason"] = None
+            fields["enrichment_prefetch_paused_at"] = None
+            reset_prefetch_breaker(_enrich_redis(settings))
     if body.prefetch_daily_cap is not None:
         fields["enrichment_prefetch_daily_cap"] = body.prefetch_daily_cap
     return _enrichment_config_update(session, settings, **fields)

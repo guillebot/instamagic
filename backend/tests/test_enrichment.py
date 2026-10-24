@@ -289,7 +289,7 @@ def _seed_prefetch(client, library: Path) -> dict[str, str]:
     _marked(library / "s1" / "unrated-two.jpg", (90, 90, 30), (30, 30, 70, 70))
     _marked(library / "s1" / "unsafe-unrated.jpg", (60, 20, 20), (40, 300, 180, 420))
     _marked(library / "s1" / "blocked-unrated.jpg", (20, 20, 60), (40, 300, 180, 420))
-    _marked(library / "s1" / "rejected.jpg", (70, 70, 70), (10, 10, 40, 40))
+    _marked(library / "s2" / "rejected.jpg", (70, 70, 70), (10, 10, 40, 40))
     login(client)
     created = client.post(
         "/api/libraries", json={"name": "P", "root_path": str(library), "confirmed": True, "statement": STATEMENT}
@@ -406,7 +406,7 @@ def test_prefetch_toggle_cap_priority_and_existing_captions(client, app_env) -> 
     session.commit()
     from instamagic.services.recommendations.prefetch import pending_prefetch_ids
 
-    order = [str(i) for i in pending_prefetch_ids(session, max_lingerie=0.25, limit=10)]
+    order = [str(i) for i in pending_prefetch_ids(session, max_score=0.25, limit=10)]
     session.close()
     assert order == [ids["unrated-two.jpg"], ids["unrated.jpg"]]
 
@@ -432,3 +432,216 @@ def test_prefetch_toggle_cap_priority_and_existing_captions(client, app_env) -> 
     image = _image(ids["unrated.jpg"])
     assert image.gemini_label_status is None
     assert _caption_rows(ids["unrated.jpg"]) == [("Mine.", "modified")]
+
+
+# --- Strict prefetch rule, pre-send re-check, Gemini refusals and the circuit breaker ----------------
+
+
+def _add_region(image_id: str, label: str, score: float) -> None:
+    from instamagic.models import SafetyAssessment, SafetyRegion
+
+    session = session_factory()()
+    try:
+        assessment = session.scalar(
+            select(SafetyAssessment).where(SafetyAssessment.image_id == UUID(image_id))
+        )
+        session.add(
+            SafetyRegion(
+                assessment_id=assessment.id,
+                label=label,
+                score=score,
+                x=1,
+                y=1,
+                width=5,
+                height=5,
+                unsafe=False,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+
+def _pending(max_score: float = 0.10) -> set[str]:
+    from instamagic.services.recommendations.prefetch import pending_prefetch_ids
+
+    session = session_factory()()
+    try:
+        return {str(i) for i in pending_prefetch_ids(session, max_score=max_score, limit=50)}
+    finally:
+        session.close()
+
+
+def test_prefetch_strict_regions_threshold_clamp_and_folder_rules(client, app_env) -> None:
+    from instamagic.services.recommendations.prefetch import effective_max_score
+
+    ids = _seed_prefetch(client, app_env["library"])
+    assert _pending() == {ids["unrated.jpg"], ids["unrated-two.jpg"]}
+    # Any exposed part (even belly/armpits/feet) or covered intimate part excludes the photo.
+    _add_region(ids["unrated.jpg"], "ARMPITS_EXPOSED", 0.3)
+    _add_region(ids["unrated-two.jpg"], "FEMALE_BREAST_COVERED", 0.3)
+    assert _pending() == set()
+    assert client.get("/api/enrichment/status").json()["prefetch_eligible"] == 0
+    # The threshold is clamped: it can never be raised above 0.25.
+    assert effective_max_score(0.9) == 0.25 and effective_max_score(0.05) == 0.05
+    assert _pending(max_score=0.9) == set()
+
+
+def test_prefetch_folder_requires_safe_sibling_and_no_rejects(client, app_env) -> None:
+    ids = _seed_prefetch(client, app_env["library"])
+    # A human reject/review anywhere in the shoot folder makes the whole folder ineligible.
+    client.post(f"/api/images/{ids['unsafe-unrated.jpg']}/rating", json={"rating": "review"})
+    assert _pending() == set()
+    client.post(f"/api/images/{ids['unsafe-unrated.jpg']}/rating", json={"rating": "safe"})
+    assert ids["unrated.jpg"] in _pending()
+    # Without any human safe photo in the folder, nothing is prefetched by default.
+    client.post(f"/api/images/{ids['a-clean.jpg']}/rating", json={"rating": "reject"})
+    client.post(f"/api/images/{ids['unsafe-unrated.jpg']}/rating", json={"rating": "reject"})
+    assert _pending() == set()
+
+
+def test_prefetch_presend_recheck_blocks_the_gemini_call(client, app_env, monkeypatch) -> None:
+    from instamagic.services.recommendations import prefetch as prefetch_module
+
+    ids = _seed_prefetch(client, app_env["library"])
+    calls: list[str] = []
+    deps = _deps()
+    original = deps.label_provider.label_image
+
+    def spy(*args, **kwargs):
+        calls.append("label")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(deps.label_provider, "label_image", spy)
+    # The photo becomes ineligible between selection and the send.
+    monkeypatch.setattr(prefetch_module, "is_prefetch_candidate", lambda *a, **k: True)
+    real_assert = prefetch_module.assert_prefetch_safe
+
+    def flip(session, image, *, max_score):
+        raise prefetch_module.PrefetchIneligible(str(image.id))
+
+    monkeypatch.setattr(prefetch_module, "assert_prefetch_safe", flip)
+    monkeypatch.setattr(enrichment, "assert_prefetch_safe", flip)
+    import instamagic.services.recommendations.label_job as label_job
+
+    if hasattr(label_job, "assert_prefetch_safe"):
+        monkeypatch.setattr(label_job, "assert_prefetch_safe", flip)
+    session = session_factory()()
+    try:
+        enrichment.run_enrichment_batch(
+            session,
+            deps,
+            redis=FakeRedis(),
+            concurrency=1,
+            rpm=6000,
+            batch_size=50,
+            limiter=enrichment.RateLimiter(60000, sleep=lambda _s: None),
+        )
+    finally:
+        session.close()
+    assert real_assert is not flip
+    for name in ("unrated.jpg", "unrated-two.jpg"):
+        assert _image(ids[name]).gemini_label_status is None
+        assert _image(ids[name]).enrich_hashtags_json is None
+
+
+class _RefusingGrowth:
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def suggest_hashtags(self, context, **kwargs):
+        from instamagic.errors import GeminiBlocked
+
+        raise GeminiBlocked("Gemini refused", reason="PROHIBITED_CONTENT")
+
+
+def test_gemini_refusal_marks_photo_never_resends_and_trips_breaker(client, app_env) -> None:
+    ids = _seed_prefetch(client, app_env["library"])
+    session = session_factory()()
+    clean = session.get(Image, UUID(ids["a-clean.jpg"]))
+    clean.gemini_label_status = "ok"
+    clean.enrich_hashtags_json = json.dumps(["#x"])
+    session.commit()
+    session.close()
+    queue_before = _queue_count()
+    _batch(redis=FakeRedis(), growth=_RefusingGrowth(build_growth(get_settings())), concurrency=1)
+    refused = [n for n in ("unrated.jpg", "unrated-two.jpg") if _image(ids[n]).gemini_refused_at]
+    assert len(refused) == 1  # breaker (fail-safe without a window) + folder rule stop the rest
+    other = ({"unrated.jpg", "unrated-two.jpg"} - set(refused)).pop()
+    assert _image(ids[other]).gemini_label_status is None  # never sent
+    assert _image(ids[refused[0]]).human_rating is None  # ratings untouched
+    status = client.get("/api/enrichment/status").json()
+    assert status["prefetch_enabled"] is False
+    assert "refused" in (status["prefetch_paused_reason"] or "")
+    assert status["gemini_refused"] == 1
+    detail = client.get(f"/api/images/{ids[refused[0]]}").json()
+    assert detail["gemini_refused"] is True
+    # Turning prefetch back on clears the reason, but the folder with a refusal stays excluded.
+    on = client.put("/api/enrichment/settings", json={"prefetch_enabled": True}).json()
+    assert on["prefetch_enabled"] is True and on["prefetch_paused_reason"] is None
+    assert _pending() == set()
+    # Even rated safe later, a refused photo is never resent (not auto-eligible, captions blocked).
+    target = ids[refused[0]]
+    assert client.post(f"/api/images/{target}/rating", json={"rating": "safe"}).status_code == 200
+    session = session_factory()()
+    try:
+        assert target not in {str(r.id) for r in enrichment.eligible_images(session)}
+    finally:
+        session.close()
+    assert client.post(f"/api/images/{target}/captions").status_code >= 400
+    assert _image(target).gemini_refused_at is not None
+    assert _queue_count() == queue_before
+
+
+class _WindowRedis(FakeRedis):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lists: dict[str, list[str]] = {}
+        self.zsets: dict[str, dict[str, float]] = {}
+
+    def pipeline(self):
+        return self
+
+    def execute(self):
+        return []
+
+    def lpush(self, key, value):
+        self.lists.setdefault(key, []).insert(0, value)
+
+    def ltrim(self, key, start, end):
+        self.lists[key] = self.lists.get(key, [])[start : end + 1]
+
+    def lrange(self, key, start, end):
+        return list(self.lists.get(key, []))
+
+    def zadd(self, key, mapping):
+        self.zsets.setdefault(key, {}).update(mapping)
+
+    def zremrangebyscore(self, key, low, high):
+        self.zsets[key] = {k: v for k, v in self.zsets.get(key, {}).items() if not low <= v <= high}
+
+    def zcard(self, key):
+        return len(self.zsets.get(key, {}))
+
+    def delete(self, *keys):
+        for key in keys:
+            self.lists.pop(key, None)
+            self.zsets.pop(key, None)
+            self.data.pop(key, None)
+
+
+def test_breaker_trips_on_second_refusal_in_window() -> None:
+    from instamagic.services.recommendations.refusals import note_prefetch_outcome, reset_breaker
+
+    redis = _WindowRedis()
+    assert note_prefetch_outcome(redis, refused=False) is False
+    assert note_prefetch_outcome(redis, refused=True) is False  # one refusal: keep going
+    for _ in range(5):
+        assert note_prefetch_outcome(redis, refused=False) is False
+    assert note_prefetch_outcome(redis, refused=True) is True  # second within window: trip
+    reset_breaker(redis)
+    assert note_prefetch_outcome(redis, refused=True) is False
+    assert note_prefetch_outcome(None, refused=True) is True  # no redis: fail safe

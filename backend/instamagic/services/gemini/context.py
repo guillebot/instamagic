@@ -79,7 +79,10 @@ def build_context(
     has_approved_covering_blur: bool = False,
     has_approved_blur: bool = False,
     do_not_post_blur_unlocked: bool = False,
+    gemini_refused: bool = False,
 ) -> GeminiContext:
+    if gemini_refused:
+        raise GeminiBlocked("Gemini previously refused this photo; it is never sent again.")
     gate = gemini_gate(
         attested=attested,
         human_rating=human_rating,
@@ -120,8 +123,11 @@ def build_prefetch_context(
     composition: str,
     mood: str,
     safe_description: str,
+    gemini_refused: bool = False,
 ) -> GeminiContext:
     """Context for background prefetch of an unrated, classifier-clean REVIEW photo (``prefetch_gate``)."""
+    if gemini_refused:
+        raise GeminiBlocked("Gemini previously refused this photo; it is never sent again.")
     gate = prefetch_gate(
         attested=attested,
         human_rating=human_rating,

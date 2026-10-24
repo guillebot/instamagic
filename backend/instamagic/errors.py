@@ -38,6 +38,8 @@ class GeminiBlocked(NotAllowed):
     def __init__(self, detail: str, *, reason: str | None = None) -> None:
         super().__init__(detail)
         self.reason = reason or detail
+        # Only Gemini's own refusals carry an explicit reason; local gates do not.
+        self.from_provider = reason is not None
 
 
 class InstagramNotConfigured(NotConfigured):

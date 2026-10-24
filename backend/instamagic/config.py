@@ -55,8 +55,11 @@ class Settings(BaseSettings):
     enrich_concurrency: int = 2
     enrich_rpm: int = 30
     enrich_batch_size: int = 12
-    # Prefetch (unrated, classifier-clean REVIEW photos): max lingerie/covered-region detector score.
-    enrich_prefetch_max_lingerie: float = 0.25
+    # Prefetch (unrated photos) is clearly-safe only: every NSFW score and every intimate body-part
+    # detection must stay below this. Hard ceiling 0.25 (the review threshold); higher values are clamped.
+    enrich_prefetch_max_score: float = Field(default=0.10, ge=0.0)
+    # Prefetch only photos whose shoot folder already has a human safe/excellent rating.
+    enrich_prefetch_require_safe_folder: bool = True
     # Fail-closed: false by default. True only with AUTO_PUBLISH_ACK exact phrase.
     # Phase 2 still expects human Publish clicks; auto-fire is reserved and documented.
     auto_publish: bool = False

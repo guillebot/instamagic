@@ -123,7 +123,7 @@ def test_killed_scan_work_horse_marks_row_failed(app_env) -> None:
         handle_killed_work_horse,
     )
 
-    assert SCAN_TIMEOUT > 60 * 60 * 24
+    assert SCAN_TIMEOUT == -1  # no scan time limit
     db = session_factory()()
     library = Library(name="Archive", root_path=str(app_env["library"]))
     db.add(library)

@@ -20,6 +20,9 @@ export type EnrichmentStatus = {
   prefetch_eligible?: number;
   prefetched?: number;
   prefetch_pending?: number;
+  prefetch_paused_reason?: string | null;
+  prefetch_paused_at?: string | null;
+  gemini_refused?: number;
 };
 
 const STATE_LABEL: Record<string, string> = {

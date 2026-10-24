@@ -23,12 +23,12 @@ from sqlalchemy import select
 log = get_logger("worker.resume")
 
 SCAN_FUNC = "instamagic.workers.tasks.run_scan_job"
-# A full library scan can run well past 12 hours (about 2 s per new photo). RQ kills
-# the work horse at this limit, so keep it generous; resumed scans skip done files.
-SCAN_TIMEOUT = 60 * 60 * 24 * 7
+# No time limit: a library scan runs until the whole library is processed (RQ job_timeout=-1).
+# A crashed/killed worker still marks the row failed, and scans auto-resume on worker restart.
+SCAN_TIMEOUT = -1
 
 KILLED_SCAN_MESSAGE = (
-    "Scan worker stopped unexpectedly (time limit or crash). "
+    "Scan worker stopped unexpectedly (crash or restart). "
     "Start the scan again to resume; finished photos are skipped."
 )
 

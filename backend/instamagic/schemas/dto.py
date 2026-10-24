@@ -386,6 +386,8 @@ class ImageOut(BaseModel):
     gemini_label_status: str | None = None
     gemini_label_at: datetime | None = None
     enrich_hashtags: list[str] = []
+    gemini_refused: bool = False
+    gemini_refused_reason: str | None = None
     gemini_description: str | None = None
     gemini_mood: str | None = None
 
