@@ -120,6 +120,9 @@ class Image(Base):
     enrich_hashtags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     enrich_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     enrich_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Set when Gemini refused this photo (PROHIBITED_CONTENT / blocked). Permanent: never resent.
+    gemini_refused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    gemini_refused_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     enrich_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blur_unlock_status: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
     blur_unlock_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -376,6 +379,8 @@ class PostingScheduleConfig(Base):
     enrichment_daily_cap: Mapped[int] = mapped_column(Integer, default=400, server_default="400")
     enrichment_prefetch_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     enrichment_prefetch_daily_cap: Mapped[int] = mapped_column(Integer, default=300, server_default="300")
+    enrichment_prefetch_paused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enrichment_prefetch_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )

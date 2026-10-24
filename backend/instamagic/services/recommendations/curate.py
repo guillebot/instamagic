@@ -56,6 +56,7 @@ from instamagic.services.recommendations.performance import (
     load_performance_signals,
 )
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
+from instamagic.services.recommendations.refusals import is_gemini_refused
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -171,6 +172,8 @@ def collect_eligible(
     attested: dict[UUID, bool] = {}
     eligible: list[EligibleCandidate] = []
     for image in rows:
+        if is_gemini_refused(image):
+            continue  # Gemini refused this photo once: never auto-eligible, never resent
         if image.library_id not in attested:
             attested[image.library_id] = is_attested(session, image.library_id)
         if not attested[image.library_id]:
@@ -503,6 +506,7 @@ def execute_curation_batch(
             mood=sample.mood,
             safe_description=sample.description,
             crop=sample_crop if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value else None,
+            gemini_refused=any(is_gemini_refused(item.image) for item in shortlist),
         ),
         account_voice=account_voice,
     )
@@ -778,6 +782,7 @@ def run_curation(
             mood=sample.mood,
             safe_description=sample.description,
             crop=sample_crop if sample.image.model_state == SafetyState.SAFE_AFTER_CROP.value else None,
+            gemini_refused=any(is_gemini_refused(item.image) for item in shortlist),
         ),
         account_voice=account_voice,
     )

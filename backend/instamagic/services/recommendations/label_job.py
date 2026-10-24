@@ -50,6 +50,11 @@ from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.gates import gemini_gate
 from instamagic.services.recommendations.gemini_derivatives import curation_derivative_bytes
+from instamagic.services.recommendations.refusals import (
+    is_gemini_refused,
+    is_provider_refusal,
+    mark_gemini_refused,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -143,6 +148,9 @@ def resolve_label_targets(
         )
         if not gate.allowed:
             skip("gate_blocked")
+            continue
+        if is_gemini_refused(image):
+            skip("gemini_refused")
             continue
         if label_status_is_terminal(image.gemini_label_status):
             skip("already_labeled")
@@ -246,7 +254,7 @@ def label_one_image(
             human_rating=image.human_rating,
             model_state=image.model_state,
             classifier_clean=is_prefetch_candidate(
-                session, image, max_lingerie=get_settings().enrich_prefetch_max_lingerie
+                session, image, max_score=get_settings().enrich_prefetch_max_score
             ),
             has_any_blur=bool(image.blurs),
             skip_reason=image.skip_reason,
@@ -256,6 +264,7 @@ def label_one_image(
             composition=composition,
             mood=image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified"),
             safe_description=description,
+            gemini_refused=is_gemini_refused(image),
         )
         context = append_voice_to_context(base_context, account_voice=account_voice)
     else:
@@ -276,10 +285,16 @@ def label_one_image(
                 mood=image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified"),
                 safe_description=description,
                 crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
+                gemini_refused=is_gemini_refused(image),
             ),
             account_voice=account_voice,
         )
     pixels = preview_bytes_fn(image) if gemini_allows_pixels(policy) else None
+    if prefetch:
+        from instamagic.services.recommendations.prefetch import assert_prefetch_safe
+
+        # Final pre-send re-check (raises PrefetchIneligible; caller rolls back, nothing is sent).
+        assert_prefetch_safe(session, image, max_score=get_settings().enrich_prefetch_max_score)
     try:
         result = provider.label_image(
             context,
@@ -291,6 +306,8 @@ def label_one_image(
     except GeminiBlocked as exc:
         image.gemini_label_status = format_blocked_status(exc.reason)
         image.gemini_label_at = datetime.now(UTC)
+        if is_provider_refusal(exc):
+            mark_gemini_refused(image, image.gemini_label_status)
         return "blocked"
     except GeminiRateLimited:
         raise

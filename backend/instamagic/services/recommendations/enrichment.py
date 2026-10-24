@@ -39,9 +39,19 @@ from instamagic.services.posting.schedule_config import get_or_create_config
 from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.gemini_derivatives import has_approved_covering_blur
 from instamagic.services.recommendations.prefetch import (
+    PrefetchIneligible,
+    assert_prefetch_safe,
+    effective_max_score,
     is_prefetch_candidate,
     pending_prefetch_ids,
     prefetch_counts,
+)
+from instamagic.services.recommendations.refusals import (
+    is_gemini_refused,
+    is_provider_refusal,
+    mark_gemini_refused,
+    note_prefetch_outcome,
+    trip_breaker,
 )
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -199,7 +209,7 @@ class EnrichmentDeps:
     account_voice: str
     thinking_budget: int
     max_output_tokens: int
-    prefetch_max_lingerie: float = 0.25
+    prefetch_max_score: float = 0.10
 
 
 def _has_captions(session: Session, image: Image) -> bool:
@@ -225,7 +235,7 @@ def generate_hashtags(
     *,
     account_voice: str,
     prefetch: bool = False,
-    max_lingerie: float = 0.25,
+    max_score: float = 0.10,
 ) -> list[str]:
     """Text-only hashtag suggestion (no pixels), merged with cached hashtag research."""
     approved = next((crop for crop in image.crops if crop.approved), None)
@@ -238,7 +248,7 @@ def generate_hashtags(
                 attested=is_attested(session, image.library_id),
                 human_rating=image.human_rating,
                 model_state=image.model_state,
-                classifier_clean=is_prefetch_candidate(session, image, max_lingerie=max_lingerie),
+                classifier_clean=is_prefetch_candidate(session, image, max_score=max_score),
                 has_any_blur=bool(image.blurs),
                 skip_reason=image.skip_reason,
                 policy="text_only",
@@ -247,9 +257,12 @@ def generate_hashtags(
                 composition=composition,
                 mood=image.gemini_mood or "unspecified",
                 safe_description=image.gemini_description or f"A {composition} photograph.",
+                gemini_refused=is_gemini_refused(image),
             ),
             account_voice=account_voice,
         )
+        # Final pre-send re-check (raises PrefetchIneligible; nothing is sent).
+        assert_prefetch_safe(session, image, max_score=max_score)
         suggestion = growth_provider.suggest_hashtags(context, account_voice=account_voice)
         return suggest_tags_from_research(session, suggestion.tags)
     context = append_voice_to_context(
@@ -269,11 +282,19 @@ def generate_hashtags(
             mood=image.gemini_mood or "unspecified",
             safe_description=image.gemini_description or f"A {composition} photograph.",
             crop=None,
+            gemini_refused=is_gemini_refused(image),
         ),
         account_voice=account_voice,
     )
     suggestion = growth_provider.suggest_hashtags(context, account_voice=account_voice)
     return suggest_tags_from_research(session, suggestion.tags)
+
+
+def _prefetch_refused(deps: EnrichmentDeps, redis, image_id: UUID) -> None:
+    """A prefetch photo was refused by Gemini: feed the circuit breaker (auto-OFF on repeat refusals)."""
+    log.info("prefetch_gemini_refused", image_id=str(image_id))
+    if note_prefetch_outcome(redis, refused=True):
+        trip_breaker(deps.session_factory())  # type: ignore[operator]
 
 
 def enrich_one(
@@ -298,7 +319,7 @@ def enrich_one(
             if tier != TIER_PREFETCH:
                 return "skipped"
             image = _load_one(session, image_id)
-            if image is None or not is_prefetch_candidate(session, image, max_lingerie=deps.prefetch_max_lingerie):
+            if image is None or not is_prefetch_candidate(session, image, max_score=deps.prefetch_max_score):
                 return "skipped"
             prefetch = True
         image = _load_one(session, image_id)
@@ -331,6 +352,10 @@ def enrich_one(
                     covering_blur_fn=has_approved_covering_blur,
                     prefetch=prefetch,
                 )
+            except PrefetchIneligible:
+                session.rollback()
+                log.info("prefetch_recheck_blocked", image_id=str(image_id))
+                return "skipped"
             except GeminiRateLimited:
                 session.rollback()
                 return "rate_limited"
@@ -338,6 +363,8 @@ def enrich_one(
             if result == "ok":
                 outcome = "ok"
             elif result in {"blocked", "empty"}:
+                if prefetch and result == "blocked" and image.gemini_refused_at is not None:
+                    _prefetch_refused(deps, redis, image_id)
                 return "refused"
             else:
                 return "error"
@@ -358,15 +385,23 @@ def enrich_one(
                     image,
                     account_voice=deps.account_voice,
                     prefetch=prefetch,
-                    max_lingerie=deps.prefetch_max_lingerie,
+                    max_score=deps.prefetch_max_score,
                 )
+            except PrefetchIneligible:
+                session.rollback()
+                log.info("prefetch_recheck_blocked", image_id=str(image_id))
+                return "skipped"
             except GeminiRateLimited:
                 session.rollback()
                 return "rate_limited"
             except GeminiBlocked as exc:
                 image.enrich_status = format_blocked_status(exc.reason)
                 image.enrich_at = datetime.now(UTC)
+                if is_provider_refusal(exc):
+                    mark_gemini_refused(image, image.enrich_status)
                 session.commit()
+                if prefetch and is_provider_refusal(exc):
+                    _prefetch_refused(deps, redis, image_id)
                 return "refused"
             except (GeminiEmpty, GeminiTruncated, ValueError, Exception):
                 image.enrich_status = "error"
@@ -381,6 +416,8 @@ def enrich_one(
             image.enrich_at = datetime.now(UTC)
             session.commit()
             outcome = "ok"
+        if prefetch and outcome == "ok":
+            note_prefetch_outcome(redis, refused=False)
         return outcome
     except Exception:
         session.rollback()
@@ -432,7 +469,7 @@ def run_enrichment_batch(
         else:
             taken = {image_id for image_id, _tier in targets}
             for image_id in pending_prefetch_ids(
-                session, max_lingerie=deps.prefetch_max_lingerie, limit=size - len(targets) + len(taken)
+                session, max_score=deps.prefetch_max_score, limit=size - len(targets) + len(taken)
             ):
                 if image_id not in taken and len(targets) < size:
                     targets.append((image_id, TIER_PREFETCH))
@@ -530,9 +567,12 @@ def wake_enrichment(redis_url: str) -> None:
         pass
 
 
-def enrichment_status(session: Session, redis, *, prefetch_max_lingerie: float = 0.25) -> dict[str, object]:
+def enrichment_status(session: Session, redis, *, prefetch_max_score: float = 0.10) -> dict[str, object]:
     config = get_or_create_config(session)
-    prefetch = prefetch_counts(session, max_lingerie=prefetch_max_lingerie)
+    prefetch = prefetch_counts(session, max_score=prefetch_max_score)
+    refused_total = int(
+        session.scalar(select(func.count()).select_from(Image).where(Image.gemini_refused_at.is_not(None))) or 0
+    )
     prefetch_enabled = bool(config.enrichment_prefetch_enabled)
     prefetch_cap = min(int(config.enrichment_daily_cap or 0), int(config.enrichment_prefetch_daily_cap or 0))
     prefetch_used = calls_today(redis, prefetch=True)
@@ -591,9 +631,19 @@ def enrichment_status(session: Session, redis, *, prefetch_max_lingerie: float =
         "backoff_until": datetime.fromtimestamp(until, UTC).isoformat() if until > time.time() else None,
         "last_batch": last,
         "prefetch_enabled": prefetch_enabled,
+        "prefetch_paused_reason": None
+        if prefetch_enabled
+        else config.enrichment_prefetch_paused_reason,
+        "prefetch_paused_at": (
+            None
+            if prefetch_enabled or config.enrichment_prefetch_paused_at is None
+            else config.enrichment_prefetch_paused_at.isoformat()
+        ),
+        "gemini_refused": refused_total,
         "prefetch_daily_cap": prefetch_cap,
         "prefetch_calls_today": prefetch_used,
         "prefetch_eligible": prefetch["eligible"],
+        "prefetch_max_score": effective_max_score(prefetch_max_score),
         "prefetched": prefetch["ready"],
         "prefetch_pending": prefetch["pending"],
     }

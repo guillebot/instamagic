@@ -17,6 +17,7 @@ from instamagic.services.images.folders import escape_like, normalize_folder
 from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.gates import gemini_gate
 from instamagic.services.recommendations.rank import _hamming
+from instamagic.services.recommendations.refusals import is_gemini_refused
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -110,6 +111,12 @@ def _ineligible_reason(
 
     if image.skip_reason:
         return "scan_skipped", f"skipped at scan: {image.skip_reason}", {}
+    if is_gemini_refused(image):
+        return (
+            "gemini_refused",
+            "Gemini refused this photo once; it is never sent again (review it manually)",
+            {},
+        )
     if image.library_id not in attested:
         attested[image.library_id] = is_attested(session, image.library_id)
     if not attested[image.library_id]:

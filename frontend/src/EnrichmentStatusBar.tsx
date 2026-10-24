@@ -61,6 +61,14 @@ export function EnrichmentStatusBar() {
           />
           Pre-generate for unrated clean photos
         </label>
+        {!data.prefetch_enabled && data.prefetch_paused_reason ? (
+          <span className="warning" role="status">
+            {data.prefetch_paused_reason}
+          </span>
+        ) : null}
+        {data.gemini_refused ? (
+          <span className="muted">{data.gemini_refused} photos refused by Gemini (never resent)</span>
+        ) : null}
         {data.prefetch_enabled ? (
           <span className="muted">
             {data.prefetch_calls_today ?? 0}/{data.prefetch_daily_cap ?? 0} prefetch calls today
