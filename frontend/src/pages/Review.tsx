@@ -1248,6 +1248,11 @@ export function ReviewPage() {
               <BlurPanel
                 key={`blur-${current.id}`}
                 image={current}
+                captureKeys={prepMode === "blur" && !captionsOpen}
+                onMarkSafe={() => {
+                  setPrepMode("rate");
+                  void rate("safe");
+                }}
                 onChanged={(imageId) => {
                   void api<ImageItem>(`/api/images/${imageId}`)
                     .then((refreshed) => patchImage(refreshed))
