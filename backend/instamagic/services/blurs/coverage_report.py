@@ -158,6 +158,8 @@ def _verification_checks(session: Session, image: Image) -> dict[str, Any]:
         "recheck": recheck,
         "classifier_detections": details.get("classifier_detections") or [],
         "message": details.get("message"),
+        "coverage_overruled": bool(effective and details.get("coverage_overruled")),
+        "coverage_warning": details.get("coverage_warning") if effective else None,
     }
 
 

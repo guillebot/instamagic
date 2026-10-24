@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { blurVerificationLabel, canOfferMarkSafe, coverBorderRadius, isTextEntryTarget } from "./BlurPanel";
+import {
+  blurVerificationLabel,
+  canOfferMarkSafe,
+  coverBorderRadius,
+  coverageOverruleWarning,
+  isTextEntryTarget,
+  ratingNeedsBlur,
+} from "./BlurPanel";
 
 const dnp = (status: string, message: string | null = null) => ({
   model_state: "DO_NOT_POST",
@@ -85,5 +92,34 @@ describe("canOfferMarkSafe", () => {
     expect(canOfferMarkSafe(v, { ...ok, dirty: true })).toBe(false);
     expect(canOfferMarkSafe(v, { ...ok, approved: false })).toBe(false);
     expect(canOfferMarkSafe({ ...v, human_rating: "safe" }, ok)).toBe(false);
+  });
+});
+
+describe("ratingNeedsBlur", () => {
+  it("locks safe and excellent until the blur is verified", () => {
+    const pending = { blur_verification_required: true, blur_verified: false };
+    expect(ratingNeedsBlur(pending, "safe")).toBe(true);
+    expect(ratingNeedsBlur(pending, "excellent")).toBe(true);
+    expect(ratingNeedsBlur(pending, "review")).toBe(false);
+    expect(ratingNeedsBlur(pending, "reject")).toBe(false);
+    expect(ratingNeedsBlur({ blur_verification_required: true, blur_verified: true }, "safe")).toBe(false);
+    expect(ratingNeedsBlur({ blur_verification_required: false, blur_verified: false }, "safe")).toBe(false);
+    expect(ratingNeedsBlur(null, "safe")).toBe(false);
+  });
+});
+
+describe("coverage overruled by detector pass", () => {
+  const msg = "SAFE · BLURRED (verified by detector) · Coverage 72% (below 95%) — overruled by detector pass";
+  it("extracts the advisory warning", () => {
+    expect(coverageOverruleWarning(msg)).toBe("Coverage 72% (below 95%) — overruled by detector pass");
+    expect(coverageOverruleWarning("SAFE · BLURRED (verified)")).toBeNull();
+  });
+  it("shows verified with a coverage warning", () => {
+    const label = blurVerificationLabel(
+      { model_state: "DO_NOT_POST", blur_unlock_status: "verified", blur_unlock_message: msg },
+      { verifying: false, hasCovers: true, approved: true },
+    );
+    expect(label?.tone).toBe("ok");
+    expect(label?.warning).toContain("overruled by detector pass");
   });
 });

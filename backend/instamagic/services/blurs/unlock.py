@@ -151,21 +151,43 @@ def blur_covers_verified(session: Session, image: Image) -> bool:
     if blur_geometry_hash(image.blurs) != image.blur_unlock_geometry_hash:
         return False
     gate = blur_coverage_settings(session)
+    details: dict[str, Any] = {}
     if image.blur_unlock_details_json:
         try:
             details = json.loads(image.blur_unlock_details_json)
         except json.JSONDecodeError:
             details = {}
+    if details.get("coverage_overruled"):
+        # The detector re-check passed on exactly this geometry (hash matched above);
+        # coverage is advisory while the overrule setting stays on.
+        return gate.detector_overrules_coverage
+    if details:
         verified_min = float(details.get("coverage_min", gate.min_ratio))
         if gate.min_ratio > verified_min:
             return False
     return coverage_gate_passes(session, image, gate)
 
 
+def coverage_warning(image: Image) -> str | None:
+    """Advisory coverage line when a detector pass overruled the coverage gate."""
+    if not image.blur_unlock_details_json:
+        return None
+    try:
+        details = json.loads(image.blur_unlock_details_json)
+    except json.JSONDecodeError:
+        return None
+    if not details.get("coverage_overruled"):
+        return None
+    return details.get("coverage_warning") or "Coverage below threshold — overruled by detector pass"
+
+
 def unlock_summary_message(session: Session, image: Image) -> str | None:
     if not requires_blur_verification(image):
         return None
     if image.blur_unlock_status == BlurUnlockStatus.VERIFIED.value and blur_covers_verified(session, image):
+        warning = coverage_warning(image)
+        if warning:
+            return f"SAFE · BLURRED (verified by detector) · {warning}"
         return "SAFE · BLURRED (verified)"
     if image.blur_unlock_status == BlurUnlockStatus.FAILED.value and image.blur_unlock_details_json:
         try:
@@ -295,7 +317,9 @@ def verify_blur_unlock(
         "geometry_version": blur_geometry_version(list(image.blurs)),
     }
 
-    if uncovered or detections:
+    details["detector_overrules_coverage"] = gate.detector_overrules_coverage
+    overruled = bool(uncovered) and not detections and gate.detector_overrules_coverage
+    if (uncovered and not overruled) or detections:
         message = unlock_summary_message_from_parts(uncovered, detections, coverage_min=gate.min_ratio)
         details["message"] = message
         return UnlockVerification(
@@ -306,6 +330,14 @@ def verify_blur_unlock(
         )
 
     details["message"] = "SAFE · BLURRED (verified)"
+    if overruled:
+        lowest = min(row["coverage"] for row in uncovered)
+        warning = (
+            f"Coverage {round(lowest * 100)}% (below {gate.threshold_percent}%) — overruled by detector pass"
+        )
+        details["coverage_overruled"] = True
+        details["coverage_warning"] = warning
+        details["message"] = f"SAFE · BLURRED (verified by detector) · {warning}"
     return UnlockVerification(
         status=BlurUnlockStatus.VERIFIED,
         geometry_hash=geometry_hash,

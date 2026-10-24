@@ -30,6 +30,9 @@ export type ImageItem = {
   has_approved_crop?: boolean;
   has_approved_covering_blur?: boolean;
   has_approved_blur?: boolean;
+  /** Flagged or blurred: Safe/Excellent stay locked until the current blur is verified. */
+  blur_verification_required?: boolean;
+  blur_verified?: boolean;
   publish_variant?: string | null;
   publish_variant_label?: string | null;
   thumbnail_url: string | null;
@@ -320,6 +323,7 @@ export type PostingScheduleConfig = {
   story_border_color_default?: string;
   blur_coverage_threshold?: number;
   blur_region_padding_px?: number;
+  blur_detector_overrules_coverage?: boolean;
   updated_at?: string | null;
 };
 

@@ -117,6 +117,7 @@ class PostingScheduleConfigIn(BaseModel):
     story_border_color_default: str | None = Field(default=None, max_length=16)
     blur_coverage_threshold: int | None = Field(default=None, ge=60, le=100)
     blur_region_padding_px: int | None = Field(default=None, ge=0, le=20)
+    blur_detector_overrules_coverage: bool | None = None
 
 
 class RelatedAccountIn(BaseModel):

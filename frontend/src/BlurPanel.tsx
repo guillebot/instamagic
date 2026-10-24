@@ -41,11 +41,27 @@ export function isTextEntryTarget(target: EventTarget | null): boolean {
 }
 
 /** Show "Mark safe" only when the result on screen is a green verified/approved state. */
+export const BLUR_VERIFY_FIRST = "Blur and verify first";
+
+/** Safe/Excellent are locked while a flagged or blurred photo has no verified blur. */
+export function ratingNeedsBlur(
+  image: Pick<ImageItem, "blur_verification_required" | "blur_verified"> | null | undefined,
+  rating: string,
+): boolean {
+  if (!image) return false;
+  if (rating !== "safe" && rating !== "excellent") return false;
+  return Boolean(image.blur_verification_required) && !image.blur_verified;
+}
+
 export function canOfferMarkSafe(
-  image: Pick<ImageItem, "model_state" | "blur_unlock_status" | "blur_unlock_message" | "human_rating">,
+  image: Pick<
+    ImageItem,
+    "model_state" | "blur_unlock_status" | "blur_unlock_message" | "human_rating" | "blur_verified"
+  >,
   flags: { approved: boolean; dirty: boolean; hasCovers: boolean },
 ): boolean {
   if (!flags.hasCovers || !flags.approved || flags.dirty) return false;
+  if (image.blur_verified === false) return false;
   if (image.human_rating === "safe" || image.human_rating === "excellent") return false;
   return blurVerificationLabel(image, { ...flags, verifying: false })?.tone === "ok";
 }
@@ -87,15 +103,23 @@ export function coverBorderRadius(shape: string | null | undefined, cornerRadius
   return "50%";
 }
 
+/** "Coverage 72% (below 95%) — overruled by detector pass" from a verified message, if any. */
+export function coverageOverruleWarning(message: string | null | undefined): string | null {
+  if (!message || !message.includes("overruled by detector pass")) return null;
+  const parts = message.split(" · ");
+  return parts[parts.length - 1] || null;
+}
+
 export function blurVerificationLabel(
-  image: Pick<ImageItem, "model_state" | "blur_unlock_status" | "blur_unlock_message">,
+  image: Pick<ImageItem, "model_state" | "blur_unlock_status" | "blur_unlock_message"> &
+    Partial<Pick<ImageItem, "blur_verification_required">>,
   {
     verifying,
     hasCovers,
     approved,
     dirty = false,
   }: { verifying: boolean; hasCovers: boolean; approved: boolean; dirty?: boolean },
-): { tone: "ok" | "pending" | "error" | "info"; text: string } | null {
+): { tone: "ok" | "pending" | "error" | "info"; text: string; warning?: string } | null {
   if (verifying) return { tone: "pending", text: "Verifying blurred render…" };
   // Any move/resize/rotate invalidates the previous verification until it is saved,
   // re-rendered and approved again: never show a verified label for old geometry.
@@ -105,12 +129,20 @@ export function blurVerificationLabel(
       text: "Blur changed — re-rendering… (approve again to re-verify)",
     };
   }
-  if (image.model_state === "DO_NOT_POST") {
+  if (image.model_state === "DO_NOT_POST" || (image.blur_verification_required && hasCovers)) {
     switch (image.blur_unlock_status) {
       case "verified":
         // The server only reports SAFE · BLURRED while the verified geometry still matches,
         // and every current cover must still be approved (edits clear approval).
         if (approved && (image.blur_unlock_message ?? "").startsWith("SAFE · BLURRED")) {
+          const warning = coverageOverruleWarning(image.blur_unlock_message);
+          if (warning) {
+            return {
+              tone: "ok",
+              text: "SAFE · BLURRED (verified — detector pass on the blurred render) — only the blurred version can be published.",
+              warning,
+            };
+          }
           return { tone: "ok", text: "SAFE · BLURRED (verified) — only the blurred version can be published." };
         }
         return { tone: "error", text: "Covers changed since verification — approve (Enter/A) to re-verify. Still blocked." };
@@ -864,6 +896,11 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus, onMa
                 role={label.tone === "error" ? "alert" : "status"}
               >
                 <strong>{label.text}</strong>
+                {label.warning ? (
+                  <span className="blur-coverage-warning" data-testid="blur-coverage-warning">
+                    <br />⚠ {label.warning}
+                  </span>
+                ) : null}
               </p>
             );
           })()}

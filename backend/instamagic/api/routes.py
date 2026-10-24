@@ -1633,6 +1633,7 @@ def put_posting_schedule_config(
         story_border_color_default=body.story_border_color_default,
         blur_coverage_threshold=body.blur_coverage_threshold,
         blur_region_padding_px=body.blur_region_padding_px,
+        blur_detector_overrules_coverage=body.blur_detector_overrules_coverage,
     )
     return config_as_dict(view)
 
