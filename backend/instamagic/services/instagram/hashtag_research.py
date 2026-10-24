@@ -90,13 +90,29 @@ def research_hashtag(session: Session, client: InstagramClient, raw_tag: str, *,
 
     try:
         hashtag_id = search(tag)
-        top_rows = top_media_fn(hashtag_id) if callable(top_media_fn) else []
-        recent_rows = recent_media_fn(hashtag_id) if callable(recent_media_fn) else []
     except NotConfigured as exc:
         raise HashtagResearchUnavailable(str(exc.detail)) from exc
 
+    # Meta counts the unique hashtag as soon as the search succeeds, even if an edge fails.
     if not _already_searched_recently(session, tag):
         _record_search(session, tag, hashtag_id)
+        session.commit()
+
+    edge_rows: dict[str, list[dict]] = {}
+    edge_errors: list[str] = []
+    for name, fn in (("top", top_media_fn), ("recent", recent_media_fn)):
+        if not callable(fn):
+            edge_rows[name] = []
+            continue
+        try:
+            edge_rows[name] = fn(hashtag_id)
+        except NotConfigured as exc:
+            edge_rows[name] = []
+            edge_errors.append(str(exc.detail))
+    if edge_errors and not (edge_rows["top"] or edge_rows["recent"]):
+        raise HashtagResearchUnavailable(edge_errors[0])
+    top_rows = edge_rows["top"]
+    recent_rows = edge_rows["recent"]
 
     payload_top = json.dumps(top_rows, ensure_ascii=False)
     payload_recent = json.dumps(recent_rows, ensure_ascii=False)
