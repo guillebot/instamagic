@@ -252,6 +252,7 @@ from instamagic.services.recommendations.performance import (
     load_performance_signals,
 )
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
+from instamagic.workers.resume import SCAN_TIMEOUT
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -643,7 +644,7 @@ def scan_library(
             "instamagic.workers.tasks.run_scan_job",
             str(library.id),
             str(job.id),
-            job_timeout=60 * 60 * 12,
+            job_timeout=SCAN_TIMEOUT,
         )
     except Exception as exc:
         job.status = JobStatus.FAILED.value

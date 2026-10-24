@@ -23,7 +23,28 @@ from sqlalchemy import select
 log = get_logger("worker.resume")
 
 SCAN_FUNC = "instamagic.workers.tasks.run_scan_job"
-SCAN_TIMEOUT = 60 * 60 * 12
+# A full library scan can run well past 12 hours (about 2 s per new photo). RQ kills
+# the work horse at this limit, so keep it generous; resumed scans skip done files.
+SCAN_TIMEOUT = 60 * 60 * 24 * 7
+
+KILLED_SCAN_MESSAGE = (
+    "Scan worker stopped unexpectedly (time limit or crash). "
+    "Start the scan again to resume; finished photos are skipped."
+)
+
+
+def handle_killed_work_horse(job: Job, retpid: object, ret_val: object, rusage: object) -> None:
+    """Mark the DB row of a scan whose RQ work horse was killed, so it is not left `running`."""
+    try:
+        args = list(job.args or ())
+        if job.func_name != SCAN_FUNC or len(args) < 2:
+            return
+        from instamagic.workers.tasks import _mark_scan_job_failed
+
+        _mark_scan_job_failed(str(args[1]), KILLED_SCAN_MESSAGE)
+        log.info("scan_work_horse_killed", job_id=str(args[1]))
+    except Exception:
+        log.info("scan_work_horse_killed_mark_failed")
 
 
 def _queued_scan_job_ids(queue: Queue, connection: Redis) -> set[str]:

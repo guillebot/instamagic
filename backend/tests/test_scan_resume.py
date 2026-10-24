@@ -114,3 +114,38 @@ def test_scan_reuses_active_job(client, app_env) -> None:
     again = client.post(f"/api/libraries/{library_id}/scan")
     assert again.status_code == 202
     assert again.json() == {"job_id": job_id, "status": JobStatus.RUNNING.value}
+
+
+def test_killed_scan_work_horse_marks_row_failed(app_env) -> None:
+    from instamagic.workers.resume import (
+        KILLED_SCAN_MESSAGE,
+        SCAN_TIMEOUT,
+        handle_killed_work_horse,
+    )
+
+    assert SCAN_TIMEOUT > 60 * 60 * 24
+    db = session_factory()()
+    library = Library(name="Archive", root_path=str(app_env["library"]))
+    db.add(library)
+    db.flush()
+    running = ProcessingJob(kind="scan", status=JobStatus.RUNNING.value, library_id=library.id)
+    db.add(running)
+    db.commit()
+    running_id = running.id
+    db.close()
+
+    other = SimpleNamespace(func_name="instamagic.workers.tasks.other", args=("x", str(running_id)))
+    handle_killed_work_horse(other, None, None, None)
+    db = session_factory()()
+    assert db.get(ProcessingJob, running_id).status == JobStatus.RUNNING.value
+    db.close()
+
+    handle_killed_work_horse(
+        SimpleNamespace(func_name=SCAN_FUNC, args=(str(library.id), str(running_id))), None, None, None
+    )
+    db = session_factory()()
+    job = db.get(ProcessingJob, running_id)
+    assert job.status == JobStatus.FAILED.value
+    assert job.detail == KILLED_SCAN_MESSAGE
+    assert job.finished_at is not None
+    db.close()
