@@ -102,12 +102,14 @@ class Settings(BaseSettings):
     # older than SESSION_RENEW_AFTER_SECONDS, so an active browser never expires.
     session_ttl_seconds: int = 60 * 60 * 24 * 30
     session_renew_after_seconds: int = 60 * 60 * 6
-    # Trusted-IP auto-login (LAN only). Comma-separated CIDRs/IPs, e.g. "10.1.1.150".
-    # Empty = disabled. Only honored when the request Host is one of
-    # TRUSTED_LOGIN_HOSTS (default: the FRONTEND_ORIGIN host) and the client IP comes
-    # from the in-stack nginx X-Real-IP header (never from client-sent headers).
-    trusted_login_ips: str = ""
-    trusted_login_hosts: str = ""
+    # AUTH_DISABLED=true: no password on the LAN UI. Fail-closed gates (all required):
+    # Host is a LAN UI host (LAN_UI_HOSTS, default the FRONTEND_ORIGIN host, never the
+    # PUBLIC_BASE_URL host), path is not /api/public/*, the TCP peer is the in-stack
+    # nginx, and nginx's X-Real-IP (real client, resolved from Traefik) is inside
+    # AUTH_DISABLED_NETWORKS. Anything else still needs the password.
+    auth_disabled: bool = False
+    auth_disabled_networks: str = "10.1.1.0/24,10.1.2.0/24"
+    lan_ui_hosts: str = ""
     log_level: str = "INFO"
 
     @model_validator(mode="after")
@@ -123,13 +125,13 @@ class Settings(BaseSettings):
         if len(self.app_secret.strip()) < 16:
             raise ValueError("APP_SECRET must be at least 16 characters.")
         try:
-            trusted = self.trusted_login_networks()
+            lan_networks = self.auth_disabled_network_list()
         except ValueError as exc:
-            raise ValueError(f"TRUSTED_LOGIN_IPS has an invalid entry: {exc}") from exc
-        for network in trusted:
-            if not network.is_private or network.prefixlen < (24 if network.version == 4 else 64):
+            raise ValueError(f"AUTH_DISABLED_NETWORKS has an invalid entry: {exc}") from exc
+        for network in lan_networks:
+            if not network.is_private or network.prefixlen < (16 if network.version == 4 else 64):
                 raise ValueError(
-                    "TRUSTED_LOGIN_IPS must list private LAN addresses only (IPv4 /24 or narrower)."
+                    "AUTH_DISABLED_NETWORKS must list private LAN ranges only (IPv4 /16 or narrower)."
                 )
         if self.session_ttl_seconds < 300:
             raise ValueError("SESSION_TTL_SECONDS must be at least 300.")
@@ -201,21 +203,26 @@ class Settings(BaseSettings):
         base = self.frontend_origin.strip().rstrip("/")
         return base
 
-    def trusted_login_networks(self) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    def auth_disabled_network_list(self) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
         networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-        for part in self.trusted_login_ips.replace(";", ",").split(","):
+        for part in self.auth_disabled_networks.replace(";", ",").split(","):
             part = part.strip()
             if not part:
                 continue
             networks.append(ipaddress.ip_network(part, strict=False))
         return networks
 
-    def trusted_login_host_set(self) -> set[str]:
-        raw = self.trusted_login_hosts.strip()
+    def lan_ui_host_set(self) -> set[str]:
+        raw = self.lan_ui_hosts.strip()
         if raw:
-            return {h.strip().lower() for h in raw.split(",") if h.strip()}
-        host = urlparse(self.frontend_origin.strip()).hostname or ""
-        return {host.lower()} if host else set()
+            hosts = {h.strip().lower() for h in raw.split(",") if h.strip()}
+        else:
+            host = urlparse(self.frontend_origin.strip()).hostname or ""
+            hosts = {host.lower()} if host else set()
+        public = (urlparse(self.public_base_url.strip()).hostname or "").lower()
+        hosts.discard(public)
+        hosts.discard("")
+        return hosts
 
     def session_cookie_secure(self) -> bool:
         if self.cookie_secure is not None:

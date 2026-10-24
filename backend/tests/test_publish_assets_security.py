@@ -136,5 +136,17 @@ def test_public_publish_asset_head_and_get(client, app_env) -> None:
 
 def test_public_publish_asset_requires_valid_token(client) -> None:
     bad = "A" * 40
-    assert client.get(f"/api/public/publish-assets/{bad}").status_code == 409
-    assert client.head(f"/api/public/publish-assets/{bad}").status_code == 409
+    assert client.get(f"/api/public/publish-assets/{bad}").status_code == 404
+    assert client.head(f"/api/public/publish-assets/{bad}").status_code == 404
+
+
+def test_public_publish_asset_expired_or_traversal_is_404(client, monkeypatch) -> None:
+    import instamagic.services.instagram.assets as assets_mod
+
+    rel = "11111111-2222-3333-4444-555555555555/publish/feed.jpg"
+    token = mint_publish_token(relative_path=rel, secret=_SECRET)
+    real_time = assets_mod.time.time
+    monkeypatch.setattr(assets_mod.time, "time", lambda: real_time() + 3600)
+    assert client.get(f"/api/public/publish-assets/{token}").status_code == 404
+    for path in ("..%2f..%2fetc%2fpasswd", "%2e%2e/%2e%2e/" + "A" * 40, "A" * 39, "B" * 60):
+        assert client.get(f"/api/public/publish-assets/{path}").status_code == 404

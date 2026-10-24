@@ -167,59 +167,69 @@ def client_ip(request: Request) -> str:
     return peer
 
 
-def trusted_login_ip(request: Request, settings: Settings) -> str | None:
-    """Return the client IP when this request qualifies for trusted-IP auto-login, else None.
+def lan_auth_bypass(request: Request, settings: Settings) -> bool:
+    """True when AUTH_DISABLED applies to this request. Fail-closed; every gate must pass.
 
-    Fail-closed rules (all must hold):
-    - TRUSTED_LOGIN_IPS is configured.
-    - Host header is a LAN UI host (never the public instamagic.schimmel.com.ar).
-    - The path is not a public endpoint.
+    - AUTH_DISABLED is on and AUTH_DISABLED_NETWORKS is non-empty.
+    - Exactly one Host header, equal to a LAN UI host (never the public assets host).
+    - X-Forwarded-Host, if present, equals that same host.
+    - Path is not a public endpoint (/api/public/*).
     - The TCP peer is the in-stack nginx (private/loopback address).
-    - X-Real-IP is a single valid IP and X-Forwarded-For, if present, is exactly the
-      same single IP (nginx overwrites both with $remote_addr; any appended/spoofed
-      chain such as "10.1.1.150, 1.2.3.4" is refused).
-    - That IP is inside TRUSTED_LOGIN_IPS.
+    - X-Real-IP (set by nginx from the Traefik hop, overwriting client values) is a
+      single IP, X-Forwarded-For (also overwritten by nginx) is absent or identical,
+      and that IP is inside AUTH_DISABLED_NETWORKS (LAN only; internet clients and
+      Docker bridge addresses never match).
     """
-    networks = settings.trusted_login_networks()
-    if not networks:
-        return None
-    host = (request.headers.get("host") or "").strip().lower()
-    if host.startswith("["):
-        return None
+    if not settings.auth_disabled:
+        return False
+    networks = settings.auth_disabled_network_list()
+    hosts = settings.lan_ui_host_set()
+    if not networks or not hosts:
+        return False
+    headers = request.headers
+    getlist = getattr(headers, "getlist", None)
+
+    def _values(name: str) -> list[str]:
+        if getlist is not None:
+            return list(getlist(name))
+        value = headers.get(name)
+        return [value] if value is not None else []
+
+    host_values = _values("host")
+    if len(host_values) != 1:
+        return False
+    host = host_values[0].strip().lower()
+    if not host or host.startswith("["):
+        return False
     host = host.split(":", 1)[0]
-    if not host or host not in settings.trusted_login_host_set():
-        return None
+    if host not in hosts:
+        return False
+    xfh = _values("x-forwarded-host")
+    if len(xfh) > 1 or (xfh and xfh[0].strip().lower().split(":", 1)[0] != host):
+        return False
     if request.url.path.startswith("/api/public/"):
-        return None
+        return False
     peer = request.client.host if request.client else ""
     try:
         peer_ip = ipaddress.ip_address(peer)
     except ValueError:
-        return None
+        return False
     if not (peer_ip.is_private or peer_ip.is_loopback):
-        return None
-    real_values = request.headers.getlist("x-real-ip") if hasattr(request.headers, "getlist") else [
-        request.headers.get("x-real-ip", "")
-    ]
+        return False
+    real_values = _values("x-real-ip")
     if len(real_values) != 1:
-        return None
+        return False
     real = real_values[0].strip()
     if not real or "," in real:
-        return None
+        return False
     try:
         real_ip = ipaddress.ip_address(real)
     except ValueError:
-        return None
-    forwarded_values = (
-        request.headers.getlist("x-forwarded-for") if hasattr(request.headers, "getlist") else []
-    )
-    if len(forwarded_values) > 1:
-        return None
-    if forwarded_values and forwarded_values[0].strip() != real:
-        return None
-    if not any(real_ip in network for network in networks):
-        return None
-    return str(real_ip)
+        return False
+    forwarded = _values("x-forwarded-for")
+    if len(forwarded) > 1 or (forwarded and forwarded[0].strip() != real):
+        return False
+    return any(real_ip in network for network in networks)
 
 
 def login_is_blocked(failures: Mapping[str, list[float]], ip: str, *, now: float | None = None) -> bool:

@@ -2516,8 +2516,12 @@ def public_publish_asset(
     settings: Settings = Depends(settings_dep),
 ) -> FileResponse | Response:
     """Unauthenticated short-lived JPEG for Meta's crawler. Token-gated; no session cookie."""
-    asset = parse_publish_token(token, secret=settings.app_secret)
-    path = resolve_publish_file(settings.derivatives_root, asset)
+    # Invalid, garbled, expired or missing → plain 404 (no oracle for token guessing).
+    try:
+        asset = parse_publish_token(token, secret=settings.app_secret)
+        path = resolve_publish_file(settings.derivatives_root, asset)
+    except (NotAllowed, NotFound):
+        raise HTTPException(status_code=404, detail="Not Found") from None
     cache = {"Cache-Control": "private, max-age=60"}
     if request.method == "HEAD":
         stat = path.stat()
