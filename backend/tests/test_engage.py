@@ -236,3 +236,20 @@ def test_engage_due_respects_hour_and_once_per_day(app_env) -> None:
     session.commit()
     assert engage_due(session, later) is False
     session.close()
+
+
+def test_hashtag_search_uses_root_node(monkeypatch) -> None:
+    from instamagic.services.instagram import client as client_mod
+
+    calls: list[tuple[str, dict]] = []
+
+    def fake_get(url, *, params, timeout, action):
+        calls.append((url, dict(params)))
+        return {"data": [{"id": "17843"}]}
+
+    monkeypatch.setattr(client_mod, "graph_get_page", fake_get)
+    graph = client_mod.GraphInstagramClient(access_token="t", business_account_id="1784")
+    assert graph.search_hashtag("#portrait") == "17843"
+    url, params = calls[0]
+    assert url.endswith("/ig_hashtag_search") and "/1784/" not in url
+    assert params["user_id"] == "1784" and params["q"] == "portrait"

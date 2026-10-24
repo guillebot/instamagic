@@ -743,6 +743,12 @@ def _run_into(
         notes.warnings.append("Hashtag search was denied; list built from similar accounts only.")
     if not rows and not acct and not tags:
         notes.warnings.append("No hashtags or similar accounts to search yet.")
+    failed = [h for h in notes.hashtags if h.get("error")]
+    if not rows and failed and len(failed) == len(notes.hashtags) and not notes.accounts:
+        run.status = "blocked"
+        run.error_code = "hashtag_failed"
+        run.error = "Hashtag search failed: " + str(failed[0]["error"])[:200]
+        return
     run.status = "ok"
 
 
