@@ -91,7 +91,16 @@ def main() -> None:
     connection = Redis.from_url(settings.redis_url)
     write_heartbeat(connection, queue_name)
     stop_heartbeat = _start_heartbeat(connection, queue_name)
-    worker = Worker([Queue(queue_name, connection=connection)], connection=connection)
+    killed_handler = None
+    if queue_name == QUEUE_IO:
+        from instamagic.workers.resume import handle_killed_work_horse
+
+        killed_handler = handle_killed_work_horse
+    worker = Worker(
+        [Queue(queue_name, connection=connection)],
+        connection=connection,
+        work_horse_killed_handler=killed_handler,
+    )
     try:
         worker.work(with_scheduler=use_scheduler)
     finally:
