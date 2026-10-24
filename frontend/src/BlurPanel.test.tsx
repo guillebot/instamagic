@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blurVerificationLabel, coverBorderRadius } from "./BlurPanel";
+import { blurVerificationLabel, canOfferMarkSafe, coverBorderRadius, isTextEntryTarget } from "./BlurPanel";
 
 const dnp = (status: string, message: string | null = null) => ({
   model_state: "DO_NOT_POST",
@@ -51,5 +51,39 @@ describe("coverBorderRadius", () => {
   });
   it("keeps ellipses round", () => {
     expect(coverBorderRadius("ellipse", 0, 1)).toBe("50%");
+  });
+});
+
+describe("isTextEntryTarget", () => {
+  it("lets Enter/A through from selects, sliders and buttons", () => {
+    const select = document.createElement("select");
+    const range = Object.assign(document.createElement("input"), { type: "range" });
+    const button = document.createElement("button");
+    expect(isTextEntryTarget(select)).toBe(false);
+    expect(isTextEntryTarget(range)).toBe(false);
+    expect(isTextEntryTarget(button)).toBe(false);
+    expect(isTextEntryTarget(document.body)).toBe(false);
+    expect(isTextEntryTarget(null)).toBe(false);
+  });
+  it("keeps typing in text fields untouched", () => {
+    expect(isTextEntryTarget(document.createElement("textarea"))).toBe(true);
+    expect(isTextEntryTarget(Object.assign(document.createElement("input"), { type: "text" }))).toBe(true);
+    expect(isTextEntryTarget(Object.assign(document.createElement("input"), { type: "number" }))).toBe(true);
+  });
+});
+
+describe("canOfferMarkSafe", () => {
+  const ok = { approved: true, dirty: false, hasCovers: true };
+  it("offers Mark safe only after a verified SAFE · BLURRED result for flagged photos", () => {
+    expect(canOfferMarkSafe({ ...dnp("verified", "SAFE · BLURRED (verified)"), human_rating: null }, ok)).toBe(true);
+    expect(canOfferMarkSafe({ ...dnp("failed", "1 region uncovered"), human_rating: null }, ok)).toBe(false);
+    expect(canOfferMarkSafe({ ...dnp("pending"), human_rating: null }, ok)).toBe(false);
+    expect(canOfferMarkSafe({ ...dnp("verified", null), human_rating: null }, ok)).toBe(false);
+  });
+  it("hides it while edits are pending, covers unapproved, or already safe", () => {
+    const v = { ...dnp("verified", "SAFE · BLURRED (verified)"), human_rating: null };
+    expect(canOfferMarkSafe(v, { ...ok, dirty: true })).toBe(false);
+    expect(canOfferMarkSafe(v, { ...ok, approved: false })).toBe(false);
+    expect(canOfferMarkSafe({ ...v, human_rating: "safe" }, ok)).toBe(false);
   });
 });

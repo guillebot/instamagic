@@ -25,7 +25,30 @@ type Props = {
   captureKeys?: boolean;
   onChanged?: (imageId: string) => void;
   onStatus?: (message: string) => void;
+  /** Offered right after a successful verify ("Mark safe"). */
+  onMarkSafe?: () => void;
 };
+
+/** Keys only belong to the field when the user is typing text; a focused select, slider,
+ * checkbox or button must not swallow the panel shortcuts (Enter/A approve). */
+export function isTextEntryTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+  if (el.tagName !== "INPUT") return false;
+  const type = ((el as HTMLInputElement).type || "text").toLowerCase();
+  return ["text", "search", "email", "number", "password", "tel", "url"].includes(type);
+}
+
+/** Show "Mark safe" only when the result on screen is a green verified/approved state. */
+export function canOfferMarkSafe(
+  image: Pick<ImageItem, "model_state" | "blur_unlock_status" | "blur_unlock_message" | "human_rating">,
+  flags: { approved: boolean; dirty: boolean; hasCovers: boolean },
+): boolean {
+  if (!flags.hasCovers || !flags.approved || flags.dirty) return false;
+  if (image.human_rating === "safe" || image.human_rating === "excellent") return false;
+  return blurVerificationLabel(image, { ...flags, verifying: false })?.tone === "ok";
+}
 
 function clientToImage(
   clientX: number,
@@ -194,7 +217,7 @@ export function coverageCheckLines(
   return lines;
 }
 
-export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Props) {
+export function BlurPanel({ image, captureKeys = true, onChanged, onStatus, onMarkSafe }: Props) {
   const queryClient = useQueryClient();
   const blurs = useQuery({
     queryKey: ["blurs", image.id],
@@ -388,16 +411,25 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
     }
   }
 
+  const approveRef = useRef<() => Promise<void>>(async () => undefined);
+  approveRef.current = approve;
+
   useEffect(() => {
     if (!captureKeys) return;
     function onKey(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (isTextEntryTarget(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "Enter" || event.key.toLowerCase() === "a") {
-        if (!busyRef.current && itemsLenRef.current > 0) {
-          event.preventDefault();
-          void approve();
+        event.preventDefault();
+        if (busyRef.current) {
+          onStatus?.("Still saving the blur — try again in a moment.");
+        } else if (itemsLenRef.current === 0) {
+          onStatus?.("Add a cover first (drag on the photo or Suggest from model), then approve.");
+        } else {
+          (document.activeElement as HTMLElement | null)?.blur?.();
+          void approveRef.current();
         }
+        return;
       }
       // Read the latest items/selection through refs: this listener is installed once
       // per image, so closing over render-time state would nudge from stale geometry.
@@ -806,6 +838,47 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
         ) : null}
       </div>
       <div className="prep-controls">
+        <div className="blur-approve-top" data-testid="blur-approve-top">
+          <button
+            type="button"
+            className="button blur-approve-primary"
+            data-testid="blur-approve-primary"
+            disabled={busy || saving || items.length === 0}
+            onClick={() => void approve()}
+            title="Approve the covers on screen and verify the blurred render (Enter or A)"
+          >
+            {verifying ? "Verifying blur…" : busy || saving ? "Saving…" : "Approve & verify blur (A)"}
+          </button>
+          {(() => {
+            const label = blurVerificationLabel(image, {
+              verifying,
+              hasCovers: items.length > 0,
+              approved: allApproved,
+              dirty,
+            });
+            if (!label) return null;
+            return (
+              <p
+                className={label.tone === "error" ? "error blur-verify-state" : "help blur-verify-state"}
+                data-testid="blur-verify-state"
+                role={label.tone === "error" ? "alert" : "status"}
+              >
+                <strong>{label.text}</strong>
+              </p>
+            );
+          })()}
+          {canOfferMarkSafe(image, { approved: allApproved, dirty, hasCovers: items.length > 0 }) && onMarkSafe && !verifying ? (
+            <button
+              type="button"
+              className="ghost blur-mark-safe"
+              data-testid="blur-mark-safe"
+              onClick={() => onMarkSafe()}
+            >
+              Mark safe (3)
+            </button>
+          ) : null}
+        </div>
+        {error ? <p className="error" role="alert">{error}</p> : null}
         {isDoNotPost ? (
           <p className="help">
             <strong>Blur to unlock.</strong> Draw or suggest covers, approve to run verification (coverage +
@@ -817,24 +890,6 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             Enter/A approves the set.
           </p>
         )}
-        {(() => {
-          const label = blurVerificationLabel(image, {
-            verifying,
-            hasCovers: items.length > 0,
-            approved: allApproved,
-            dirty,
-          });
-          if (!label) return null;
-          return (
-            <p
-              className={label.tone === "error" ? "error blur-verify-state" : "help blur-verify-state"}
-              data-testid="blur-verify-state"
-              role={label.tone === "error" ? "alert" : "status"}
-            >
-              <strong>{label.text}</strong>
-            </p>
-          );
-        })()}
         {coverage.data && (coverage.data.regions.length > 0 || coverage.data.do_not_post) ? (
           <div className="blur-gate-panel" data-testid="blur-gate-panel">
             <div className="blur-gate-summary" data-testid="blur-gate-summary">
@@ -946,10 +1001,9 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus }: Pr
             disabled={busy || items.length === 0}
             onClick={() => void approve()}
           >
-            {busy || saving ? "Saving…" : allApproved ? "Approved" : "Approve covers"}
+            {busy || saving ? "Saving…" : allApproved ? "Approved" : "Approve covers (A)"}
           </button>
         </div>
-        {error ? <p className="error">{error}</p> : null}
         {items.length ? (
           <ul className="blur-list">
             {items.map((blur) => (

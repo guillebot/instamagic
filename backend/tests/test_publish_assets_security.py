@@ -137,7 +137,9 @@ def test_public_publish_asset_head_and_get(client, app_env) -> None:
 def test_public_publish_asset_requires_valid_token(client) -> None:
     bad = "A" * 40
     assert client.get(f"/api/public/publish-assets/{bad}").status_code == 404
-    assert client.head(f"/api/public/publish-assets/{bad}").status_code == 404
+    head = client.head(f"/api/public/publish-assets/{bad}")
+    assert head.status_code == 404
+    assert head.headers.get("x-instamagic-asset") == "rejected"
 
 
 def test_public_publish_asset_expired_or_traversal_is_404(client, monkeypatch) -> None:

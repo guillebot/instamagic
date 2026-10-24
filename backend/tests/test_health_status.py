@@ -37,6 +37,7 @@ def test_classify_publish_probe_status() -> None:
         "publish-assets route reachable (token rejected)",
     )
     assert classify_publish_probe_status(404) == ("warning", "public route not reaching the app")
+    assert classify_publish_probe_status(404, app_marker=True)[0] == "ok"
     assert classify_publish_probe_status(503)[0] == "down"
     assert classify_publish_probe_status(502)[0] == "down"
 
