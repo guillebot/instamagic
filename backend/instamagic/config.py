@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     enrich_concurrency: int = 2
     enrich_rpm: int = 30
     enrich_batch_size: int = 12
+    # Prefetch (unrated, classifier-clean REVIEW photos): max lingerie/covered-region detector score.
+    enrich_prefetch_max_lingerie: float = 0.25
     # Fail-closed: false by default. True only with AUTO_PUBLISH_ACK exact phrase.
     # Phase 2 still expects human Publish clicks; auto-fire is reserved and documented.
     auto_publish: bool = False

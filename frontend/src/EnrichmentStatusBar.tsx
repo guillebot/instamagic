@@ -46,6 +46,26 @@ export function EnrichmentStatusBar() {
           />
           Auto captions &amp; hashtags
         </label>
+        <label className="row">
+          <input
+            type="checkbox"
+            checked={Boolean(data.prefetch_enabled)}
+            disabled={act.isPending || !data.enabled}
+            onChange={(event) =>
+              act.mutate({
+                path: "/api/enrichment/settings",
+                method: "PUT",
+                body: { prefetch_enabled: event.target.checked },
+              })
+            }
+          />
+          Pre-generate for unrated clean photos
+        </label>
+        {data.prefetch_enabled ? (
+          <span className="muted">
+            {data.prefetch_calls_today ?? 0}/{data.prefetch_daily_cap ?? 0} prefetch calls today
+          </span>
+        ) : null}
         {data.enabled ? (
           <button
             type="button"
@@ -69,7 +89,9 @@ export function EnrichmentStatusBar() {
       </div>
       <p className="muted">
         Labels, captions and hashtags are prepared in the background for photos you rated Safe/Excellent that pass the
-        blur/crop gates. Existing captions are never replaced.
+        blur/crop gates first. With pre-generation on, unrated photos the local model found clean (no detections, no blur,
+        not Do-not-post) are prepared afterwards, best-scored first; they still can&apos;t be queued or published until you
+        rate them Safe. Existing captions are never replaced.
       </p>
       {error ? <p className="error">{error}</p> : null}
     </section>

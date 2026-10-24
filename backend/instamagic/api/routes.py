@@ -2870,7 +2870,9 @@ def get_enrichment_status(
     session: Session = db_dep,
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
-    status = enrichment_status(session, _enrich_redis(settings))
+    status = enrichment_status(
+        session, _enrich_redis(settings), prefetch_max_lingerie=settings.enrich_prefetch_max_lingerie
+    )
     status["rpm"] = settings.enrich_rpm
     status["concurrency"] = settings.enrich_concurrency
     return status
@@ -2915,6 +2917,10 @@ def update_enrichment_settings(
         fields["enrichment_enabled"] = body.enabled
     if body.daily_cap is not None:
         fields["enrichment_daily_cap"] = body.daily_cap
+    if body.prefetch_enabled is not None:
+        fields["enrichment_prefetch_enabled"] = body.prefetch_enabled
+    if body.prefetch_daily_cap is not None:
+        fields["enrichment_prefetch_daily_cap"] = body.prefetch_daily_cap
     return _enrichment_config_update(session, settings, **fields)
 
 

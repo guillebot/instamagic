@@ -186,6 +186,7 @@ def run_enrichment_batch_job() -> None:
             account_voice=settings.account_voice,
             thinking_budget=settings.gemini_label_thinking_budget,
             max_output_tokens=settings.gemini_label_max_output_tokens,
+            prefetch_max_lingerie=settings.enrich_prefetch_max_lingerie,
         )
         summary = enrichment.run_enrichment_batch(
             session,

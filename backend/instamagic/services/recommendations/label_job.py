@@ -33,7 +33,11 @@ from instamagic.models import (
 from instamagic.models.enums import JobKind
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.blurs.unlock import blur_unlock_effective
-from instamagic.services.gemini.context import build_context, gemini_allows_pixels
+from instamagic.services.gemini.context import (
+    build_context,
+    build_prefetch_context,
+    gemini_allows_pixels,
+)
 from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.gemini.labeling import (
     LabelingProvider,
@@ -205,8 +209,13 @@ def label_one_image(
     thinking_budget: int,
     max_output_tokens: int,
     covering_blur_fn,
+    prefetch: bool = False,
 ) -> str:
-    """Label a single image. Returns outcome token: ok, blocked, empty, error."""
+    """Label a single image. Returns outcome token: ok, blocked, empty, error.
+
+    ``prefetch=True`` is the background tier for unrated, classifier-clean REVIEW photos: the context is
+    built behind ``prefetch_gate`` (re-checked here from the DB) instead of the rated-photo gate.
+    """
     image.gemini_label_attempts = (image.gemini_label_attempts or 0) + 1
     approved = next((crop for crop in image.crops if crop.approved), None)
     covering = covering_blur_fn(session, image)
@@ -229,26 +238,47 @@ def label_one_image(
             "width": approved.width,
             "height": approved.height,
         }
-    context = append_voice_to_context(
-        build_context(
-            attested=True,
+    if prefetch:
+        from instamagic.services.recommendations.prefetch import is_prefetch_candidate
+
+        base_context = build_prefetch_context(
+            attested=is_attested(session, image.library_id),
             human_rating=image.human_rating,
             model_state=image.model_state,
-            needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
-            has_approved_crop=approved is not None,
-            has_approved_covering_blur=covering,
-            has_approved_blur=bool(gate_kwargs["has_approved_blur"]),
-            do_not_post_blur_unlocked=bool(gate_kwargs["do_not_post_blur_unlocked"]),
+            classifier_clean=is_prefetch_candidate(
+                session, image, max_lingerie=get_settings().enrich_prefetch_max_lingerie
+            ),
+            has_any_blur=bool(image.blurs),
+            skip_reason=image.skip_reason,
             policy=policy,
             operator_confirmed=True,
             content_tags=tags,
             composition=composition,
             mood=image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified"),
             safe_description=description,
-            crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
-        ),
-        account_voice=account_voice,
-    )
+        )
+        context = append_voice_to_context(base_context, account_voice=account_voice)
+    else:
+        context = append_voice_to_context(
+            build_context(
+                attested=True,
+                human_rating=image.human_rating,
+                model_state=image.model_state,
+                needs_crop=image.model_state == SafetyState.SAFE_AFTER_CROP.value,
+                has_approved_crop=approved is not None,
+                has_approved_covering_blur=covering,
+                has_approved_blur=bool(gate_kwargs["has_approved_blur"]),
+                do_not_post_blur_unlocked=bool(gate_kwargs["do_not_post_blur_unlocked"]),
+                policy=policy,
+                operator_confirmed=True,
+                content_tags=tags,
+                composition=composition,
+                mood=image.gemini_mood or (", ".join(mood_names) if mood_names else "unspecified"),
+                safe_description=description,
+                crop=crop_payload if image.model_state == SafetyState.SAFE_AFTER_CROP.value and approved else None,
+            ),
+            account_voice=account_voice,
+        )
     pixels = preview_bytes_fn(image) if gemini_allows_pixels(policy) else None
     try:
         result = provider.label_image(
