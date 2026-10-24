@@ -778,8 +778,9 @@ class GraphInstagramClient:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         payload = graph_get_page(
-            f"{self._base}/{self._ig_user_id}/ig_hashtag_search",
-            params={"q": hashtag.lstrip("#"), "access_token": self._token},
+            # Root node, not an IG User edge: GET /ig_hashtag_search?user_id=...&q=...
+            f"{self._base}/ig_hashtag_search",
+            params={"user_id": self._ig_user_id, "q": hashtag.lstrip("#"), "access_token": self._token},
             timeout=self._timeout,
             action="search hashtag",
         )
