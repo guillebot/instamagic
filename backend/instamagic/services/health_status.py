@@ -428,9 +428,9 @@ def _check_queue(settings: Settings) -> HealthCheck:
 
     missing: list[str] = []
     notes: list[str] = []
-    from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, QUEUE_ML
+    from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, QUEUE_ML, QUEUE_SOCIAL
 
-    for name in (QUEUE_IO, QUEUE_ML, QUEUE_GEMINI):
+    for name in (QUEUE_IO, QUEUE_ML, QUEUE_GEMINI, QUEUE_SOCIAL):
         alive, note = _queue_worker_alive(connection, name)
         notes.append(f"{name}: {note}")
         if not alive:

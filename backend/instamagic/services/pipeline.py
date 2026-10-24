@@ -42,13 +42,13 @@ from instamagic.services.images.derivatives import (
     read_image,
     save_derivative,
 )
-from instamagic.services.images.hashes import dhash, file_sha256, hamming
+from instamagic.services.images.hashes import dhash, file_sha256
 from instamagic.services.images.paths import is_transient_io_error, retry_transient_io
 from instamagic.services.safety.analyze import analyze_image
 from instamagic.services.safety.decision import DecisionInput, decide
 from instamagic.services.safety.labels import CLEAR_SCORE, EXPOSED_LABELS
 from PIL import Image as PilImage
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 log = get_logger("pipeline.scan")
@@ -348,7 +348,7 @@ def run_scan(
         current.current_stage = "uniqueness"
         session.commit()
         log.info("scan_uniqueness_started", library_id=str(library_id), job_id=str(job_pk))
-        _refresh_uniqueness(session, library_id)
+        _refresh_uniqueness(session, library_id, job_pk)
         current = session.get(ProcessingJob, job_pk)
         if current is None:
             raise RuntimeError("Scan job disappeared.")
@@ -651,20 +651,77 @@ def _latest_assessment(session: Session, image_id: UUID) -> SafetyAssessment | N
     )
 
 
-def _refresh_uniqueness(session: Session, library_id: UUID) -> None:
-    images = session.scalars(
-        select(Image).where(Image.library_id == library_id, Image.phash.is_not(None), Image.skip_reason.is_(None))
+UNIQUENESS_PROGRESS_SECONDS = 3.0
+_UNIQUENESS_CHUNK = 32
+
+
+def min_hamming_distances(hashes: list[str | None]) -> list[int | None]:
+    """Minimum Hamming distance from each hash to any *other* valid hash (None if no others).
+
+    Vectorised (numpy popcount) for 64-bit hashes; same result as pairwise `hamming()`.
+    """
+    return list(_min_hamming_iter(hashes))
+
+
+def _min_hamming_iter(
+    hashes: list[str | None], progress: Callable[[int, int], None] | None = None
+) -> Iterator[int | None]:
+    import numpy as np
+
+    n = len(hashes)
+    valid_idx = [i for i, value in enumerate(hashes) if value]
+    ints = [int(hashes[i], 16) for i in valid_idx]  # type: ignore[arg-type]
+    result: list[int | None] = [None] * n
+    if len(ints) >= 2 and max(ints).bit_length() <= 64:
+        arr = np.array(ints, dtype=np.uint64)
+        m = len(arr)
+        for start in range(0, m, _UNIQUENESS_CHUNK):
+            block = arr[start : start + _UNIQUENESS_CHUNK]
+            dist = np.bitwise_count(block[:, None] ^ arr[None, :])
+            rows = np.arange(len(block))
+            dist[rows, start + rows] = 255  # exclude self
+            mins = dist.min(axis=1)
+            for offset, value in enumerate(mins.tolist()):
+                result[valid_idx[start + offset]] = int(value)
+            if progress is not None:
+                progress(min(start + len(block), m), m)
+    elif len(ints) >= 2:
+        for a, left in enumerate(ints):
+            best = min((left ^ right).bit_count() for b, right in enumerate(ints) if b != a)
+            result[valid_idx[a]] = best
+            if progress is not None and a % 500 == 0:
+                progress(a + 1, len(ints))
+    yield from result
+
+
+def _refresh_uniqueness(session: Session, library_id: UUID, job_pk: UUID | None = None) -> None:
+    rows = session.execute(
+        select(Image.id, Image.phash, ImageScore.uniqueness)
+        .join(ImageScore, ImageScore.image_id == Image.id, isouter=True)
+        .where(Image.library_id == library_id, Image.phash.is_not(None), Image.skip_reason.is_(None))
     ).all()
-    for image in images:
-        distances = [
-            hamming(image.phash, other.phash)
-            for other in images
-            if other.id != image.id
-        ]
-        usable = [distance for distance in distances if distance is not None]
-        uniqueness = 1.0 if not usable else min(1.0, min(usable) / 16)
-        if image.score is not None:
-            image.score.uniqueness = uniqueness
+    last_write = time.monotonic()
+
+    def progress(done: int, total: int) -> None:
+        nonlocal last_write
+        if job_pk is None or (time.monotonic() - last_write < UNIQUENESS_PROGRESS_SECONDS and done < total):
+            return
+        last_write = time.monotonic()
+        job = session.get(ProcessingJob, job_pk)
+        if job is not None:
+            job.detail = f"Checking similar photos {done}/{total}"
+            session.commit()
+
+    distances = list(_min_hamming_iter([row[1] for row in rows], progress))
+    updates = []
+    for (image_id, _phash, current), distance in zip(rows, distances, strict=True):
+        uniqueness = 1.0 if distance is None else min(1.0, distance / 16)
+        if current is not None and abs(float(current) - uniqueness) > 1e-9:
+            updates.append({"image_id": image_id, "uniqueness": uniqueness})
+    for start in range(0, len(updates), 2000):
+        session.execute(update(ImageScore), updates[start : start + 2000])
+        session.commit()
+    log.info("scan_uniqueness_finished", library_id=str(library_id), images=len(rows), updated=len(updates))
     session.commit()
 
 

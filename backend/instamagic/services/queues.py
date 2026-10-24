@@ -11,7 +11,10 @@ from rq.registry import FailedJobRegistry, StartedJobRegistry
 QUEUE_IO = "io"
 QUEUE_ML = "ml"
 QUEUE_GEMINI = "gemini"
-QUEUE_NAMES = (QUEUE_IO, QUEUE_ML, QUEUE_GEMINI)
+# Instagram insights/comments syncs + Engage: served by worker-gemini so a long library
+# scan on the io worker can never block them.
+QUEUE_SOCIAL = "social"
+QUEUE_NAMES = (QUEUE_IO, QUEUE_ML, QUEUE_GEMINI, QUEUE_SOCIAL)
 
 
 def _describe_job(job: Job, status: str) -> QueueJobOut:

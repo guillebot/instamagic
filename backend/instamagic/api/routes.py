@@ -470,6 +470,18 @@ def health_status(
     return build_health_status(settings)
 
 
+@router.get("/api/status")
+def app_status(
+    _auth: None = Depends(require_session),
+    settings: Settings = Depends(settings_dep),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Read-only operator dashboard snapshot (session required, cached ~15s). No secrets."""
+    from instamagic.services.app_status import build_app_status
+
+    return build_app_status(settings, session)
+
+
 @router.get("/ready")
 def ready(session: Session = db_dep) -> dict[str, str]:
     session.execute(select(1))
