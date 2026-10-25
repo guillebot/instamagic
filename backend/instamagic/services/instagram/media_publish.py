@@ -435,13 +435,13 @@ class MediaPublishOutcome:
 
 
 def final_caption_text(session: Session, item: PublishingQueueItem, caption: Caption) -> str:
-    """Caption exactly as the feed pipeline would publish it (hashtag handling lives there)."""
-    from instamagic.services.instagram import publish as feed_publish
+    """Caption exactly as the feed pipeline publishes it: text + blocklist-filtered hashtags."""
+    from instamagic.services.instagram.publish import publish_caption_text
 
-    builder = getattr(feed_publish, "publish_caption_text", None)
-    if callable(builder):
-        return str(builder(session, item, caption)).strip()
-    return caption.text.strip()
+    image = session.get(Image, caption.image_id)
+    if image is None:
+        raise NotFound("Caption image was not found.")
+    return publish_caption_text(caption, image)
 
 
 def _next_attempt_number(session: Session, item_id: UUID, kind: str) -> int:

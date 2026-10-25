@@ -130,6 +130,11 @@ def test_reel_render_approve_publish_fake(client, app_env) -> None:
     assert len(fake.reel_calls) == 1
     assert "/api/public/publish-assets/" in fake.reel_calls[0]["video_url"]
     assert pub.json()["permalink"].startswith("https://www.instagram.com/reel/")
+    from instamagic.services.posting.hashtags import is_blocked, tags_in_text
+
+    sent = fake.reel_calls[0]["caption"]
+    assert sent == pub.json()["published_caption"]
+    assert not any(is_blocked(tag) for tag in tags_in_text(sent))
 
 
 @needs_ffmpeg
