@@ -102,6 +102,7 @@ from instamagic.schemas.dto import (
     RatingIn,
     RelatedAccountIn,
     ScheduleIn,
+    StageCountsOut,
     TagIn,
 )
 from instamagic.services.blurs.coverage_report import blur_coverage_report
@@ -155,6 +156,14 @@ from instamagic.services.images.presentation import (
     normalize_human_rating_filter,
     publish_variant,
     publish_variant_label,
+)
+from instamagic.services.images.stage import (
+    STAGE_LABELS,
+    STAGES,
+    QueueFact,
+    photo_stage,
+    queue_item_stage,
+    stage_clause,
 )
 from instamagic.services.instagram.assets import (
     parse_publish_token,
@@ -473,7 +482,37 @@ def _image_out(session: Session, image: Image, *, settings: Settings | None = No
         enrich_hashtags=stored_hashtags(image),
         gemini_refused=is_gemini_refused(image),
         gemini_refused_reason=image.gemini_refused_reason,
+        **_stage_fields(session, image),
     )
+
+
+def _stage_fields(session: Session, image: Image) -> dict[str, object]:
+    queue_facts = [QueueFact(item.state, item.scheduled_at) for item in image.queue_items or []]
+    permalink: str | None = None
+    if any(fact.state == QueueState.PUBLISHED.value for fact in queue_facts):
+        permalink = session.scalar(
+            select(InstagramPost.permalink)
+            .where(InstagramPost.image_id == image.id, InstagramPost.permalink.is_not(None))
+            .order_by(InstagramPost.published_at.desc())
+            .limit(1)
+        )
+    needs_verification = requires_blur_verification(image)
+    result = photo_stage(
+        human_rating=image.human_rating,
+        model_state=image.model_state,
+        has_blurs=bool(image.blurs),
+        blur_verified=needs_verification and blur_covers_verified(session, image),
+        queue=queue_facts,
+        caption_statuses=(caption.status for caption in image.captions or []),
+        permalink=permalink,
+    )
+    return {
+        "stage": result.stage,
+        "stage_label": result.label,
+        "stage_detail": result.detail,
+        "stage_caption_ready": result.caption_ready,
+        "posted_permalink": result.permalink,
+    }
 
 
 def _load_image(session: Session, image_id: UUID) -> Image:
@@ -485,6 +524,7 @@ def _load_image(session: Session, image_id: UUID) -> Image:
             selectinload(Image.crops),
             selectinload(Image.blurs),
             selectinload(Image.queue_items),
+            selectinload(Image.captions),
         )
     )
     if image is None or image.skip_reason is not None:
@@ -826,6 +866,7 @@ def list_images(
     date_to: datetime | None = None,
     queued: bool | None = None,
     posted: bool | None = None,
+    stage: str | None = None,
     folder: str | None = Query(default=None, max_length=1024),
     recursive: bool = False,
     cursor: str | None = None,
@@ -841,9 +882,12 @@ def list_images(
             selectinload(Image.queue_items),
             selectinload(Image.crops),
             selectinload(Image.blurs),
+            selectinload(Image.captions),
         )
         .order_by(Image.ingested_at.desc(), Image.id.desc())
     )
+    if stage:
+        stmt = stmt.where(_stage_or_400(stage))
     if library_id:
         stmt = stmt.where(Image.library_id == library_id)
     if model_state:
@@ -900,6 +944,39 @@ def list_images(
     page = rows[:limit]
     next_cursor = _encode_cursor(page[-1]) if len(rows) > limit and page else None
     return ImagePage(items=[_image_out(session, image) for image in page], next_cursor=next_cursor)
+
+
+def _stage_or_400(stage: str):  # type: ignore[no-untyped-def]
+    if stage not in STAGES:
+        raise HTTPException(status_code=400, detail=f"stage must be one of {', '.join(STAGES)}.")
+    return stage_clause(stage, Image, PublishingQueueItem, BlurCover)
+
+
+@router.get("/api/images/stage-counts", response_model=StageCountsOut)
+def image_stage_counts(
+    library_id: UUID | None = None,
+    folder: str | None = Query(default=None, max_length=1024),
+    recursive: bool = False,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> StageCountsOut:
+    """Per-stage photo counts for the stage filter chips (same scope as the library grid)."""
+    base = select(func.count(Image.id)).where(Image.skip_reason.is_(None))
+    if library_id:
+        base = base.where(Image.library_id == library_id)
+    if folder is not None:
+        normalized = _folder_or_400(folder)
+        if not recursive:
+            base = base.where(Image.session_name == normalized)
+        elif normalized:
+            base = base.where(
+                or_(
+                    Image.session_name == normalized,
+                    Image.session_name.like(f"{escape_like(normalized)}/%", escape="\\"),
+                )
+            )
+    counts = {stage: int(session.scalar(base.where(_stage_or_400(stage))) or 0) for stage in STAGES}
+    return StageCountsOut(counts=counts, labels=dict(STAGE_LABELS))
 
 
 @router.get("/api/images/{image_id}", response_model=ImageOut)
@@ -3444,6 +3521,7 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
             story_status = "pending"
         else:
             story_status = "enabled"
+    image_payload = _image_out(session, image).model_dump(mode="json")
     return {
         "id": item.id,
         "state": item.state,
@@ -3484,7 +3562,8 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
             if item.media_type == QueueMediaType.REELS.value and item.reel_sha256
             else None
         ),
-        "image": _image_out(session, image).model_dump(mode="json"),
+        "image": image_payload,
+        **queue_item_stage(item.state, item.scheduled_at, image_payload),
     }
 
 

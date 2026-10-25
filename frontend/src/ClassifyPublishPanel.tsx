@@ -1,3 +1,4 @@
+import { StagePill } from "./photoStage";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -381,6 +382,7 @@ export function ClassifyPublishPanel({
   return (
     <section className="classify-publish" aria-label="Publish actions">
       <div className="classify-publish-badges">
+        <StagePill image={image} />
         {ready?.queue_state ? <span className="badge queue-badge">{ready.queue_state}</span> : null}
         {ready?.scheduled_at ? (
           <span className="badge queue-badge">scheduled {new Date(ready.scheduled_at).toLocaleString()}</span>

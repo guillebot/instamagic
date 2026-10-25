@@ -1,3 +1,4 @@
+import { StagePill } from "../photoStage";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
@@ -320,7 +321,7 @@ export function CuratePickModal({
           </div>
           <div className="curate-modal-panel">
             <p className="muted">
-              {pick.image.filename} · {lifecycleLabel(pick.image.effective_state)} · model{" "}
+              <StagePill image={pick.image} /> {pick.image.filename} · {lifecycleLabel(pick.image.effective_state)} · model{" "}
               {pick.image.model_state ?? "—"} · {pick.status}
             </p>
             <ul className="curate-reasons">

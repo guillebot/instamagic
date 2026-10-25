@@ -42,6 +42,11 @@ export type ImageItem = {
   blur_unlock_status?: string;
   gemini_refused?: boolean;
   gemini_refused_reason?: string | null;
+  stage?: string;
+  stage_label?: string;
+  stage_detail?: string | null;
+  stage_caption_ready?: boolean | null;
+  posted_permalink?: string | null;
   blur_unlock_message?: string | null;
   blur_unlock_highlights?: Array<{
     kind?: string;
@@ -291,6 +296,9 @@ export type ImagePublishReadiness = {
 export type QueueItem = {
   id: string;
   state: string;
+  stage?: string;
+  stage_label?: string;
+  stage_detail?: string | null;
   media_type?: string;
   crop_id?: string | null;
   caption_id?: string | null;

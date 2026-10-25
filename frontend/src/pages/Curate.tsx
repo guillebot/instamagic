@@ -1,3 +1,4 @@
+import { StagePill } from "../photoStage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -645,6 +646,9 @@ export function CurationPicksWorkspace({
                         {thumb ? <CurateGridThumb src={thumb} /> : <span className="tile-empty" />}
                         {blurred ? <span className="curate-blur-badge">Blurred (verified)</span> : null}
                         <span className="curate-tile-badge">{badge}</span>
+                        <span className="curate-tile-stage">
+                          <StagePill image={pick.image} compact />
+                        </span>
                       </button>
                     );
                   })}
