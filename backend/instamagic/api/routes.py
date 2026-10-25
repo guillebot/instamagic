@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from instamagic.api.deps import db_dep, require_lan_session, require_session, settings_dep
 from instamagic.auth import (
@@ -52,7 +52,7 @@ from instamagic.models import (
     SafetyState,
     TagSource,
 )
-from instamagic.models.enums import CurationBatchStatus, JobKind
+from instamagic.models.enums import CurationBatchStatus, JobKind, QueueMediaType
 from instamagic.schemas.dto import (
     AttestIn,
     BlurCreateIn,
@@ -90,8 +90,10 @@ from instamagic.schemas.dto import (
     JobOut,
     LibraryIn,
     LoginIn,
+    MediaQueueIn,
     MetaAppCredentialsIn,
     PostingScheduleConfigIn,
+    PostTypeIn,
     PublishIn,
     QueueIn,
     QueuesOut,
@@ -153,7 +155,11 @@ from instamagic.services.images.presentation import (
     publish_variant,
     publish_variant_label,
 )
-from instamagic.services.instagram.assets import parse_publish_token, resolve_publish_file
+from instamagic.services.instagram.assets import (
+    parse_publish_token,
+    publish_asset_media_type,
+    resolve_publish_file,
+)
 from instamagic.services.instagram.business_discovery import (
     discovery_out,
     sync_related_account_discovery,
@@ -1474,6 +1480,94 @@ def add_tag(
     return {"name": tag.name}
 
 
+@router.post("/api/queue/story", status_code=201)
+def enqueue_story(
+    body: MediaQueueIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> list[dict[str, object]]:
+    """One standalone Story candidate per photo (no caption; human approval still required)."""
+    from instamagic.services.instagram.media_publish import create_story_items
+
+    return [_queue_out(session, item) for item in create_story_items(session, body.image_ids)]
+
+
+@router.post("/api/queue/reel", status_code=201)
+def enqueue_reel(
+    body: MediaQueueIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """One Reel candidate from 1-10 photos (Ken Burns for one, crossfade slideshow for many)."""
+    from instamagic.services.instagram.media_publish import create_reel_item
+
+    return _queue_out(session, create_reel_item(session, body.image_ids))
+
+
+@router.post("/api/queue/{item_id}/post-type")
+def change_post_type(
+    item_id: UUID,
+    body: PostTypeIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    from instamagic.services.instagram.media_publish import set_post_type
+
+    return _queue_out(session, set_post_type(session, item_id, body.media_type))
+
+
+@router.post("/api/queue/{item_id}/reel-render", status_code=202)
+def render_reel(
+    item_id: UUID,
+    background: BackgroundTasks,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Start encoding the Reel MP4 in the API process (RQ lanes are busy with scans/labels)."""
+    from instamagic.services.instagram.media_publish import mark_reel_rendering, run_reel_render
+
+    item = mark_reel_rendering(session, item_id)
+    background.add_task(run_reel_render, settings, item.id)
+    return _queue_out(session, item)
+
+
+@router.get("/api/queue/{item_id}/reel-video")
+def reel_video(
+    item_id: UUID,
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> FileResponse:
+    """LAN-only preview of the exact MP4 that will be uploaded."""
+    item = session.get(PublishingQueueItem, item_id)
+    if item is None or item.media_type != QueueMediaType.REELS.value or not item.reel_relative_path:
+        raise NotFound("Reel video was not found.")
+    path = safe_join(settings.derivatives_root, item.reel_relative_path)
+    if not path.is_file():
+        raise NotFound("Reel video was not found.")
+    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "private, no-cache"})
+
+
+@router.get("/api/queue/{item_id}/story-preview")
+def queue_story_preview(
+    item_id: UUID,
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> FileResponse:
+    """LAN-only: renders and returns the exact Story JPEG that will be uploaded for a STORY item."""
+    from instamagic.services.instagram.media_publish import render_story_item
+
+    item = session.get(PublishingQueueItem, item_id)
+    if item is None or item.media_type != QueueMediaType.STORY.value:
+        raise NotFound("Story item was not found.")
+    relative = render_story_item(session, settings, item)
+    session.commit()
+    path = safe_join(settings.derivatives_root, relative)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
+
+
 @router.post("/api/queue/carousel", status_code=201)
 def enqueue_carousel(
     body: CarouselQueueIn,
@@ -1512,7 +1606,13 @@ def enqueue(
         raise NotAllowed(" ".join(reasons))
     existing = session.scalar(
         select(PublishingQueueItem)
-        .where(PublishingQueueItem.image_id == image.id)
+        .where(
+            PublishingQueueItem.image_id == image.id,
+            # Standalone Story / Reel items for the same photo are separate posts.
+            PublishingQueueItem.media_type.not_in(
+                [QueueMediaType.STORY.value, QueueMediaType.REELS.value]
+            ),
+        )
         .order_by(PublishingQueueItem.created_at.desc())
     )
     if existing is not None:
@@ -1551,6 +1651,12 @@ def patch_queue_item(
         raise NotFound("Queue item was not found.")
     if item.state == QueueState.PUBLISHING.value:
         raise NotAllowed("Cannot edit story options while publishing.")
+    if item.media_type in {QueueMediaType.STORY.value, QueueMediaType.REELS.value}:
+        if item.state not in {QueueState.CANDIDATE.value, QueueState.FAILED.value}:
+            raise NotAllowed("Change the look before approving; approved stories/reels are locked.")
+        body.story_share_enabled = None
+        if item.media_type == QueueMediaType.REELS.value and item.reel_status == "ready":
+            item.reel_status = "stale"
     from instamagic.services.posting.story_fields import apply_story_fields_from_payload
 
     apply_story_fields_from_payload(
@@ -1574,7 +1680,12 @@ def list_queue(_auth: None = Depends(require_session), session: Session = db_dep
 
 
 @router.post("/api/queue/{item_id}/approve")
-def approve_queue_item(item_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> dict[str, object]:
+def approve_queue_item(
+    item_id: UUID,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
     item = session.get(PublishingQueueItem, item_id)
     if item is None:
         raise NotFound("Queue item was not found.")
@@ -1583,6 +1694,10 @@ def approve_queue_item(item_id: UUID, _auth: None = Depends(require_session), se
     for gated in _queue_item_images(session, item):
         if not blur_gate_passes(session, gated):
             raise NotAllowed(BLUR_VERIFY_FIRST)
+    if item.media_type in {QueueMediaType.STORY.value, QueueMediaType.REELS.value}:
+        from instamagic.services.instagram.media_publish import assert_ready_for_approval
+
+        assert_ready_for_approval(session, settings, item)
     item.state = QueueState.APPROVED.value
     item.approved_at = datetime.now(UTC)
     session.commit()
@@ -1631,6 +1746,7 @@ def put_posting_schedule_config(
         timezone=body.timezone,
         weekday_slots=body.weekday_slots,
         max_posts_per_day=body.max_posts_per_day,
+        max_stories_per_day=body.max_stories_per_day,
         min_gap_hours=body.min_gap_hours,
         paused=body.paused,
         story_share_default=body.story_share_default,
@@ -2561,7 +2677,7 @@ def public_publish_asset(
     token: str,
     settings: Settings = Depends(settings_dep),
 ) -> FileResponse | Response:
-    """Unauthenticated short-lived JPEG for Meta's crawler. Token-gated; no session cookie."""
+    """Unauthenticated short-lived JPEG/MP4 for Meta's crawler. Token-gated; no session cookie."""
     # Invalid, garbled, expired or missing → plain 404 (no oracle for token guessing).
     try:
         asset = parse_publish_token(token, secret=settings.app_secret)
@@ -2571,17 +2687,18 @@ def public_publish_asset(
             status_code=404, detail="Not Found", headers={"X-Instamagic-Asset": "rejected"}
         ) from None
     cache = {"Cache-Control": "private, max-age=60"}
+    media_type = publish_asset_media_type(asset.relative_path)
     if request.method == "HEAD":
         stat = path.stat()
         return Response(
             status_code=200,
             headers={
                 **cache,
-                "Content-Type": "image/jpeg",
+                "Content-Type": media_type,
                 "Content-Length": str(stat.st_size),
             },
         )
-    return FileResponse(path, media_type="image/jpeg", headers=cache)
+    return FileResponse(path, media_type=media_type, headers=cache)
 
 
 @router.get("/api/related-accounts")
@@ -3188,7 +3305,7 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         caption_row = session.get(Caption, item.caption_id)
         if caption_row is not None:
             published_caption = caption_row.text
-    slide_rows = slides_for_item(session, item) if item.media_type == "CAROUSEL" else []
+    slide_rows = slides_for_item(session, item) if item.media_type in {"CAROUSEL", "REELS"} else []
     slides_payload = []
     for slide in slide_rows:
         slide_image = _load_image(session, slide.image_id)
@@ -3254,7 +3371,20 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "story_last_error": item.story_last_error,
         "story_status": story_status,
         "story_ig_media_id": story_attempt.ig_media_id if story_attempt and story_attempt.success else None,
-        "story_preview_url": f"/api/images/{image.id}/story-preview",
+        "story_preview_url": (
+            f"/api/queue/{item.id}/story-preview"
+            if item.media_type == QueueMediaType.STORY.value
+            else f"/api/images/{image.id}/story-preview"
+        ),
+        "reel_status": item.reel_status if item.media_type == QueueMediaType.REELS.value else None,
+        "reel_error": item.reel_error,
+        "reel_duration_s": item.reel_duration_s,
+        "reel_rendered_at": item.reel_rendered_at,
+        "reel_video_url": (
+            f"/api/queue/{item.id}/reel-video?v={item.reel_sha256[:12]}"
+            if item.media_type == QueueMediaType.REELS.value and item.reel_sha256
+            else None
+        ),
         "image": _image_out(session, image).model_dump(mode="json"),
     }
 

@@ -23,8 +23,11 @@ DEFAULT_TTL_SECONDS = 15 * 60
 
 _PUBLISH_PATH_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-    r"/publish/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.jpg$"
+    r"/publish/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.jpg|reel-[0-9a-f]{32}\.mp4)$"
 )
+
+# Reels: Meta fetches + transcodes asynchronously, so the video link lives a bit longer.
+REEL_TTL_SECONDS = 30 * 60
 
 _GCM_NONCE_LEN = 12
 
@@ -109,6 +112,11 @@ def resolve_publish_file(derivatives_root: Path, asset: PublishAsset) -> Path:
     if not path.is_file():
         raise NotFound("Publish asset was not found.")
     return path
+
+
+def publish_asset_media_type(relative_path: str) -> str:
+    """Content-Type for an allowed publish asset (only verified JPEG renders and reel MP4s exist)."""
+    return "video/mp4" if relative_path.endswith(".mp4") else "image/jpeg"
 
 
 def public_image_url(*, public_base_url: str, token: str) -> str:

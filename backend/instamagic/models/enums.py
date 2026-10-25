@@ -28,6 +28,8 @@ class QueueState(enum.StrEnum):
 class QueueMediaType(enum.StrEnum):
     IMAGE = "IMAGE"
     CAROUSEL = "CAROUSEL"
+    STORY = "STORY"  # standalone 9:16 Story (no caption, own daily cap)
+    REELS = "REELS"  # vertical MP4 Reel rendered from verified feed derivatives
 
 
 class ScheduleMode(enum.StrEnum):

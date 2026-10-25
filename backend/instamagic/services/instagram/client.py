@@ -36,6 +36,9 @@ _NOT_CONFIGURED_MSG = (
 
 _CONTAINER_POLL_INTERVAL = 1.5
 _CONTAINER_POLL_MAX_WAIT = 90.0
+# Reels: Meta transcodes the uploaded MP4 server-side; this routinely takes 30s-3min.
+_REEL_POLL_INTERVAL = 5.0
+_REEL_POLL_MAX_WAIT = 600.0
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,8 @@ class InstagramClient(Protocol):
 
     def publish_story(self, *, image_url: str) -> PublishResult: ...
 
+    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult: ...
+
     def fetch_account_details(self) -> InstagramAccountDetails: ...
 
     def fetch_content_publishing_limit(self) -> ContentPublishingLimit: ...
@@ -155,6 +160,10 @@ class NotConfiguredInstagramClient:
         del image_url
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
+    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult:
+        del video_url, caption
+        raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+
     def fetch_account_details(self) -> InstagramAccountDetails:
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
@@ -199,6 +208,7 @@ class FakeInstagramClient:
         self.calls: list[dict[str, str | list[str]]] = []
         self.carousel_calls: list[dict[str, object]] = []
         self.story_calls: list[dict[str, str]] = []
+        self.reel_calls: list[dict[str, str]] = []
         self.account_fetches: int = 0
         self.content_limit_usage: int = 0
         self.content_limit_total: int = 50
@@ -230,6 +240,20 @@ class FakeInstagramClient:
             container_id=container_id,
             media_id=media_id,
             permalink=None,
+        )
+
+    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult:
+        if not video_url.startswith(("http://", "https://")):
+            raise NotConfigured("Fake Instagram publisher requires an http(s) video_url.")
+        if not caption.strip():
+            raise NotConfigured("Caption is required.")
+        container_id = f"fake-reel-container-{uuid.uuid4().hex[:12]}"
+        media_id = f"fake-reel-media-{uuid.uuid4().hex[:12]}"
+        self.reel_calls.append({"video_url": video_url, "caption": caption, "media_id": media_id})
+        return PublishResult(
+            container_id=container_id,
+            media_id=media_id,
+            permalink=f"https://www.instagram.com/reel/{media_id}/",
         )
 
     def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
@@ -422,6 +446,41 @@ class GraphInstagramClient:
         media_id = self._publish_container(container_id)
         return PublishResult(container_id=container_id, media_id=media_id, permalink=None)
 
+    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult:
+        """Reel via resumable-free ``video_url`` upload: REELS container, wait FINISHED, publish."""
+        if not self.configured():
+            raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
+        if not video_url.startswith("https://"):
+            raise NotConfigured("Instagram requires a publicly reachable https video_url for reels.")
+        if not caption.strip():
+            raise NotConfigured("Caption is required.")
+        url = f"{self._base}/{self._ig_user_id}/media"
+        try:
+            response = httpx.post(
+                url,
+                data={
+                    "media_type": "REELS",
+                    "video_url": video_url,
+                    "caption": caption.strip(),
+                    "share_to_feed": "true",
+                    "access_token": self._token,
+                },
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise NotConfigured("Instagram Graph API reel request failed.") from exc
+        payload = _json_or_raise(response, action="create reel container")
+        container_id = payload.get("id")
+        if not container_id:
+            raise NotConfigured("Instagram did not return a reel container id.")
+        container_id = str(container_id)
+        self._wait_for_container(
+            container_id, interval=_REEL_POLL_INTERVAL, max_wait=_REEL_POLL_MAX_WAIT
+        )
+        media_id = self._publish_container(container_id)
+        permalink = self._permalink(media_id)
+        return PublishResult(container_id=container_id, media_id=media_id, permalink=permalink)
+
     def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
@@ -563,9 +622,15 @@ class GraphInstagramClient:
             raise NotConfigured("Instagram did not return a carousel container id.")
         return str(creation_id)
 
-    def _wait_for_container(self, creation_id: str) -> None:
+    def _wait_for_container(
+        self,
+        creation_id: str,
+        *,
+        interval: float = _CONTAINER_POLL_INTERVAL,
+        max_wait: float = _CONTAINER_POLL_MAX_WAIT,
+    ) -> None:
         url = f"{self._base}/{creation_id}"
-        deadline = time.monotonic() + _CONTAINER_POLL_MAX_WAIT
+        deadline = time.monotonic() + max_wait
         last_status = "UNKNOWN"
         while time.monotonic() < deadline:
             try:
@@ -585,7 +650,7 @@ class GraphInstagramClient:
                     f"Instagram media container failed with status {last_status}. "
                     "Check image URL reachability, aspect ratio, and size limits."
                 )
-            time.sleep(_CONTAINER_POLL_INTERVAL)
+            time.sleep(interval)
         raise NotConfigured(
             f"Instagram media container did not finish in time (last status: {last_status})."
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from instamagic.models import PublishingQueueItem, QueueState
+from instamagic.models import PublishingQueueItem, QueueMediaType, QueueState
 from instamagic.services.posting.schedule_config import ScheduleConfigView
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -29,7 +29,24 @@ def best_slots(config: ScheduleConfigView, *, from_day: datetime | None = None, 
     return sorted(slots)
 
 
-def _scheduled_today_count(session: Session, config: ScheduleConfigView, now: datetime) -> int:
+def _lane_filter(lane: str):
+    """Stories have their own lane (cap + gap); feed posts, carousels and reels share the feed lane."""
+    if lane == "story":
+        return PublishingQueueItem.media_type == QueueMediaType.STORY.value
+    return PublishingQueueItem.media_type != QueueMediaType.STORY.value
+
+
+def lane_for_media_type(media_type: str | None) -> str:
+    return "story" if media_type == QueueMediaType.STORY.value else "feed"
+
+
+def lane_cap(config: ScheduleConfigView, lane: str) -> int:
+    if lane == "story":
+        return int(getattr(config, "max_stories_per_day", 2) or 2)
+    return config.max_posts_per_day
+
+
+def _scheduled_today_count(session: Session, config: ScheduleConfigView, now: datetime, lane: str = "feed") -> int:
     tz = ZoneInfo(config.timezone)
     local = now.astimezone(tz)
     day_start = local.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -46,12 +63,13 @@ def _scheduled_today_count(session: Session, config: ScheduleConfigView, now: da
             PublishingQueueItem.state.in_(
                 [QueueState.APPROVED.value, QueueState.PUBLISHING.value, QueueState.PUBLISHED.value]
             ),
+            _lane_filter(lane),
         )
     )
     return int(count or 0)
 
 
-def _busy_times(session: Session, start: datetime, end: datetime) -> list[datetime]:
+def _busy_times(session: Session, start: datetime, end: datetime, lane: str = "feed") -> list[datetime]:
     """Scheduled (approved/publishing) and published post times in [start, end]."""
     scheduled = session.scalars(
         select(PublishingQueueItem.scheduled_at).where(
@@ -59,6 +77,7 @@ def _busy_times(session: Session, start: datetime, end: datetime) -> list[dateti
             PublishingQueueItem.scheduled_at >= start,
             PublishingQueueItem.scheduled_at <= end,
             PublishingQueueItem.state.in_([QueueState.APPROVED.value, QueueState.PUBLISHING.value]),
+            _lane_filter(lane),
         )
     ).all()
     published = session.scalars(
@@ -66,6 +85,7 @@ def _busy_times(session: Session, start: datetime, end: datetime) -> list[dateti
             PublishingQueueItem.published_at.is_not(None),
             PublishingQueueItem.published_at >= start,
             PublishingQueueItem.published_at <= end,
+            _lane_filter(lane),
         )
     ).all()
     out: list[datetime] = []
@@ -76,7 +96,13 @@ def _busy_times(session: Session, start: datetime, end: datetime) -> list[dateti
     return out
 
 
-def next_available_slot(session: Session, config: ScheduleConfigView, now: datetime | None = None) -> datetime | None:
+def next_available_slot(
+    session: Session,
+    config: ScheduleConfigView,
+    now: datetime | None = None,
+    *,
+    media_type: str | None = None,
+) -> datetime | None:
     """Pick the earliest open slot respecting max_posts_per_day and min_gap_hours.
 
     The min gap is checked against neighbouring posts on both sides (scheduled or
@@ -91,11 +117,13 @@ def next_available_slot(session: Session, config: ScheduleConfigView, now: datet
     if not candidates:
         return None
     min_gap = timedelta(hours=config.min_gap_hours)
-    busy = _busy_times(session, candidates[0] - min_gap, candidates[-1] + min_gap)
+    lane = lane_for_media_type(media_type)
+    lane_kw = {} if lane == "feed" else {"lane": lane}
+    busy = _busy_times(session, candidates[0] - min_gap, candidates[-1] + min_gap, **lane_kw)
     for slot in candidates:
         if any(abs(slot - b) < min_gap for b in busy):
             continue
-        if _scheduled_today_count(session, config, slot) >= config.max_posts_per_day:
+        if _scheduled_today_count(session, config, slot, **lane_kw) >= lane_cap(config, lane):
             continue
         return slot
     return None
@@ -108,9 +136,9 @@ def assign_auto_slots(session: Session, items: list[PublishingQueueItem], config
     for item in items:
         if item.scheduled_at is not None:
             continue
-        slot = next_available_slot(session, config, now=now)
+        slot = next_available_slot(session, config, now=now, media_type=item.media_type)
         if slot is None:
-            break
+            continue
         item.scheduled_at = slot
         item.schedule_mode = "auto_slot"
         session.flush()

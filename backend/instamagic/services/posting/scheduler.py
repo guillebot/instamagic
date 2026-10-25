@@ -6,14 +6,14 @@ from datetime import UTC, datetime
 
 from instamagic.config import Settings
 from instamagic.logging_config import get_logger
-from instamagic.models import PublishingQueueItem, QueueState
+from instamagic.models import PublishingQueueItem, QueueMediaType, QueueState
 from instamagic.models.enums import PublishTrigger
 from instamagic.services.factory import build_instagram
 from instamagic.services.instagram.client import InstagramClient
 from instamagic.services.instagram.publish import publish_queue_item
 from instamagic.services.instagram.story_publish import run_scheduled_story_tick
 from instamagic.services.posting.schedule_config import config_view, get_or_create_config
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 log = get_logger("posting.scheduler")
@@ -50,7 +50,11 @@ def run_scheduled_publish_tick(session: Session, settings: Settings, client: Ins
             PublishingQueueItem.schedule_mode.is_not(None),
             PublishingQueueItem.scheduled_at.is_not(None),
             PublishingQueueItem.scheduled_at <= now,
-            PublishingQueueItem.caption_id.is_not(None),
+            # Standalone Stories carry no caption; everything else needs an approved caption.
+            or_(
+                PublishingQueueItem.caption_id.is_not(None),
+                PublishingQueueItem.media_type == QueueMediaType.STORY.value,
+            ),
         )
         .order_by(PublishingQueueItem.scheduled_at.asc())
         .limit(5)

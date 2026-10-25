@@ -76,12 +76,23 @@ class CarouselQueueIn(BaseModel):
     image_ids: list[UUID] = Field(min_length=2, max_length=10)
 
 
+class MediaQueueIn(BaseModel):
+    """Standalone Story (one item per photo) or Reel (1-10 photos in one video)."""
+
+    image_ids: list[UUID] = Field(min_length=1, max_length=10)
+
+
+class PostTypeIn(BaseModel):
+    media_type: str = Field(min_length=3, max_length=16)
+
+
 class CarouselReorderIn(BaseModel):
     image_ids: list[UUID] = Field(min_length=2, max_length=10)
 
 
 class PublishIn(BaseModel):
-    caption_id: UUID
+    # Required for feed posts, carousels and reels; standalone Stories have no caption.
+    caption_id: UUID | None = None
 
 
 class ScheduleIn(BaseModel):
@@ -110,6 +121,7 @@ class PostingScheduleConfigIn(BaseModel):
     timezone: str | None = Field(default=None, max_length=64)
     weekday_slots: dict[str, list[str]] | None = None
     max_posts_per_day: int | None = Field(default=None, ge=1, le=24)
+    max_stories_per_day: int | None = Field(default=None, ge=1, le=10)
     min_gap_hours: float | None = Field(default=None, ge=0.5, le=48)
     paused: bool | None = None
     story_share_default: bool | None = None

@@ -17,7 +17,12 @@ from instamagic.models import (
     PublishingQueueItem,
     QueueState,
 )
-from instamagic.models.enums import PublishAttemptKind, PublishTrigger, StoryTimingMode
+from instamagic.models.enums import (
+    PublishAttemptKind,
+    PublishTrigger,
+    QueueMediaType,
+    StoryTimingMode,
+)
 from instamagic.services.blurs.gate_context import publishing_gate_kwargs
 from instamagic.services.instagram.assets import mint_publish_token, public_image_url
 from instamagic.services.instagram.client import InstagramClient, PublishResult
@@ -39,7 +44,7 @@ from sqlalchemy.orm import Session, selectinload
 @dataclass(frozen=True)
 class PublishOutcome:
     queue_item_id: UUID
-    post_id: UUID
+    post_id: UUID | None
     ig_media_id: str
     permalink: str | None
     caption: str
@@ -70,6 +75,19 @@ def publish_queue_item(
         raise NotAllowed("Only an approved (or previously failed) queue item can be published.")
     if item.state == QueueState.PUBLISHING.value and trigger != PublishTrigger.SCHEDULER.value:
         raise NotAllowed("This queue item is already publishing.")
+    if item.media_type in {QueueMediaType.STORY.value, QueueMediaType.REELS.value}:
+        from instamagic.services.instagram.media_publish import publish_media_item
+
+        media = publish_media_item(
+            session, settings, client, item=item, caption_id=caption_id, trigger=trigger
+        )
+        return PublishOutcome(
+            queue_item_id=media.queue_item_id,
+            post_id=media.post_id,
+            ig_media_id=media.ig_media_id,
+            permalink=media.permalink,
+            caption=media.caption,
+        )
     resolved_caption_id = caption_id or item.caption_id
     if resolved_caption_id is None:
         raise NotAllowed("A caption must be selected before publishing.")
