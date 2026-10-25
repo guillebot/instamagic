@@ -46,8 +46,9 @@ function renderQueue() {
 describe("Queue compact rows", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    mockApi.mockImplementation(async (path: string) => {
+    mockApi.mockImplementation(async (path: string, init?: RequestInit) => {
       if (path === "/api/queue") return ITEMS;
+      if (path === "/api/queue/q-todo/approve" && init?.method === "POST") return { ...ITEMS[2], state: "APPROVED" };
       if (path === "/api/config") return CONFIG;
       if (path === "/api/instagram/status") return { configured: true, provider: "graph" };
       const m = path.match(/^\/api\/images\/(\w+)\/captions$/);
@@ -88,5 +89,14 @@ describe("Queue compact rows", () => {
     await user.click(screen.getByRole("checkbox", { name: "Compact view" }));
     expect(window.localStorage.getItem("instamagic.queue.compactView")).toBe("true");
     expect(screen.getAllByTestId("queue-row-compact")).toHaveLength(3);
+  });
+
+  it("minimises an item right after it is approved", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    const needs = await screen.findByRole("region", { name: "Needs action" });
+    await user.click(within(needs).getByRole("button", { name: "Approve for publish" }));
+    expect(await screen.findAllByTestId("queue-row-compact")).toHaveLength(3);
+    expect(mockApi).toHaveBeenCalledWith("/api/queue/q-todo/approve", { method: "POST" });
   });
 });

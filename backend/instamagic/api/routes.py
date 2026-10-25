@@ -242,6 +242,7 @@ from instamagic.services.recommendations.curate import (
 )
 from instamagic.services.recommendations.enrichment import (
     enrichment_status,
+    needs_hashtags,
     stored_hashtags,
     wake_enrichment,
 )
@@ -301,6 +302,20 @@ def _enrich_redis(settings: Settings):
 def _wake_enrichment(settings: Settings) -> None:
     if settings.pipeline_mode != "inline":
         wake_enrichment(settings.redis_url)
+
+
+def _wake_enrichment_for_queue(settings: Settings, images: list[Image]) -> None:
+    """Queued photos without stored hashtags: nudge the background enrichment lane now.
+
+    Enrichment uses the same generator as the Queue "Regenerate hashtags" button, the same
+    eligibility (safe/excellent; flagged photos only once their blur is verified) and the same
+    blocklist. It never overwrites hashtags that are already stored.
+    """
+    try:
+        if any(needs_hashtags(image) for image in images):
+            _wake_enrichment(settings)
+    except Exception:  # best effort; never block queueing on the enrichment lane
+        pass
 
 
 def _enqueue_worker_job(
@@ -1601,6 +1616,7 @@ def enqueue(
     body: QueueIn,
     _auth: None = Depends(require_session),
     session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
     image = _load_image(session, body.image_id)
     approved = next((crop for crop in image.crops if crop.approved), None)
@@ -1643,6 +1659,7 @@ def enqueue(
     )
     session.add(item)
     session.commit()
+    _wake_enrichment_for_queue(settings, [image])
     return _queue_out(session, item)
 
 
@@ -1708,6 +1725,7 @@ def approve_queue_item(
     item.state = QueueState.APPROVED.value
     item.approved_at = datetime.now(UTC)
     session.commit()
+    _wake_enrichment_for_queue(settings, _queue_item_images(session, item))
     return _queue_out(session, item)
 
 

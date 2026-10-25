@@ -98,10 +98,10 @@ describe("Queue page hashtag suggest", () => {
   it("shows spinner, disables the button, then shows a result message", async () => {
     const user = userEvent.setup();
     renderQueue();
-    const suggest = await screen.findByRole("button", { name: "Suggest hashtags" });
+    const suggest = await screen.findByRole("button", { name: "Regenerate hashtags" });
     await user.click(suggest);
 
-    const busy = await screen.findByRole("button", { name: /Suggesting/ });
+    const busy = await screen.findByRole("button", { name: /Regenerating/ });
     expect(busy).toBeDisabled();
     expect(busy.querySelector(".spinner")).toBeTruthy();
 
@@ -109,7 +109,7 @@ describe("Queue page hashtag suggest", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Added 2 hashtags")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Suggest hashtags" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Regenerate hashtags" })).toBeEnabled();
     });
   });
 });

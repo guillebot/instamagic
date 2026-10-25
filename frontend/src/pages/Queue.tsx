@@ -32,7 +32,13 @@ export function QueuePage() {
   const queryClient = useQueryClient();
   const [carouselPick, setCarouselPick] = useState<string[]>([]);
   const [publishedOpen, setPublishedOpen] = useState(() => readPublishedSectionExpanded());
-  const queue = useQuery({ queryKey: ["queue"], queryFn: () => api<QueueItem[]>("/api/queue") });
+  const queue = useQuery({
+    queryKey: ["queue"],
+    queryFn: () => api<QueueItem[]>("/api/queue"),
+    // Background enrichment fills hashtags for newly queued photos; poll while any are pending.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((item) => item.state !== "PUBLISHED" && hashtagsPending(item)) ? 10_000 : false,
+  });
   const { active, published } = useMemo(() => splitQueueItems(queue.data ?? []), [queue.data]);
   const { scheduled, needsAction } = useMemo(() => groupActiveQueue(active), [active]);
   const [compactView, setCompactView] = useState(() => readCompactView());
@@ -48,8 +54,35 @@ export function QueuePage() {
       api<{ configured: boolean; provider: string; auto_publish: boolean }>("/api/instagram/status"),
   });
 
+  const [justCollapsed, setJustCollapsed] = useState<string | null>(null);
+  const [focusAfter, setFocusAfter] = useState<string | null>(null);
+
+  /** Scheduled/approved: minimise that card and move on to the next item that needs action. */
+  function markScheduled(id: string) {
+    setCollapsedOverride((prev) => ({ ...prev, [id]: true }));
+    setJustCollapsed(id);
+    setFocusAfter(id);
+  }
+
+  useEffect(() => {
+    if (!focusAfter || !queue.data) return;
+    const next = needsAction.find((item) => item.id !== focusAfter && !isCollapsed(item));
+    setFocusAfter(null);
+    if (!next) return;
+    window.requestAnimationFrame(() => {
+      const el = document.getElementById(`queue-item-${next.id}`);
+      el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      el?.focus?.({ preventScroll: true });
+    });
+  }, [focusAfter, queue.data, needsAction]);
+
   async function approve(id: string) {
-    await api(`/api/queue/${id}/approve`, { method: "POST" });
+    try {
+      await api(`/api/queue/${id}/approve`, { method: "POST" });
+      markScheduled(id);
+    } catch (err) {
+      window.alert(err instanceof ApiError ? err.message : "Could not approve this item.");
+    }
     await queryClient.invalidateQueries({ queryKey: ["queue"] });
   }
 
@@ -169,6 +202,8 @@ export function QueuePage() {
                   onToggleCarouselPick={toggleCarouselPick}
                   onApprove={() => void approve(item.id)}
                   onChanged={() => void queryClient.invalidateQueries({ queryKey: ["queue"] })}
+                  onScheduled={() => markScheduled(item.id)}
+                  justCollapsed={justCollapsed === item.id}
                   collapsed={isCollapsed(item)}
                   onToggleCollapsed={() =>
                     setCollapsedOverride((prev) => ({ ...prev, [item.id]: !isCollapsed(item) }))
@@ -249,6 +284,8 @@ function QueueCard({
   onChanged,
   collapsed = false,
   onToggleCollapsed,
+  onScheduled,
+  justCollapsed = false,
 }: {
   item: QueueItem;
   policy: string;
@@ -259,6 +296,8 @@ function QueueCard({
   onChanged: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
+  onScheduled?: () => void;
+  justCollapsed?: boolean;
 }) {
   const [selectedCaptionId, setSelectedCaptionId] = useState<string | null>(item.caption_id ?? null);
   const [error, setError] = useState("");
@@ -268,6 +307,12 @@ function QueueCard({
   const [approveBusy, setApproveBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [suggestedTags, setSuggestedTags] = useState<string[]>(item.image.enrich_hashtags ?? []);
+  const storedTagsKey = (item.image.enrich_hashtags ?? []).join(" ");
+  useEffect(() => {
+    // Background enrichment filled (or refreshed) hashtags: show them pre-filled.
+    if (storedTagsKey) setSuggestedTags(storedTagsKey.split(" "));
+  }, [storedTagsKey]);
+  const autoTagsPending = suggestedTags.length === 0 && hashtagsPending(item);
   const { status: hashtagStatus, setStatus: setHashtagStatus, clearStatus: clearHashtagStatus } = useBriefStatus();
   const [storyShare, setStoryShare] = useState(() => storyShareFromQueueItem(item));
 
@@ -323,7 +368,10 @@ function QueueCard({
           caption_id: isStory ? null : selectedCaptionId,
         }),
       }),
-    onSuccess: () => onChanged(),
+    onSuccess: () => {
+      onScheduled?.();
+      onChanged();
+    },
     onError: (err) => setError(err instanceof ApiError ? err.message : "Schedule failed."),
   });
 
@@ -454,7 +502,11 @@ function QueueCard({
       (isCarousel || isReel ? item.slides?.[0]?.image.thumbnail_url : null) ?? item.image.thumbnail_url ?? null;
     const tags = hashtagCount(captionText);
     return (
-      <article className="queue-row-compact" data-testid="queue-row-compact">
+      <article
+        id={`queue-item-${item.id}`}
+        className={`queue-row-compact${justCollapsed ? " queue-row-just-collapsed" : ""}`}
+        data-testid="queue-row-compact"
+      >
         {thumb ? <img src={thumb} alt="" className="queue-compact-thumb" loading="lazy" /> : <span className="queue-compact-thumb empty" />}
         <div className="queue-compact-body">
           <div className="queue-compact-line">
@@ -483,7 +535,7 @@ function QueueCard({
   }
 
   return (
-    <article className="card queue-card">
+    <article id={`queue-item-${item.id}`} className="card queue-card" tabIndex={-1}>
       {isStory && item.story_preview_url ? (
         <figure className="publish-confirm-preview story-preview-9x16">
           <img
@@ -660,8 +712,8 @@ function QueueCard({
               >
                 <PendingButtonLabel
                   pending={hashtags.isPending}
-                  pendingLabel="Suggesting…"
-                  label="Suggest hashtags"
+                  pendingLabel="Regenerating…"
+                  label="Regenerate hashtags"
                 />
               </button>
             </>
@@ -756,8 +808,20 @@ function QueueCard({
         ) : null}
         {error ? <p className="error">{error}</p> : null}
         {hashtagStatus ? <ActionStatus message={hashtagStatus} /> : null}
-        {suggestedTags.length ? (
-          <p className="muted">#{suggestedTags.map((tag) => tag).join(" #")}</p>
+        {!isStory ? (
+          suggestedTags.length ? (
+            <p className="muted queue-hashtags">
+              Hashtags (auto, appended on publish): #{suggestedTags.join(" #")}
+            </p>
+          ) : autoTagsPending ? (
+            <p className="muted queue-hashtags" role="status">
+              <span className="spinner" aria-hidden="true" /> Generating hashtags…
+            </p>
+          ) : item.image.gemini_refused ? (
+            <p className="muted queue-hashtags">
+              No hashtags: Gemini declined this photo. Try Regenerate hashtags or add tags to the caption.
+            </p>
+          ) : null
         ) : null}
         {isStory ? <p className="muted">Stories publish without a caption (Graph API: no stickers or links).</p> : null}
         <div className="caption-pick" hidden={isStory}>
@@ -811,4 +875,12 @@ function QueueCard({
       </div>
     </article>
   );
+}
+
+/** Hashtags not stored yet and background enrichment can still produce them. */
+function hashtagsPending(item: QueueItem): boolean {
+  if (item.media_type === "STORY") return false;
+  if ((item.image.enrich_hashtags ?? []).length > 0) return false;
+  if (item.image.gemini_refused) return false;
+  return item.image.human_rating === "safe" || item.image.human_rating === "excellent";
 }
