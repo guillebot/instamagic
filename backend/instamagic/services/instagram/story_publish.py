@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session, selectinload
 
 
 def schedule_story_after_feed(item: PublishingQueueItem, *, published_at: datetime) -> None:
-    if not item.story_share_enabled or item.media_type == "CAROUSEL":
+    if not item.story_share_enabled or (item.media_type or "IMAGE") != "IMAGE":
         return
     if item.story_timing_mode == StoryTimingMode.WITH_POST.value:
         item.story_scheduled_at = published_at
@@ -103,7 +103,7 @@ def publish_story_for_queue_item(
     item = session.get(PublishingQueueItem, item_id)
     if item is None:
         raise NotFound("Queue item was not found.")
-    if not item.story_share_enabled or item.media_type == "CAROUSEL":
+    if not item.story_share_enabled or (item.media_type or "IMAGE") != "IMAGE":
         return None
     if item.state != QueueState.PUBLISHED.value:
         return None
@@ -216,7 +216,7 @@ def run_scheduled_story_tick(session: Session, settings: Settings, client: Insta
             PublishingQueueItem.story_published_at.is_(None),
             PublishingQueueItem.story_scheduled_at.is_not(None),
             PublishingQueueItem.story_scheduled_at <= now,
-            PublishingQueueItem.media_type != "CAROUSEL",
+            PublishingQueueItem.media_type == "IMAGE",
         )
         .order_by(PublishingQueueItem.story_scheduled_at.asc())
         .limit(5)

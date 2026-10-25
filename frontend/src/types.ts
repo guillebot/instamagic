@@ -309,6 +309,11 @@ export type QueueItem = {
   story_status?: string;
   story_ig_media_id?: string | null;
   story_preview_url?: string | null;
+  reel_status?: "none" | "rendering" | "ready" | "failed" | "stale" | null;
+  reel_error?: string | null;
+  reel_duration_s?: number | null;
+  reel_rendered_at?: string | null;
+  reel_video_url?: string | null;
   image: ImageItem;
 };
 
@@ -316,6 +321,7 @@ export type PostingScheduleConfig = {
   timezone: string;
   weekday_slots: Record<string, string[]>;
   max_posts_per_day: number;
+  max_stories_per_day?: number;
   min_gap_hours: number;
   paused: boolean;
   story_share_default?: boolean;

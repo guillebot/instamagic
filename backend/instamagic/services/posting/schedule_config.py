@@ -44,6 +44,7 @@ class ScheduleConfigView:
     blur_region_padding_px: int
     updated_at: datetime | None
     blur_detector_overrules_coverage: bool = True
+    max_stories_per_day: int = 2
 
 
 def _parse_slots(raw: str) -> dict[str, list[str]]:
@@ -71,6 +72,7 @@ def get_or_create_config(session: Session) -> PostingScheduleConfig:
             timezone=DEFAULT_TIMEZONE,
             weekday_slots_json=json.dumps(DEFAULT_WEEKDAY_SLOTS),
             max_posts_per_day=2,
+            max_stories_per_day=2,
             min_gap_hours=4.0,
             paused=False,
             story_share_default=False,
@@ -95,6 +97,7 @@ def config_view(session: Session) -> ScheduleConfigView:
         timezone=row.timezone,
         weekday_slots=_parse_slots(row.weekday_slots_json),
         max_posts_per_day=row.max_posts_per_day,
+        max_stories_per_day=int(getattr(row, "max_stories_per_day", None) or 2),
         min_gap_hours=row.min_gap_hours,
         paused=row.paused,
         story_share_default=bool(row.story_share_default),
@@ -113,6 +116,7 @@ def update_config(
     timezone: str | None = None,
     weekday_slots: dict[str, list[str]] | None = None,
     max_posts_per_day: int | None = None,
+    max_stories_per_day: int | None = None,
     min_gap_hours: float | None = None,
     paused: bool | None = None,
     story_share_default: bool | None = None,
@@ -129,6 +133,8 @@ def update_config(
         row.weekday_slots_json = json.dumps(weekday_slots)
     if max_posts_per_day is not None:
         row.max_posts_per_day = max(1, min(max_posts_per_day, 24))
+    if max_stories_per_day is not None:
+        row.max_stories_per_day = max(1, min(max_stories_per_day, 10))
     if min_gap_hours is not None:
         row.min_gap_hours = max(0.5, float(min_gap_hours))
     if paused is not None:
@@ -155,6 +161,7 @@ def config_as_dict(view: ScheduleConfigView) -> dict[str, Any]:
         "timezone": view.timezone,
         "weekday_slots": view.weekday_slots,
         "max_posts_per_day": view.max_posts_per_day,
+        "max_stories_per_day": view.max_stories_per_day,
         "min_gap_hours": view.min_gap_hours,
         "paused": view.paused,
         "story_share_default": view.story_share_default,

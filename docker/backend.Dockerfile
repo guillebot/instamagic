@@ -4,6 +4,10 @@ FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
+# ffmpeg encodes Instagram Reels (H.264 + silent AAC) from verified publish derivatives.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 COPY backend /app

@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from instamagic.errors import NotAllowed, NotFound
-from instamagic.models import PublishingQueueItem, QueueState
+from instamagic.models import PublishingQueueItem, QueueMediaType, QueueState
 from instamagic.models.enums import ScheduleMode
 from instamagic.services.posting.schedule_config import config_view
 from instamagic.services.posting.slots import assign_auto_slots, next_available_slot
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 
@@ -38,7 +38,7 @@ def schedule_queue_item(
     else:
         item.scheduled_at = None
         config = config_view(session)
-        slot = next_available_slot(session, config)
+        slot = next_available_slot(session, config, media_type=item.media_type)
         if slot is not None:
             item.scheduled_at = slot
     item.publish_retry_after = None
@@ -69,7 +69,10 @@ def fill_slots_from_approved(session: Session) -> int:
             select(PublishingQueueItem)
             .where(
                 PublishingQueueItem.state == QueueState.APPROVED.value,
-                PublishingQueueItem.caption_id.is_not(None),
+                or_(
+                    PublishingQueueItem.caption_id.is_not(None),
+                    PublishingQueueItem.media_type == QueueMediaType.STORY.value,
+                ),
                 PublishingQueueItem.schedule_mode == ScheduleMode.AUTO_SLOT.value,
                 PublishingQueueItem.scheduled_at.is_(None),
             )

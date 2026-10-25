@@ -330,6 +330,14 @@ class PublishingQueueItem(Base):
     story_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     story_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     feed_publish_relative_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Reel render (REELS items): exact MP4 that will be uploaded + the verified sources it was built from.
+    reel_status: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
+    reel_relative_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    reel_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reel_source_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reel_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reel_duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reel_rendered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     image: Mapped[Image] = relationship(back_populates="queue_items")
     publish_attempts: Mapped[list[PublishAttempt]] = relationship(back_populates="queue_item")
@@ -365,6 +373,7 @@ class PostingScheduleConfig(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="America/Buenos_Aires")
     weekday_slots_json: Mapped[str] = mapped_column(Text, default="{}")
     max_posts_per_day: Mapped[int] = mapped_column(Integer, default=2)
+    max_stories_per_day: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
     min_gap_hours: Mapped[float] = mapped_column(Float, default=4.0)
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
     story_share_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
