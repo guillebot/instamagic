@@ -185,6 +185,11 @@ export function CuratePage() {
     queryFn: () => api<CurationBatch>("/api/curation/live"),
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
+    // Keep showing the last pool during refetches and transient errors (e.g. a deploy restart).
+    placeholderData: (previous) => previous,
+    // Surface errors after a few tries (the app default retries ~forever, which looked like an empty page).
+    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 401) && failureCount < 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   });
 
   const activeBatch = useQuery({
@@ -288,9 +293,22 @@ export function CuratePage() {
           serverPickCount={live.data.picks.length}
         />
       ) : null}
-      {!activeBatchId && live.isLoading ? <p className="muted">Loading Ready to post…</p> : null}
-      {!activeBatchId && live.isError ? (
-        <p className="error">{live.error instanceof ApiError ? live.error.message : "Could not load Curate."}</p>
+      {!activeBatchId && live.isLoading ? (
+        <div className="panel curate-loading" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" /> Loading Ready to post… gathering your rated photos (can take a
+          few seconds right after an update).
+        </div>
+      ) : null}
+      {!activeBatchId && live.isError && !live.data ? (
+        <div className="panel curate-loading" role="alert">
+          <p className="error">
+            {live.error instanceof ApiError ? live.error.message : "Could not load Curate."} The server may be
+            restarting.
+          </p>
+          <button type="button" className="ghost" onClick={() => void live.refetch()} disabled={live.isFetching}>
+            {live.isFetching ? "Retrying…" : "Retry"}
+          </button>
+        </div>
       ) : null}
 
       <details className="panel curate-advanced">

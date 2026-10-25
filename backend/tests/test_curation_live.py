@@ -81,3 +81,25 @@ def test_verified_blur_then_safe_shows_blurred_and_leaves_on_blur_edit(client, a
     assert client.post(f"/api/images/{image_id}/blurs/strength", json={"strength": "subtle"}).status_code == 200
     after = _live(client)
     assert image_id not in {p["image"]["id"] for p in after["picks"]}
+
+
+def test_live_serves_last_synced_pool_when_another_sync_holds_the_lock(client, app_env, monkeypatch) -> None:
+    from instamagic.services.recommendations import curate_live
+
+    _seed_rated_library(client, app_env["library"])
+    first = client.get("/api/curation/live")
+    assert first.status_code == 200
+    calls = {"n": 0}
+    real = curate_live.sync_live_batch
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(curate_live, "sync_live_batch", counting)
+    monkeypatch.setattr(curate_live, "try_live_sync_lock", lambda session: False)
+    second = client.get("/api/curation/live")
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["live"] is True
+    assert calls["n"] == 0

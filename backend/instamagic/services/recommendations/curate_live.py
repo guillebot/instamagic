@@ -39,7 +39,7 @@ from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.curate_skipped import latest_rating_times, record_skipped
 from instamagic.services.recommendations.gates import publishing_gate
 from instamagic.services.recommendations.refusals import is_gemini_refused
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 log = get_logger(__name__)
@@ -50,6 +50,28 @@ PENDING = {CurationPickStatus.SUGGESTED.value, CurationPickStatus.ACCEPTED.value
 
 def is_live_batch(batch: CurationBatch | None) -> bool:
     return batch is not None and batch.detail == LIVE_DETAIL
+
+
+# Arbitrary constant key for the "one live sync at a time" advisory lock.
+LIVE_SYNC_LOCK_KEY = 0x1A5_C0A7E
+
+
+def existing_live_batch(session: Session) -> CurationBatch | None:
+    return session.scalar(
+        select(CurationBatch).where(CurationBatch.detail == LIVE_DETAIL).order_by(CurationBatch.created_at.asc())
+    )
+
+
+def try_live_sync_lock(session: Session) -> bool:
+    """Only one request re-syncs the live pool at a time; others serve the pool as last synced.
+
+    Without this, several tabs/reloads/refetches each rewrote the same batch and pick rows and
+    queued behind each other's row locks, so the first Curate load could hang (Oct 25 report).
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return True
+    session.execute(text("SET LOCAL lock_timeout = '3s'"))
+    return bool(session.scalar(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": LIVE_SYNC_LOCK_KEY}))
 
 
 def get_or_create_live_batch(session: Session) -> CurationBatch:
