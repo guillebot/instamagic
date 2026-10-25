@@ -26,6 +26,7 @@ from instamagic.services.instagram.publish_derivative import (
     ensure_publish_derivative,
 )
 from instamagic.services.pipeline import is_attested
+from instamagic.services.posting.hashtags import compose_caption, parse_stored
 from instamagic.services.posting.publish_errors import (
     is_permanent_publish_error,
     is_transient_publish_error,
@@ -103,7 +104,8 @@ def publish_queue_item(
     caption = session.get(Caption, resolved_caption_id)
     if caption is None or caption.image_id != image.id:
         raise NotFound("Caption was not found for this image.")
-    if not caption.text.strip():
+    caption_text = publish_caption_text(caption, image)
+    if not caption_text.strip():
         raise NotAllowed("Caption text is empty.")
 
     approved = next((crop for crop in image.crops if crop.approved), None)
@@ -127,6 +129,7 @@ def publish_queue_item(
             client,
             item=item,
             caption=caption,
+            caption_text=caption_text,
             attempt=attempt,
             trigger=trigger,
         )
@@ -169,7 +172,7 @@ def publish_queue_item(
                 item.scheduled_at = None
 
     try:
-        result = client.publish_image(image_url=image_url, caption=caption.text.strip())
+        result = client.publish_image(image_url=image_url, caption=caption_text)
     except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
         err = str(exc.detail if hasattr(exc, "detail") else exc)
         _fail_publish(exc, err)
@@ -183,7 +186,7 @@ def publish_queue_item(
         raise NotConfigured(err) from None
 
     item.feed_publish_relative_path = relative
-    outcome = _record_success(session, item, image, caption, result)
+    outcome = _record_success(session, item, image, caption, result, caption_text=caption_text)
     attempt.finished_at = datetime.now(UTC)
     attempt.success = True
     attempt.ig_media_id = result.media_id
@@ -218,6 +221,11 @@ def publish_queue_item(
     return outcome
 
 
+def publish_caption_text(caption: Caption, image: Image) -> str:
+    """Caption text plus the photo's hashtags (blocklist applied); what is actually sent to Instagram."""
+    return compose_caption(caption.text or "", parse_stored(image.enrich_hashtags_json), seed=str(image.id)).strip()
+
+
 def _record_success(
     session: Session,
     item: PublishingQueueItem,
@@ -226,7 +234,9 @@ def _record_success(
     result: PublishResult,
     *,
     media_type: str = "IMAGE",
+    caption_text: str | None = None,
 ) -> PublishOutcome:
+    published_text = caption_text if caption_text is not None else caption.text
     now = datetime.now(UTC)
     item.state = QueueState.PUBLISHED.value
     item.published_at = now
@@ -238,7 +248,7 @@ def _record_success(
         ig_media_id=result.media_id,
         ig_container_id=result.container_id,
         media_type=media_type,
-        caption=caption.text,
+        caption=published_text,
         status="published",
         published_at=now,
         permalink=result.permalink,
@@ -250,7 +260,7 @@ def _record_success(
         post_id=post.id,
         ig_media_id=result.media_id,
         permalink=result.permalink,
-        caption=caption.text,
+        caption=published_text,
     )
 
 
@@ -263,7 +273,10 @@ def _publish_carousel_item(
     caption: Caption,
     attempt: PublishAttempt,
     trigger: str,
+    caption_text: str | None = None,
 ) -> PublishOutcome:
+    if caption_text is None:
+        caption_text = caption.text.strip()
     slides = sorted(item.slides, key=lambda row: row.sort_order)
     if len(slides) < 2 or len(slides) > 10:
         raise NotAllowed("Carousel posts require between 2 and 10 images.")
@@ -339,7 +352,7 @@ def _publish_carousel_item(
                 item.scheduled_at = None
 
     try:
-        result = client.publish_carousel(image_urls=image_urls, caption=caption.text.strip())
+        result = client.publish_carousel(image_urls=image_urls, caption=caption_text)
     except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
         err = str(exc.detail if hasattr(exc, "detail") else exc)
         _fail_publish(exc, err)
@@ -352,7 +365,9 @@ def _publish_carousel_item(
         session.commit()
         raise NotConfigured(err) from None
 
-    outcome = _record_success(session, item, primary_image, caption, result, media_type="CAROUSEL")
+    outcome = _record_success(
+        session, item, primary_image, caption, result, media_type="CAROUSEL", caption_text=caption_text
+    )
     attempt.finished_at = datetime.now(UTC)
     attempt.success = True
     attempt.ig_media_id = result.media_id

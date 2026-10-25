@@ -81,7 +81,11 @@ def stored_hashtags(image: Image) -> list[str]:
         values = json.loads(image.enrich_hashtags_json)
     except json.JSONDecodeError:
         return []
-    return [str(value) for value in values if str(value).strip()] if isinstance(values, list) else []
+    if not isinstance(values, list):
+        return []
+    from instamagic.services.posting.hashtags import clean_tags
+
+    return clean_tags(str(value) for value in values if str(value).strip())
 
 
 def needs_label(image: Image) -> bool:

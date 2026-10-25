@@ -281,8 +281,8 @@ def test_rate_limiter_spacing() -> None:
 
 def test_hashtags_json_roundtrip() -> None:
     image = Image()
-    image.enrich_hashtags_json = json.dumps(["a", " ", "b"])
-    assert enrichment.stored_hashtags(image) == ["a", "b"]
+    image.enrich_hashtags_json = json.dumps(["street", " ", "night", "sexy"])
+    assert enrichment.stored_hashtags(image) == ["street", "night"]
     image.enrich_hashtags_json = "not json"
     assert enrichment.stored_hashtags(image) == []
 

@@ -156,7 +156,9 @@ def hashtag_request_text(*, context: GeminiContext, account_voice: str) -> str:
     return (
         f"Account voice: {account_voice}\n"
         f"Photo context: {context.canonical_json()}\n"
-        "Suggest up to 12 relevant photography hashtags (no spam stacks). "
+        "Suggest up to 12 relevant photography hashtags about technique, light, style and mood "
+        "(e.g. fineartphotography, lightandshadow, blackandwhite). Never suggest adult, body, sensual or "
+        "model-themed tags, and no spam/engagement tags (follow4follow, like4like, instagood). "
         'Return JSON {"tags":["tag1","tag2"]} without # prefixes.'
     )
 

@@ -211,6 +211,7 @@ from instamagic.services.posting.carousel_queue import (
     reorder_carousel_slides,
     slides_for_item,
 )
+from instamagic.services.posting.hashtags import clean_tags as clean_hashtags
 from instamagic.services.posting.queue_schedule import (
     fill_slots_from_approved,
     list_upcoming,
@@ -2925,7 +2926,7 @@ def suggest_hashtags(
 ) -> dict[str, object]:
     _ = body.confirmed
     image = _load_image(session, image_id)
-    stored = stored_hashtags(image)
+    stored = clean_hashtags(stored_hashtags(image))
     if stored and not body.refresh:
         return {"tags": stored, "gemini_tags": [], "research_tags": [], "stored": True}
     try:
@@ -2939,7 +2940,8 @@ def suggest_hashtags(
         raise
     except Exception:
         raise NotConfigured("Gemini request failed.") from None
-    image.enrich_hashtags_json = json.dumps(merged[:15], ensure_ascii=False)
+    merged = clean_hashtags(merged)[:15]
+    image.enrich_hashtags_json = json.dumps(merged, ensure_ascii=False)
     image.enrich_status = "ok"
     image.enrich_at = datetime.now(UTC)
     session.commit()
