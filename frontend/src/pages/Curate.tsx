@@ -9,10 +9,9 @@ import {
   curateSinceLastRunLine,
   curateTabCounts,
   filterCuratePicks,
+  isBlurVerifiedPick,
   pickTileBadge,
-  sortCuratePicks,
   type CurateFilterTab,
-  type CuratePendingSort,
 } from "../curatePickUx";
 import { displayThumbnailUrl } from "../publishPresentation";
 import { acquireThumbSlot } from "../thumbQueue";
@@ -89,15 +88,16 @@ function formatRatedAt(value: string | null): string {
 /** Read-only list of safe-rated images this run did not pick, one plain reason each. */
 export function WhyNotPicked({ skipped }: { skipped: CurationSkipped | null | undefined }) {
   if (!skipped) {
-    return <p className="muted">No explanation recorded for this batch. Run curation again to see why images were skipped.</p>;
+    return <p className="muted">No skip reasons recorded for this view yet.</p>;
   }
   if (skipped.items.length === 0) {
-    return <p className="muted">Every safe-rated image in scope was picked.</p>;
+    return <p className="muted">Nothing skipped: every safe-rated photo is in Ready or Needs caption.</p>;
   }
   return (
     <div className="curate-why-list" aria-label="Why not picked">
       <p className="muted">
-        Explanation only — nothing here changes ratings, safety checks or the queue.
+        Safe-rated photos that can't be posted yet, with the reason. Fix opens the editor; nothing here changes
+        ratings, safety checks or the queue.
         {skipped.computed_later ? " (Worked out after this run, against the current state.)" : ""}
         {skipped.truncated ? ` Showing ${skipped.items.length} of ${skipped.total}.` : ""}
       </p>
@@ -119,9 +119,13 @@ export function WhyNotPicked({ skipped }: { skipped: CurationSkipped | null | un
                 {item.since_last_run ? " · new since last run" : ""}
                 {item.queue_note ? ` · ${item.queue_note}` : ""}
               </span>
-              {item.blur_editor ? (
-                <a href={`/?image=${item.image_id}&open=1`}>Open blur editor</a>
-              ) : null}
+              <a
+                className="curate-fix-link"
+                href={`/?image=${item.image_id}&open=1`}
+                title={item.blur_editor ? "Open the blur editor for this photo" : "Open this photo in the editor"}
+              >
+                {item.blur_editor ? "Fix in blur editor" : "Fix in editor"}
+              </a>
             </span>
           </li>
         ))}
@@ -165,6 +169,7 @@ export function CuratePage() {
   const [allEligible, setAllEligible] = useState(true);
   const [limit, setLimit] = useState(48);
   const [includeImages, setIncludeImages] = useState(true);
+  // null = the live "Ready to post" pool; a batch id = a past Gemini curation run (Advanced).
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [runPanelOpen, setRunPanelOpen] = useState(false);
@@ -175,10 +180,12 @@ export function CuratePage() {
     }
   }, [config.data?.gemini_pixels_allowed]);
 
-  useEffect(() => {
-    if (activeBatchId || !batches.data?.length) return;
-    setActiveBatchId(batches.data[0].id);
-  }, [activeBatchId, batches.data]);
+  const live = useQuery({
+    queryKey: ["curation-live"],
+    queryFn: () => api<CurationBatch>("/api/curation/live"),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
 
   const activeBatch = useQuery({
     queryKey: ["curation-batch", activeBatchId],
@@ -238,11 +245,56 @@ export function CuratePage() {
     <main className="page">
       <h1>Curate</h1>
       <p className="muted">
-        Browse curation picks as thumbnails, tune caption and hashtags, then send to the publish queue. Nothing
-        publishes until you approve on Queue.
+        Every photo you rated safe or excellent shows up here automatically, newest-rated first. Flagged photos
+        appear only after their blur is verified, and only the blurred version is shown and used. Add to queue only
+        creates a queue candidate; nothing publishes until you approve it on Queue.
       </p>
       <EnrichmentStatusBar />
 
+      {activeBatchId ? (
+        <div className="grid-refresh-banner" role="status">
+          <span>
+            Viewing a past Gemini run
+            {activeBatch.data ? ` from ${new Date(activeBatch.data.created_at).toLocaleString()}` : ""}.{" "}
+          </span>
+          <button type="button" className="ghost" onClick={() => setActiveBatchId(null)}>
+            Back to Ready to post
+          </button>
+        </div>
+      ) : null}
+
+      {activeBatchId && activeBatch.data ? (
+        <CurationPicksWorkspace
+          key={activeBatch.data.id}
+          batch={activeBatch.data}
+          geminiPolicy={config.data?.gemini_policy ?? "text_only"}
+          onRefreshBatch={async () => {
+            await queryClient.invalidateQueries({ queryKey: ["curation-batch", activeBatch.data!.id] });
+            await queryClient.invalidateQueries({ queryKey: ["curation-batches"] });
+            await queryClient.invalidateQueries({ queryKey: ["queue"] });
+          }}
+          serverPickCount={activeBatch.data.pick_count}
+        />
+      ) : null}
+      {!activeBatchId && live.data ? (
+        <CurationPicksWorkspace
+          key="live"
+          batch={live.data}
+          geminiPolicy={config.data?.gemini_policy ?? "text_only"}
+          onRefreshBatch={async () => {
+            await queryClient.invalidateQueries({ queryKey: ["curation-live"] });
+            await queryClient.invalidateQueries({ queryKey: ["queue"] });
+          }}
+          serverPickCount={live.data.picks.length}
+        />
+      ) : null}
+      {!activeBatchId && live.isLoading ? <p className="muted">Loading Ready to post…</p> : null}
+      {!activeBatchId && live.isError ? (
+        <p className="error">{live.error instanceof ApiError ? live.error.message : "Could not load Curate."}</p>
+      ) : null}
+
+      <details className="panel curate-advanced">
+        <summary>Advanced: Gemini curation runs and past batches</summary>
       <section className="panel curate-run-panel">
         <button type="button" className="ghost curate-run-toggle" onClick={() => setRunPanelOpen((open) => !open)}>
           {runPanelOpen ? "▾" : "▸"} Run Gemini curation / labeling
@@ -349,29 +401,18 @@ export function CuratePage() {
           <button
             key={batch.id}
             type="button"
-            className={activeBatchId === batch.id ? "button" : "ghost"}
+            className={activeBatchId === batch.id ? "ghost active" : "ghost"}
             onClick={() => setActiveBatchId(batch.id)}
           >
             {new Date(batch.created_at).toLocaleString()} · {batch.pick_count} picks · {batch.status}
           </button>
         ))}
         {batches.data && batches.data.length === 0 ? (
-          <p className="muted">No curation batches yet. Rate frames safe/excellent, then run curation.</p>
+          <p className="muted">No past Gemini curation runs.</p>
         ) : null}
       </section>
 
-      {activeBatch.data ? (
-        <CurationPicksWorkspace
-          batch={activeBatch.data}
-          geminiPolicy={config.data?.gemini_policy ?? "text_only"}
-          onRefreshBatch={async () => {
-            await queryClient.invalidateQueries({ queryKey: ["curation-batch", activeBatch.data!.id] });
-            await queryClient.invalidateQueries({ queryKey: ["curation-batches"] });
-            await queryClient.invalidateQueries({ queryKey: ["queue"] });
-          }}
-          serverPickCount={activeBatch.data.pick_count}
-        />
-      ) : null}
+      </details>
     </main>
   );
 }
@@ -388,8 +429,7 @@ export function CurationPicksWorkspace({
   serverPickCount: number;
 }) {
   const [picks, setPicks] = useState<CurationPick[]>(() => [...batch.picks]);
-  const [filterTab, setFilterTab] = useState<CurateFilterTab | "why">("pending");
-  const [pendingSort, setPendingSort] = useState<CuratePendingSort>("score");
+  const [filterTab, setFilterTab] = useState<CurateFilterTab | "skipped">("ready");
   const [modalPickId, setModalPickId] = useState<string | null>(null);
   const [modalBusy, setModalBusy] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -402,12 +442,11 @@ export function CurationPicksWorkspace({
     [picks],
   );
   const filtered = useMemo(() => {
-    if (filterTab === "why") return [];
-    const rows = filterCuratePicks(ordered, filterTab);
-    return filterTab === "pending" ? sortCuratePicks(rows, pendingSort) : rows;
-  }, [ordered, filterTab, pendingSort]);
+    if (filterTab === "skipped") return [];
+    return filterCuratePicks(ordered, filterTab);
+  }, [ordered, filterTab]);
   const skipped = batch.skipped ?? null;
-  const sinceLine = curateSinceLastRunLine(skipped);
+  const sinceLine = batch.live ? null : curateSinceLastRunLine(skipped);
   const counts = useMemo(() => curateTabCounts(ordered), [ordered]);
   const modalPick = modalPickId ? ordered.find((row) => row.id === modalPickId) ?? null : null;
 
@@ -486,46 +525,52 @@ export function CurationPicksWorkspace({
 
   return (
     <section className="curate-workspace">
-      <div className="curate-tabs row">
+      <div className="curate-tabs row" role="tablist" aria-label="Curate views">
         {(
           [
-            ["pending", "Pending"],
-            ["queued", "Queued"],
-            ["rejected", "Rejected"],
-            ["all", "All"],
+            ["ready", "Ready", counts.ready],
+            ["needs_caption", "Needs caption", counts.needs_caption],
+            ["skipped", "Skipped", skipped ? skipped.total : 0],
           ] as const
-        ).map(([tab, label]) => (
+        ).map(([tab, label, count]) => (
           <button
             key={tab}
             type="button"
-            className={filterTab === tab ? "button" : "ghost"}
+            role="tab"
+            aria-selected={filterTab === tab}
+            className={filterTab === tab ? "ghost active curate-tab" : "ghost curate-tab"}
             onClick={() => setFilterTab(tab)}
           >
-            {label} ({counts[tab]})
+            {label} ({count})
           </button>
         ))}
-        <button
-          type="button"
-          className={filterTab === "why" ? "button" : "ghost"}
-          onClick={() => setFilterTab("why")}
-        >
-          Why not picked ({skipped ? skipped.total : 0})
-        </button>
-        {filterTab === "pending" ? (
-          <label className="curate-sort">
-            Sort{" "}
-            <select
-              aria-label="Sort pending picks"
-              value={pendingSort}
-              onChange={(event) => setPendingSort(event.target.value as CuratePendingSort)}
+        <span className="curate-tabs-secondary">
+          {(
+            [
+              ["queued", "Sent to queue", counts.queued],
+              ["rejected", "Rejected", counts.rejected],
+            ] as const
+          ).map(([tab, label, count]) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={filterTab === tab}
+              className={filterTab === tab ? "ghost active curate-tab-small" : "ghost curate-tab-small"}
+              onClick={() => setFilterTab(tab)}
             >
-              <option value="score">By score</option>
-              <option value="rated">Most recently rated</option>
-            </select>
-          </label>
-        ) : null}
+              {label} ({count})
+            </button>
+          ))}
+        </span>
         {heldBack > 0 ? <span className="muted curate-held-back">{heldBack} held back (near-duplicates)</span> : null}
       </div>
+      {filterTab === "needs_caption" && filtered.length > 0 ? (
+        <p className="muted">
+          Captions and hashtags are generated in the background from the blurred version only. Photos Gemini declined
+          are never sent again: open them and write the caption yourself.
+        </p>
+      ) : null}
       {pendingNewCount > 0 ? (
         <div className="grid-refresh-banner" role="status">
           <span>{pendingNewCount} new pick{pendingNewCount === 1 ? "" : "s"} in this batch — </span>
@@ -535,11 +580,15 @@ export function CurationPicksWorkspace({
         </div>
       ) : null}
       {sinceLine ? <p className="curate-since-line">{sinceLine}</p> : null}
-      {batch.detail ? <p className="muted">{batch.detail}</p> : null}
-      {filterTab === "why" ? (
+      {batch.detail && !batch.live ? <p className="muted">{batch.detail}</p> : null}
+      {filterTab === "skipped" ? (
         <WhyNotPicked skipped={skipped} />
       ) : filtered.length === 0 ? (
-        <p className="muted">No picks in this tab.</p>
+        <p className="muted">
+          {filterTab === "ready"
+            ? "Nothing ready right now. Rate photos safe or excellent in Review (blur and verify flagged ones first)."
+            : "Nothing here."}
+        </p>
       ) : (
         <div className="grid-scroll curate-grid-scroll" ref={parentRef}>
           <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
@@ -564,6 +613,7 @@ export function CurationPicksWorkspace({
                   {row.map((pick) => {
                     const thumb = displayThumbnailUrl(pick.image);
                     const badge = pickTileBadge(pick);
+                    const blurred = isBlurVerifiedPick(pick);
                     const selected = pick.id === modalPickId;
                     return (
                       <button
@@ -571,10 +621,11 @@ export function CurationPicksWorkspace({
                         type="button"
                         className={`curate-tile${selected ? " selected" : ""}`}
                         aria-pressed={selected}
-                        aria-label={`${pick.image.filename}, ${badge}`}
+                        aria-label={`${pick.image.filename}, ${badge}${blurred ? ", Blurred (verified)" : ""}`}
                         onClick={() => openModal(pick.id)}
                       >
                         {thumb ? <CurateGridThumb src={thumb} /> : <span className="tile-empty" />}
+                        {blurred ? <span className="curate-blur-badge">Blurred (verified)</span> : null}
                         <span className="curate-tile-badge">{badge}</span>
                       </button>
                     );

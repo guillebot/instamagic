@@ -90,6 +90,7 @@ from instamagic.schemas.dto import (
     JobOut,
     LibraryIn,
     LoginIn,
+    ManualCaptionIn,
     MediaQueueIn,
     MetaAppCredentialsIn,
     PostingScheduleConfigIn,
@@ -1304,6 +1305,12 @@ def approve_blurs(
     session.flush()
     demote_if_unverified(session, image, reason="blur_verify_failed")
     session.commit()
+    if image.blur_unlock_status == "verified" and (image.human_rating or "").lower() in {
+        HumanRating.SAFE.value,
+        HumanRating.EXCELLENT.value,
+    }:
+        # Already rated safe: caption/hashtag it now (enrichment sends only the verified blurred render).
+        _wake_enrichment(settings)
     return [_blur_out(image, blur, settings) for blur in image.blurs]
 
 
@@ -1910,6 +1917,36 @@ def create_captions(
     return [_caption_out(row) for row in created]
 
 
+@router.post("/api/images/{image_id}/captions/manual", status_code=201)
+def create_manual_caption(
+    image_id: UUID,
+    body: ManualCaptionIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Operator-written caption (no Gemini call), e.g. for a photo Gemini declined."""
+    image = _load_image(session, image_id)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Caption text is empty.")
+    row = Caption(
+        image_id=image.id,
+        style="manual",
+        language="en",
+        text=text,
+        original_text=text,
+        status=CaptionStatus.MODIFIED.value,
+    )
+    session.add(row)
+    session.flush()
+    for pick in session.scalars(
+        select(CurationPick).where(CurationPick.image_id == image.id, CurationPick.preferred_caption_id.is_(None))
+    ).all():
+        pick.preferred_caption_id = row.id
+    session.commit()
+    return _caption_out(row)
+
+
 @router.get("/api/images/{image_id}/captions")
 def list_captions(image_id: UUID, _auth: None = Depends(require_session), session: Session = db_dep) -> list[dict[str, object]]:
     _load_image(session, image_id)
@@ -2179,8 +2216,33 @@ def list_curation(
     settings: Settings = Depends(settings_dep),
 ) -> list[dict[str, object]]:
     reconcile_stale_curation_batches(session, settings.redis_url)
-    rows = session.scalars(select(CurationBatch).order_by(CurationBatch.created_at.desc()).limit(30)).all()
+    from instamagic.services.recommendations.curate_live import LIVE_DETAIL
+
+    rows = session.scalars(
+        select(CurationBatch)
+        .where(or_(CurationBatch.detail.is_(None), CurationBatch.detail != LIVE_DETAIL))
+        .order_by(CurationBatch.created_at.desc())
+        .limit(30)
+    ).all()
     return [_curation_batch_summary(row) for row in rows]
+
+
+@router.get("/api/curation/live")
+def get_live_curation(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Standing "Ready to post" pool: every eligible safe/excellent photo not yet queued (no Gemini call)."""
+    from instamagic.services.recommendations.curate_live import sync_live_batch
+
+    batch = sync_live_batch(session, covering_blur_fn=_has_approved_covering_blur)
+    out = _curation_batch_out(session, batch)
+    out["live"] = True
+    if any(not pick["captions"] or not pick["suggested_tags"] for pick in out["picks"] if pick["status"] in {"suggested", "accepted"}):
+        # Captions/hashtags for eligible photos come from background enrichment (blurred render only).
+        _wake_enrichment(settings)
+    return out
 
 
 @router.get("/api/curation/{batch_id}")

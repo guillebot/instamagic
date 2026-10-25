@@ -81,8 +81,9 @@ describe("curate why-not-picked", () => {
     render(<WhyNotPicked skipped={SKIPPED} />);
     expect(screen.getByText(/blur coverage 83% < 95% threshold/)).toBeTruthy();
     expect(screen.getByText("near-duplicate of 8b9116ee")).toBeTruthy();
-    const links = screen.getAllByRole("link", { name: "Open blur editor" });
+    const links = screen.getAllByRole("link", { name: "Fix in blur editor" });
     expect(links).toHaveLength(1);
+    expect(screen.getAllByRole("link", { name: /^Fix in/ }).length).toBe(SKIPPED.items.length);
     expect(links[0]!.getAttribute("href")).toBe("/?image=15f077f1-0000-0000-0000-000000000000&open=1");
     const flagged = document.querySelector('[data-code="dnp_coverage"]')!;
     expect(flagged.querySelector("img")).toBeNull();

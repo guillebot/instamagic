@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
 import {
+  isBlurVerifiedPick,
   isCurateTypingTarget,
   isPendingCuratePick,
   neighborPickId,
@@ -120,8 +121,18 @@ export function CuratePickModal({
     const body: Record<string, unknown> = {
       suggested_tags: tags,
     };
-    if (captionId) {
-      body.preferred_caption_id = captionId;
+    let effectiveCaptionId = captionId;
+    if (!effectiveCaptionId && captionText.trim()) {
+      // No generated caption (pending, or Gemini declined): save the operator's own text, no Gemini call.
+      const created = await api<CaptionItem>(`/api/images/${pick.image.id}/captions/manual`, {
+        method: "POST",
+        body: JSON.stringify({ text: captionText.trim() }),
+      });
+      effectiveCaptionId = created.id;
+      setCaptionId(created.id);
+    }
+    if (effectiveCaptionId) {
+      body.preferred_caption_id = effectiveCaptionId;
       body.caption_text = captionText.trim();
     }
     const updated = await api<CurationPick>(`/api/curation/picks/${pick.id}`, {
@@ -136,6 +147,10 @@ export function CuratePickModal({
       setError("This pick is no longer pending.");
       return;
     }
+    if (!captionText.trim()) {
+      setError("Write a caption first (or wait for the background caption).");
+      return;
+    }
     onBusyChange(true);
     setError("");
     try {
@@ -146,7 +161,7 @@ export function CuratePickModal({
         body: JSON.stringify({ pick_ids: [pick.id], ...storyShare }),
       });
       onPickPatched({ ...pick, status: "queued", suggested_tags: tags });
-      onToast("Sent to publish queue", async () => {
+      onToast("Added to queue (approve it on Queue to publish)", async () => {
         const undone = await api<CurationPick>(`/api/curation/picks/${pick.id}/undo-queue`, {
           method: "POST",
         });
@@ -154,7 +169,7 @@ export function CuratePickModal({
       });
       onAfterAction("queue", pick.id);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Send to queue failed.");
+      setError(err instanceof ApiError ? err.message : "Add to queue failed.");
     } finally {
       onBusyChange(false);
     }
@@ -252,6 +267,8 @@ export function CuratePickModal({
   const prevPickId = neighborPickId(orderedPicks, pick.id, -1);
   const nextPickId = neighborPickId(orderedPicks, pick.id, 1);
   const previewUrl = displayPreviewUrl(pick.image, false);
+  const geminiRefused = Boolean(pick.image.gemini_refused);
+  const blurVerified = isBlurVerifiedPick(pick);
   const safetyLine =
     pick.image.blur_unlock_message ??
     pick.image.publish_variant_label ??
@@ -298,6 +315,7 @@ export function CuratePickModal({
         <div className="curate-modal-body">
           <div className="curate-modal-preview">
             {previewUrl ? <img src={previewUrl} alt="" /> : <span className="tile-empty">No preview</span>}
+            {blurVerified ? <span className="curate-blur-badge static">Blurred (verified)</span> : null}
             {safetyLine ? <p className="muted publish-variant-caption">{safetyLine}</p> : null}
           </div>
           <div className="curate-modal-panel">
@@ -317,9 +335,16 @@ export function CuratePickModal({
                 rows={4}
                 value={captionText}
                 onChange={(event) => setCaptionText(event.target.value)}
-                disabled={!captionId}
+                placeholder={captionId ? undefined : "Write the caption"}
               />
             </label>
+            {!captionId ? (
+              <p className="muted curate-caption-note">
+                {geminiRefused
+                  ? "Gemini declined this photo, so it is never sent again. Write the caption yourself."
+                  : "Caption is being generated in the background from the blurred version. You can also write one now."}
+              </p>
+            ) : null}
             {pick.captions.length > 1 ? (
               <div className="caption-pick curate-caption-alts">
                 {pick.captions.map((caption) => (
@@ -340,7 +365,8 @@ export function CuratePickModal({
                 <button
                   type="button"
                   className="ghost"
-                  disabled={hashtagSuggest.isPending}
+                  disabled={hashtagSuggest.isPending || geminiRefused}
+                  title={geminiRefused ? "Gemini declined this photo; add hashtags by hand." : undefined}
                   onClick={() => hashtagSuggest.mutate()}
                 >
                   <PendingButtonLabel
@@ -390,11 +416,11 @@ export function CuratePickModal({
                 disabled={busy || !isPendingCuratePick(pick)}
                 onClick={() => void runQueue()}
               >
-                {busy ? "Working…" : <ActionLabel label="Send to queue" shortcut="Q" />}
+                {busy ? "Working…" : <ActionLabel label="Add to queue" shortcut="Q" />}
               </button>
               <button
                 type="button"
-                className="button danger"
+                className="ghost"
                 disabled={busy || !isPendingCuratePick(pick)}
                 onClick={() => void runReject()}
               >
@@ -414,7 +440,7 @@ export function CuratePickModal({
           </span>
           <span className="legend-item">
             <KeyHint>Q</KeyHint>
-            queue
+            add to queue
           </span>
           <span className="legend-item">
             <KeyHint>R</KeyHint>
