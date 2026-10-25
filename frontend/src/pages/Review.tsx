@@ -49,6 +49,7 @@ import type {
   LibraryItem,
   QueuesStatus,
 } from "../types";
+import { MiddleEllipsis } from "../middleEllipsis";
 
 type PrepMode = "rate" | "crop" | "blur";
 
@@ -140,7 +141,7 @@ const RATING_KEYS = [
 ] as const;
 
 const GRID_GAP = 8;
-const TARGET_ROW_HEIGHT = 160;
+const TARGET_ROW_HEIGHT = 208; // ~30% larger thumbnails (Oct 25)
 const PAGE_SIZE = 60;
 
 type JustifiedRow = {
@@ -1173,8 +1174,10 @@ export function ReviewPage() {
                         ) : null}
                       </div>
                       <div className="meta">
-                        <span>{image.human_rating ?? "unrated"}</span>
-                        <span>{image.aesthetic_score ?? "—"}</span>
+                        <MiddleEllipsis className="tile-filename" text={image.filename} lines={2} />
+                        <span className="tile-rating">
+                          {image.human_rating ?? "unrated"} · {image.aesthetic_score ?? "—"}
+                        </span>
                       </div>
                     </button>
                   );
@@ -1776,7 +1779,7 @@ function FolderBrowser({
               ) : (
                 <span className="folder-empty">▢</span>
               )}
-              <span className="folder-name">{entry.name}</span>
+              <MiddleEllipsis className="folder-name" text={entry.name} lines={2} />
               <span className="folder-count">{entry.image_count}</span>
             </button>
           ))}
