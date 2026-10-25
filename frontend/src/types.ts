@@ -40,6 +40,8 @@ export type ImageItem = {
   original_preview_url?: string | null;
   publish_preview_url?: string | null;
   blur_unlock_status?: string;
+  gemini_refused?: boolean;
+  gemini_refused_reason?: string | null;
   blur_unlock_message?: string | null;
   blur_unlock_highlights?: Array<{
     kind?: string;
@@ -259,6 +261,8 @@ export type CurationBatchSummary = {
 export type CurationBatch = CurationBatchSummary & {
   picks: CurationPick[];
   skipped?: CurationSkipped | null;
+  /** True for the standing "Ready to post" pool (GET /api/curation/live). */
+  live?: boolean;
 };
 
 export type QueueSlide = {

@@ -18,7 +18,7 @@ from instamagic.services.pipeline import is_attested
 from instamagic.services.recommendations.gates import gemini_gate
 from instamagic.services.recommendations.rank import _hamming
 from instamagic.services.recommendations.refusals import is_gemini_refused
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 log = get_logger(__name__)
@@ -188,6 +188,7 @@ def build_skipped_report(
         select(CurationBatch.created_at)
         .where(CurationBatch.created_at < batch.created_at)
         .where(CurationBatch.id != batch.id)
+        .where(or_(CurationBatch.detail.is_(None), CurationBatch.detail != "live:ready-to-post"))
         .order_by(CurationBatch.created_at.desc())
         .limit(1)
     )

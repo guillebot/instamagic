@@ -1,15 +1,31 @@
 import type { CurationPick, CurationSkipped } from "./types";
 
-export type CurateFilterTab = "pending" | "queued" | "rejected" | "all";
+/** Curate tabs: "ready" and "needs_caption" are the two halves of the pending pool. */
+export type CurateFilterTab = "ready" | "needs_caption" | "queued" | "rejected";
 
 export function isPendingCuratePick(pick: CurationPick): boolean {
   return pick.status === "suggested" || pick.status === "accepted";
 }
 
+export function pickHasCaption(pick: CurationPick): boolean {
+  return pick.captions.some((row) => row.text.trim().length > 0);
+}
+
+export function isReadyCuratePick(pick: CurationPick): boolean {
+  return isPendingCuratePick(pick) && pickHasCaption(pick);
+}
+
+export function isBlurVerifiedPick(pick: CurationPick): boolean {
+  const image = pick.image;
+  return image.blur_unlock_status === "verified" || Boolean(image.blur_verified && image.has_approved_blur);
+}
+
 export function filterCuratePicks(picks: CurationPick[], tab: CurateFilterTab): CurationPick[] {
   switch (tab) {
-    case "pending":
-      return picks.filter(isPendingCuratePick);
+    case "ready":
+      return picks.filter(isReadyCuratePick);
+    case "needs_caption":
+      return picks.filter((pick) => isPendingCuratePick(pick) && !pickHasCaption(pick));
     case "queued":
       return picks.filter((pick) => pick.status === "queued");
     case "rejected":
@@ -19,24 +35,21 @@ export function filterCuratePicks(picks: CurationPick[], tab: CurateFilterTab): 
   }
 }
 
-export function curateTabCounts(picks: CurationPick[]) {
+export function curateTabCounts(picks: CurationPick[]): Record<CurateFilterTab, number> {
   return {
-    pending: picks.filter(isPendingCuratePick).length,
-    queued: picks.filter((pick) => pick.status === "queued").length,
-    rejected: picks.filter((pick) => pick.status === "rejected").length,
-    all: picks.length,
+    ready: filterCuratePicks(picks, "ready").length,
+    needs_caption: filterCuratePicks(picks, "needs_caption").length,
+    queued: filterCuratePicks(picks, "queued").length,
+    rejected: filterCuratePicks(picks, "rejected").length,
   };
 }
 
-/** Short badge on grid tiles (status + safety presentation). */
+/** Short badge on grid tiles. */
 export function pickTileBadge(pick: CurationPick): string {
-  if (pick.status === "queued") return "queued";
-  if (pick.status === "rejected") return "rejected";
-  const image = pick.image;
-  if (image.blur_unlock_message) return image.blur_unlock_message;
-  if (image.publish_variant_label) return image.publish_variant_label;
-  if (pick.status === "accepted") return "accepted";
-  return "pending";
+  if (pick.status === "queued") return "Sent to queue";
+  if (pick.status === "rejected") return "Rejected";
+  if (!pickHasCaption(pick)) return pick.image.gemini_refused ? "Write caption" : "Caption pending";
+  return "Ready";
 }
 
 export function nextPendingPickId(picks: CurationPick[], afterId: string | null): string | null {

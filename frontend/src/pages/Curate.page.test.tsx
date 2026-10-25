@@ -151,6 +151,15 @@ function installApiMock() {
       picksState = picksState.map((row) => (row.id === pickId ? { ...row, status: "suggested" } : row));
       return picksState.find((row) => row.id === pickId);
     }
+    if (path.endsWith("/captions/manual") && method === "POST") {
+      const body = JSON.parse(rawBody) as { text: string };
+      const imageId = path.split("/")[3]!;
+      const caption = { id: `manual-${imageId}`, style: "manual", language: "en", text: body.text, status: "modified" };
+      picksState = picksState.map((row) =>
+        row.image.id === imageId ? { ...row, captions: [caption], preferred_caption_id: caption.id } : row,
+      );
+      return caption;
+    }
     if (path.includes("/hashtags") && method === "POST") {
       return new Promise((resolve) => {
         resolveCurateHashtags = resolve;
@@ -253,7 +262,7 @@ describe("Curate picks workspace", () => {
     await user.clear(caption);
     await user.type(caption, "Edited caption text");
 
-    await user.click(screen.getByRole("button", { name: "Send to queue" }));
+    await user.click(screen.getByRole("button", { name: "Add to queue" }));
 
     await waitFor(() => {
       expect(mockApi).toHaveBeenCalledWith(
@@ -294,5 +303,58 @@ describe("Curate picks workspace", () => {
     await user.type(caption, "q");
     const queueCalls = mockApi.mock.calls.filter(([path]) => path === "/api/curation/queue");
     expect(queueCalls.length).toBe(0);
+  });
+
+  it("shows Ready / Needs caption / Skipped tabs with counts and a Blurred (verified) badge", async () => {
+    picksState = [
+      { ...makePick("a", 1), image: { ...makeImage("a"), blur_unlock_status: "verified" } },
+      makePick("b", 2),
+      { ...makePick("c", 3), captions: [], preferred_caption_id: null },
+    ];
+    renderWorkspace();
+    await waitFor(() => expect(tile("a")).toBeInTheDocument());
+    expect(screen.getByRole("tab", { name: "Ready (2)" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Needs caption (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^Skipped \(/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Sent to queue (0)" })).toBeInTheDocument();
+    expect(tile("a").querySelector(".curate-blur-badge")?.textContent).toBe("Blurred (verified)");
+    expect(tile("b").querySelector(".curate-blur-badge")).toBeNull();
+    expect(screen.queryByLabelText("Sort pending picks")).toBeNull();
+  });
+
+  it("needs-caption pick: Gemini-declined note, manual caption saved, then added to queue", async () => {
+    const user = userEvent.setup();
+    picksState = [
+      {
+        ...makePick("c", 1),
+        captions: [],
+        preferred_caption_id: null,
+        image: { ...makeImage("c"), gemini_refused: true },
+      },
+    ];
+    renderWorkspace();
+    await user.click(screen.getByRole("tab", { name: "Needs caption (1)" }));
+    await waitFor(() => expect(tile("c")).toBeInTheDocument());
+    await user.click(tile("c"));
+    await waitFor(() => expect(curateDialog()).toBeInTheDocument());
+    expect(screen.getByText(/Gemini declined this photo/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Suggest" })).toBeDisabled();
+    const addButton = screen.getByRole("button", { name: "Add to queue" });
+    expect(addButton.className).toBe("button");
+    await user.click(addButton);
+    expect(await screen.findByText(/Write a caption first/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Caption"), "My own words");
+    await user.click(screen.getByRole("button", { name: "Add to queue" }));
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenCalledWith(
+        "/api/images/c/captions/manual",
+        expect.objectContaining({ method: "POST", body: expect.stringContaining("My own words") }),
+      ),
+    );
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenCalledWith("/api/curation/queue", expect.objectContaining({ method: "POST" })),
+    );
+    const hashtagCalls = mockApi.mock.calls.filter(([path]) => String(path).includes("/hashtags"));
+    expect(hashtagCalls.length).toBe(0);
   });
 });

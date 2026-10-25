@@ -50,6 +50,10 @@ class CaptionIn(BaseModel):
     confirmed: bool = False
 
 
+class ManualCaptionIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2200)
+
+
 class CaptionUpdate(BaseModel):
     status: str
     text: str | None = None
