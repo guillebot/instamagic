@@ -13,6 +13,7 @@ import {
   writePublishedSectionExpanded,
 } from "../queueGrouping";
 import {
+  STORY_RENDER_MODES,
   formatStoryStatus,
   storyShareFromQueueItem,
   StoryShareControls,
@@ -34,6 +35,20 @@ export function QueuePage() {
 
   async function approve(id: string) {
     await api(`/api/queue/${id}/approve`, { method: "POST" });
+    await queryClient.invalidateQueries({ queryKey: ["queue"] });
+  }
+
+  async function createFromSelection(kind: "story" | "reel") {
+    if (carouselPick.length < 1) return;
+    try {
+      await api(`/api/queue/${kind}`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids: carouselPick }),
+      });
+      setCarouselPick([]);
+    } catch (err) {
+      window.alert(err instanceof ApiError ? err.message : `Could not create the ${kind}.`);
+    }
     await queryClient.invalidateQueries({ queryKey: ["queue"] });
   }
 
@@ -74,7 +89,26 @@ export function QueuePage() {
         >
           Queue carousel ({carouselPick.length} selected)
         </button>
-        <p className="muted">Select 2–10 approved-ready images below (checkbox), reorder after queueing.</p>
+        <button
+          className="button"
+          type="button"
+          disabled={carouselPick.length < 1}
+          onClick={() => void createFromSelection("reel")}
+        >
+          Create Reel ({carouselPick.length} selected)
+        </button>
+        <button
+          className="button"
+          type="button"
+          disabled={carouselPick.length < 1}
+          onClick={() => void createFromSelection("story")}
+        >
+          Create Story ({carouselPick.length} selected)
+        </button>
+        <p className="muted">
+          Select images below (checkbox): carousel needs 2–10, a Reel takes 1–10 (one photo = slow zoom, several =
+          crossfade slideshow), Story creates one 9:16 story per photo.
+        </p>
       </div>
       <div className="card-list">
         {active.map((item) => (
@@ -227,7 +261,7 @@ function QueueCard({
         method: "POST",
         body: JSON.stringify({
           mode: "auto_slot",
-          caption_id: selectedCaptionId,
+          caption_id: isStory ? null : selectedCaptionId,
         }),
       }),
     onSuccess: () => onChanged(),
@@ -245,10 +279,10 @@ function QueueCard({
   });
 
   const publish = useMutation({
-    mutationFn: (captionId: string) =>
+    mutationFn: (captionId: string | null) =>
       api(`/api/queue/${item.id}/publish`, {
         method: "POST",
-        body: JSON.stringify({ caption_id: captionId }),
+        body: JSON.stringify(captionId ? { caption_id: captionId } : {}),
       }),
     onSuccess: () => {
       setError("");
@@ -275,10 +309,60 @@ function QueueCard({
     }
   }
 
-  const canPublish =
-    (item.state === "APPROVED" || item.state === "FAILED") && Boolean(selectedCaptionId) && instagramReady;
-
+  const isStory = item.media_type === "STORY";
+  const isReel = item.media_type === "REELS";
   const isCarousel = item.media_type === "CAROUSEL" && (item.slides?.length ?? 0) > 1;
+  const reelSlides = isReel ? (item.slides?.length ?? 1) : 0;
+  const editable = item.state === "CANDIDATE" || item.state === "FAILED";
+
+  const canPublish =
+    (item.state === "APPROVED" || item.state === "FAILED") &&
+    (isStory || Boolean(selectedCaptionId)) &&
+    instagramReady &&
+    (!isReel || item.reel_status === "ready");
+
+  const postType = useMutation({
+    mutationFn: (mediaType: string) =>
+      api(`/api/queue/${item.id}/post-type`, {
+        method: "POST",
+        body: JSON.stringify({ media_type: mediaType }),
+      }),
+    onSuccess: () => {
+      setError("");
+      onChanged();
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Could not change post type."),
+  });
+
+  const renderReel = useMutation({
+    mutationFn: () => api(`/api/queue/${item.id}/reel-render`, { method: "POST" }),
+    onSuccess: () => {
+      setError("");
+      onChanged();
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Reel render failed to start."),
+  });
+
+  const [lookBusy, setLookBusy] = useState(false);
+  async function saveLook(mode: string) {
+    setLookBusy(true);
+    try {
+      await api(`/api/queue/${item.id}`, { method: "PATCH", body: JSON.stringify({ story_render_mode: mode }) });
+      setError("");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not change the 9:16 fit.");
+    } finally {
+      setLookBusy(false);
+    }
+  }
+
+  const reelRendering = isReel && item.reel_status === "rendering";
+  useEffect(() => {
+    if (!reelRendering) return;
+    const timer = window.setInterval(() => onChanged(), 3000);
+    return () => window.clearInterval(timer);
+  }, [reelRendering, onChanged]);
 
   async function moveSlide(imageId: string, direction: -1 | 1) {
     if (!item.slides?.length) return;
@@ -298,7 +382,34 @@ function QueueCard({
 
   return (
     <article className="card queue-card">
-      {isCarousel ? (
+      {isStory && item.story_preview_url ? (
+        <figure className="publish-confirm-preview story-preview-9x16">
+          <img
+            src={`${item.story_preview_url}?v=${item.story_render_mode ?? ""}-${item.story_border_color ?? ""}-${item.state}`}
+            alt="Story preview (9:16)"
+          />
+          <figcaption className="muted">Exact 1080×1920 Story uploaded on publish</figcaption>
+        </figure>
+      ) : isReel ? (
+        <figure className="publish-confirm-preview reel-preview">
+          {item.reel_status === "ready" && item.reel_video_url ? (
+            <video src={item.reel_video_url} controls muted loop playsInline preload="metadata" />
+          ) : (
+            <div className="carousel-thumbs">
+              {(item.slides?.length ? item.slides.map((slide) => slide.image) : [item.image]).map((img, idx) => (
+                <div key={`${img.id}-${idx}`} className="carousel-thumb">
+                  {img.thumbnail_url ? <img src={img.thumbnail_url} alt="" /> : <span />}
+                </div>
+              ))}
+            </div>
+          )}
+          <figcaption className="muted">
+            {item.reel_status === "ready"
+              ? `Exact ${item.reel_duration_s?.toFixed(1) ?? ""}s 1080×1920 MP4 uploaded on publish`
+              : "Render the reel to preview the video"}
+          </figcaption>
+        </figure>
+      ) : isCarousel ? (
         <div className="carousel-thumbs">
           {item.slides?.map((slide) => (
             <div key={slide.id} className="carousel-thumb">
@@ -321,7 +432,13 @@ function QueueCard({
       )}
       <div className="queue-body">
         <strong>
-          {isCarousel ? `Carousel (${item.slides?.length ?? 0})` : item.image.filename}
+          {isCarousel
+            ? `Carousel (${item.slides?.length ?? 0})`
+            : isReel
+              ? `Reel (${reelSlides} photo${reelSlides === 1 ? "" : "s"})`
+              : isStory
+                ? `Story · ${item.image.filename}`
+                : item.image.filename}
         </strong>
         <p>
           {item.state}
@@ -329,16 +446,71 @@ function QueueCard({
           {item.last_error ? ` · ${item.last_error}` : ""} · {lifecycleLabel(item.image.effective_state)} ·
           model {item.image.model_state}
         </p>
-        {formatStoryStatus(item) ? <p className="muted">{formatStoryStatus(item)}</p> : null}
+        {!isStory && !isReel && formatStoryStatus(item) ? <p className="muted">{formatStoryStatus(item)}</p> : null}
+        {!isCarousel && editable && reelSlides <= 1 ? (
+          <label className="post-type-select">
+            Post type{" "}
+            <select
+              value={isStory ? "STORY" : isReel ? "REELS" : "FEED"}
+              disabled={postType.isPending}
+              onChange={(event) => postType.mutate(event.target.value)}
+            >
+              <option value="FEED">Feed</option>
+              <option value="STORY">Story</option>
+              <option value="REELS">Reel</option>
+            </select>
+          </label>
+        ) : null}
+        {(isStory || isReel) && editable ? (
+          <label className="post-type-select">
+            Fit to 9:16{" "}
+            <select
+              value={item.story_render_mode === "fit_border" ? "fit_border" : "blur_backdrop"}
+              disabled={lookBusy}
+              onChange={(event) => void saveLook(event.target.value)}
+            >
+              {STORY_RENDER_MODES.filter((mode) => mode.value !== "crop_fill").map((mode) => (
+                <option key={mode.value} value={mode.value}>
+                  {mode.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {isReel ? (
+          <div className="reel-controls">
+            {editable ? (
+              <button
+                type="button"
+                className="button"
+                disabled={renderReel.isPending || reelRendering}
+                onClick={() => renderReel.mutate()}
+              >
+                <PendingButtonLabel
+                  pending={renderReel.isPending || reelRendering}
+                  pendingLabel="Rendering video…"
+                  label={item.reel_status === "ready" ? "Re-render reel video" : "Render reel video"}
+                />
+              </button>
+            ) : null}
+            {item.reel_status === "failed" && item.reel_error ? <p className="error">{item.reel_error}</p> : null}
+            {item.reel_status === "stale" ? (
+              <p className="error">Photos, blurs or look changed since rendering — render the reel again.</p>
+            ) : null}
+            <p className="muted">
+              Instagram&apos;s music library can&apos;t be added through the API — reels publish with a silent track.
+            </p>
+          </div>
+        ) : null}
         <div className="row">
-          {item.state === "CANDIDATE" && item.media_type !== "CAROUSEL" ? (
+          {item.state === "CANDIDATE" && !isCarousel && !isStory && !isReel ? (
             <label>
               <input
                 type="checkbox"
                 checked={carouselPick.includes(item.image.id)}
                 onChange={() => onToggleCarouselPick(item.image.id)}
               />
-              Add to new carousel
+              Select
             </label>
           ) : null}
           {item.state === "CANDIDATE" ? (
@@ -359,7 +531,7 @@ function QueueCard({
               />
             </button>
           ) : null}
-          {item.state !== "PUBLISHED" && item.state !== "PUBLISHING" ? (
+          {item.state !== "PUBLISHED" && item.state !== "PUBLISHING" && !isStory ? (
             <>
               <button
                 type="button"
@@ -389,7 +561,7 @@ function QueueCard({
           ) : null}
           {canPublish ? (
             <>
-              {publishConfirmPreviewUrl(item.image) ? (
+              {!isStory && !isReel && publishConfirmPreviewUrl(item.image) ? (
                 <figure className="publish-confirm-preview">
                   <img src={publishConfirmPreviewUrl(item.image) ?? ""} alt="Upload preview" />
                   <figcaption className="muted">Exact file uploaded on publish</figcaption>
@@ -400,6 +572,16 @@ function QueueCard({
                 className="button"
                 disabled={publish.isPending}
                 onClick={() => {
+                  if (isStory || isReel) {
+                    const ok = window.confirm(
+                      isStory
+                        ? "Publish this exact 9:16 Story to @foto.sch now? Stories disappear after 24 hours."
+                        : "Publish this exact Reel video to @foto.sch now? Instagram may take a few minutes to process it.",
+                    );
+                    if (!ok) return;
+                    publish.mutate(isStory ? null : selectedCaptionId);
+                    return;
+                  }
                   if (!selectedCaptionId) return;
                   const previewUrl = publishConfirmPreviewUrl(item.image);
                   const storyLine = storyShare.story_share_enabled
@@ -417,12 +599,12 @@ function QueueCard({
                 <PendingButtonLabel
                   pending={publish.isPending}
                   pendingLabel="Publishing…"
-                  label="Publish to Instagram"
+                  label={isStory ? "Publish Story" : isReel ? "Publish Reel" : "Publish to Instagram"}
                 />
               </button>
             </>
           ) : null}
-          {item.state === "APPROVED" && selectedCaptionId ? (
+          {item.state === "APPROVED" && (isStory || selectedCaptionId) ? (
             <button
               className="ghost"
               type="button"
@@ -442,7 +624,7 @@ function QueueCard({
             </Link>
           ) : null}
         </div>
-        {!isCarousel && item.state !== "PUBLISHED" && item.state !== "PUBLISHING" ? (
+        {!isCarousel && !isStory && !isReel && item.state !== "PUBLISHED" && item.state !== "PUBLISHING" ? (
           <>
             <StoryShareControls
               value={storyShare}
@@ -470,7 +652,8 @@ function QueueCard({
         {suggestedTags.length ? (
           <p className="muted">#{suggestedTags.map((tag) => tag).join(" #")}</p>
         ) : null}
-        <div className="caption-pick">
+        {isStory ? <p className="muted">Stories publish without a caption (Graph API: no stickers or links).</p> : null}
+        <div className="caption-pick" hidden={isStory}>
           {captions.data?.map((caption) => (
             <label key={caption.id} className={selectedCaptionId === caption.id ? "picked" : ""}>
               <input

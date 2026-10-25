@@ -18,6 +18,7 @@ export function SchedulePage() {
   const [timezone, setTimezone] = useState("");
   const [maxPosts, setMaxPosts] = useState(2);
   const [minGap, setMinGap] = useState(4);
+  const [maxStories, setMaxStories] = useState(2);
   const [storyDefault, setStoryDefault] = useState(false);
   const [blurCoverageThreshold, setBlurCoverageThreshold] = useState(95);
   const [blurRegionPadding, setBlurRegionPadding] = useState(6);
@@ -30,6 +31,7 @@ export function SchedulePage() {
         body: JSON.stringify({
           timezone: timezone || config.data?.timezone,
           max_posts_per_day: maxPosts,
+          max_stories_per_day: maxStories,
           min_gap_hours: minGap,
           weekday_slots: config.data?.weekday_slots,
           paused: config.data?.paused,
@@ -64,6 +66,7 @@ export function SchedulePage() {
     setTimezone(config.data.timezone);
     setMaxPosts(config.data.max_posts_per_day);
     setMinGap(config.data.min_gap_hours);
+    setMaxStories(config.data.max_stories_per_day ?? 2);
     setStoryDefault(config.data.story_share_default ?? false);
     setBlurCoverageThreshold(config.data.blur_coverage_threshold ?? 95);
     setBlurRegionPadding(config.data.blur_region_padding_px ?? 6);
@@ -99,6 +102,16 @@ export function SchedulePage() {
               max={24}
               value={maxPosts}
               onChange={(e) => setMaxPosts(Number(e.target.value))}
+            />
+          </label>
+          <label title="Standalone Stories use the same slots but have their own daily cap (they don't count against feed posts).">
+            Max stories / day
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={maxStories}
+              onChange={(e) => setMaxStories(Number(e.target.value))}
             />
           </label>
           <label>

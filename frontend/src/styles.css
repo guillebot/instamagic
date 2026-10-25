@@ -1177,3 +1177,23 @@ input, select, textarea {
   color: #b26a00;
   font-weight: 600;
 }
+
+/* Stories & Reels previews (9:16) */
+.story-preview-9x16 img,
+.reel-preview video {
+  display: block;
+  width: 100%;
+  max-width: 270px;
+  aspect-ratio: 9 / 16;
+  object-fit: contain;
+  background: #000;
+  border-radius: 8px;
+}
+.post-type-select,
+.reel-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.35rem 0;
+}
