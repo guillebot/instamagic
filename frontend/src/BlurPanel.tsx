@@ -10,7 +10,7 @@ import {
   resizeBlur,
   snapRotation,
 } from "./blurGeometry";
-import { defaultEdgeMode } from "./blurEdgeMode";
+import { defaultEdgeMode, initialBlurShape, rememberBlurShape, type BlurShape } from "./blurEdgeMode";
 import { containedLayout, cropToCss, type ContainedLayout, type CropRect } from "./cropGeometry";
 import type {
   BlurCoverageRegion,
@@ -261,7 +261,7 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus, onMa
     queryFn: () => api<BlurCoverageReport>(`/api/images/${image.id}/blur-coverage`),
   });
   const [strength, setStrength] = useState("standard");
-  const [shapeMode, setShapeMode] = useState<"ellipse" | "rectangle">("ellipse");
+  const [shapeMode, setShapeMode] = useState<BlurShape>(initialBlurShape);
   const [cornerRadius, setCornerRadius] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<BlurRect | null>(null);
@@ -970,10 +970,14 @@ export function BlurPanel({ image, captureKeys = true, onChanged, onStatus, onMa
             <select
               value={shapeMode}
               disabled={busy}
-              onChange={(event) => setShapeMode(event.target.value as "ellipse" | "rectangle")}
+              onChange={(event) => {
+                const next = event.target.value as BlurShape;
+                setShapeMode(next);
+                rememberBlurShape(next);
+              }}
             >
-              <option value="ellipse">Ellipse</option>
               <option value="rectangle">Rectangle</option>
+              <option value="ellipse">Ellipse (oval)</option>
             </select>
           </label>
           {shapeMode === "rectangle" ? (

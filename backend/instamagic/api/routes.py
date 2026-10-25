@@ -2252,9 +2252,28 @@ def get_live_curation(
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, object]:
     """Standing "Ready to post" pool: every eligible safe/excellent photo not yet queued (no Gemini call)."""
-    from instamagic.services.recommendations.curate_live import sync_live_batch
+    from instamagic.services.recommendations.curate_live import (
+        existing_live_batch,
+        sync_live_batch,
+        try_live_sync_lock,
+    )
+    from instamagic.services.recommendations.curate_live import (
+        log as live_log,
+    )
+    from sqlalchemy.exc import OperationalError
 
-    batch = sync_live_batch(session, covering_blur_fn=_has_approved_covering_blur)
+    batch = None
+    try:
+        if try_live_sync_lock(session):
+            batch = sync_live_batch(session, covering_blur_fn=_has_approved_covering_blur)
+    except OperationalError:
+        # Lock wait timed out: another writer holds the rows. Serve the pool as last synced.
+        session.rollback()
+        live_log.warning("curation_live_sync_skipped", extra={"reason": "lock_timeout"})
+    if batch is None:
+        batch = existing_live_batch(session)
+    if batch is None:
+        batch = sync_live_batch(session, covering_blur_fn=_has_approved_covering_blur)
     out = _curation_batch_out(session, batch)
     out["live"] = True
     if any(not pick["captions"] or not pick["suggested_tags"] for pick in out["picks"] if pick["status"] in {"suggested", "accepted"}):
