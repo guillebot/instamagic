@@ -1,3 +1,4 @@
+import { StageChipBar, StagePill, type PhotoStage } from "../photoStage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -40,7 +41,18 @@ export function QueuePage() {
       (query.state.data ?? []).some((item) => item.state !== "PUBLISHED" && hashtagsPending(item)) ? 10_000 : false,
   });
   const { active, published } = useMemo(() => splitQueueItems(queue.data ?? []), [queue.data]);
-  const { scheduled, needsAction } = useMemo(() => groupActiveQueue(active), [active]);
+  const [stageFilter, setStageFilter] = useState("");
+  const visibleActive = useMemo(
+    () => (stageFilter && stageFilter !== "posted" ? active.filter((item) => item.stage === stageFilter) : active),
+    [active, stageFilter],
+  );
+  const { scheduled, needsAction } = useMemo(() => groupActiveQueue(visibleActive), [visibleActive]);
+  const stageCounts = useMemo(() => {
+    const counts: Record<string, number> = { posted: published.length };
+    for (const item of active) counts[item.stage ?? "candidate"] = (counts[item.stage ?? "candidate"] ?? 0) + 1;
+    return counts;
+  }, [active, published]);
+  const queueStages: PhotoStage[] = ["to_review", "candidate", "scheduled", "posted"];
   const [compactView, setCompactView] = useState(() => readCompactView());
   /** Per-item manual override: true = collapsed, false = expanded. Absent = default. */
   const [collapsedOverride, setCollapsedOverride] = useState<Record<string, boolean>>({});
@@ -180,8 +192,19 @@ export function QueuePage() {
         </label>
         <span className="muted">Auto-scheduled items start collapsed; Compact view collapses everything.</span>
       </div>
+      <StageChipBar
+        counts={stageCounts}
+        stages={queueStages}
+        value={stageFilter}
+        allLabel="Active"
+        allCount={active.length}
+        onChange={(stage) => {
+          setStageFilter(stage);
+          if (stage === "posted") setPublishedOpen(true);
+        }}
+      />
       <div className="card-list">
-        {(
+        {stageFilter === "posted" ? null : (
           [
             ["Scheduled", scheduled],
             ["Needs action", needsAction],
@@ -512,6 +535,7 @@ function QueueCard({
           <div className="queue-compact-line">
             <strong className="queue-compact-title">{isCarousel || isReel ? title : item.image.filename}</strong>
             <span className="queue-badge">{queuePostTypeLabel(item)}</span>
+            <StagePill image={item} />
             <span className={`queue-badge state-${item.state.toLowerCase()}`}>{item.state}</span>
             <span className="queue-compact-when">{formatArt(item.scheduled_at)}</span>
           </div>
@@ -587,6 +611,7 @@ function QueueCard({
       <div className="queue-body">
         <div className="queue-card-head">
           <strong>{title}</strong>
+          <StagePill image={item} />
           {onToggleCollapsed ? (
             <button
               type="button"

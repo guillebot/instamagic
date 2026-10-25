@@ -17,6 +17,7 @@ import { ClassifyPublishPanel } from "../ClassifyPublishPanel";
 import { CropPanel } from "../CropPanel";
 import { ActionLabel, KeyHint } from "../KeyHint";
 import { SAFETY_FILTERS, lifecycleLabel } from "../lifecycle";
+import { StageChipBar, StagePill, isNewSince, useLastVisit } from "../photoStage";
 import { displayPreviewUrl, publishVariantLabel } from "../publishPresentation";
 import { acquireThumbSlot } from "../thumbQueue";
 import {
@@ -111,6 +112,7 @@ type Filters = {
   orientation: string;
   queued: string;
   posted: string;
+  stage: string;
   date_from: string;
   date_to: string;
 };
@@ -124,6 +126,7 @@ const EMPTY_FILTERS: Filters = {
   orientation: "",
   queued: "",
   posted: "",
+  stage: "",
   date_from: "",
   date_to: "",
 };
@@ -214,6 +217,7 @@ export function ReviewPage() {
   });
   const [libraryId, setLibraryId] = useState("");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const lastVisit = useLastVisit("review");
   const [items, setItems] = useState<GridImageItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [listExhausted, setListExhausted] = useState(false);
@@ -353,6 +357,24 @@ export function ReviewPage() {
     });
     return params.toString();
   }, [filters, libraryId, folder, recursive]);
+
+  const stageCountsQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    if (libraryId) params.set("library_id", libraryId);
+    params.set("folder", folder);
+    if (recursive) params.set("recursive", "true");
+    return params.toString();
+  }, [libraryId, folder, recursive]);
+  const stageCounts = useQuery({
+    queryKey: ["stage-counts", stageCountsQuery],
+    queryFn: () =>
+      api<{ counts: Record<string, number> }>(`/api/images/stage-counts?${stageCountsQuery}`).catch(() => null),
+    enabled: Boolean(libraryId),
+    refetchInterval: 60_000,
+  });
+  const stageTotal = stageCounts.data?.counts
+    ? Object.values(stageCounts.data.counts).reduce((sum, count) => sum + count, 0)
+    : undefined;
 
   const rememberGridScrollAnchor = useCallback(() => {
     const el = parentRef.current;
@@ -1056,6 +1078,14 @@ export function ReviewPage() {
           </button>
         </div>
       ) : null}
+      {libraryId ? (
+        <StageChipBar
+          counts={stageCounts.data?.counts ?? {}}
+          allCount={stageTotal}
+          value={filters.stage}
+          onChange={(stage) => setFilters({ ...filters, stage })}
+        />
+      ) : null}
       {message ? <p className="help">{message}</p> : null}
       {libraryId && items.length === 0 ? (
         <p className="help">
@@ -1117,6 +1147,12 @@ export function ReviewPage() {
                         <span className="tile-empty">No preview</span>
                       )}
                       <div className="meta meta-top">
+                        <StagePill image={image} compact />
+                        {isNewSince(image.ingested_at, lastVisit) ? (
+                          <span className="stage-new-since" title="Scanned since your last visit">
+                            New since last visit
+                          </span>
+                        ) : null}
                         <span className={`badge ${image.effective_state}`}>
                           {lifecycleLabel(image.effective_state)}
                         </span>

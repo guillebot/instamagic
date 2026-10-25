@@ -408,8 +408,18 @@ class ImageOut(BaseModel):
     enrich_hashtags: list[str] = []
     gemini_refused: bool = False
     gemini_refused_reason: str | None = None
+    stage: str = "new"
+    stage_label: str = "New"
+    stage_detail: str | None = None
+    stage_caption_ready: bool | None = None
+    posted_permalink: str | None = None
     gemini_description: str | None = None
     gemini_mood: str | None = None
+
+
+class StageCountsOut(BaseModel):
+    counts: dict[str, int]
+    labels: dict[str, str]
 
 
 class ImagePage(BaseModel):
