@@ -1245,3 +1245,11 @@ input, select, textarea {
 .queue-badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid #343b45; color: #cfc8be; }
 .queue-badge.state-approved { border-color: #d7a15f; color: #e2c08a; }
 .queue-badge.state-failed { border-color: #a04545; color: #f0a3a3; }
+@keyframes queue-row-collapse-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.queue-row-just-collapsed { animation: queue-row-collapse-in 280ms ease-out; border-color: #d7a15f; }
+.queue-card:focus { outline: 1px solid #d7a15f; outline-offset: 2px; }
+.queue-hashtags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) { .queue-row-just-collapsed { animation: none; } }
