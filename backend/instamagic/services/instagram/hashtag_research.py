@@ -162,4 +162,6 @@ def suggest_tags_from_research(session: Session, gemini_tags: list[str]) -> list
             if isinstance(media, list) and media:
                 if tag not in suggestions:
                     suggestions.append(tag)
-    return suggestions[:15]
+    from instamagic.services.posting.hashtags import clean_tags
+
+    return clean_tags(suggestions)[:15]
