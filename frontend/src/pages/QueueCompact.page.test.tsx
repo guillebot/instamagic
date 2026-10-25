@@ -49,6 +49,8 @@ describe("Queue compact rows", () => {
     mockApi.mockImplementation(async (path: string, init?: RequestInit) => {
       if (path === "/api/queue") return ITEMS;
       if (path === "/api/queue/q-todo/approve" && init?.method === "POST") return { ...ITEMS[2], state: "APPROVED" };
+      if (path === "/api/queue/q-todo/schedule" && init?.method === "POST")
+        return { ...ITEMS[2], state: "APPROVED", scheduled_at: "2026-10-27T22:00:00Z" };
       if (path === "/api/config") return CONFIG;
       if (path === "/api/instagram/status") return { configured: true, provider: "graph" };
       const m = path.match(/^\/api\/images\/(\w+)\/captions$/);
@@ -73,7 +75,7 @@ describe("Queue compact rows", () => {
     expect(rows[0]).toHaveTextContent("3 hashtags");
     const needs = screen.getByRole("region", { name: "Needs action" });
     expect(within(needs).queryByTestId("queue-row-compact")).toBeNull();
-    expect(within(needs).getByRole("button", { name: "Approve for publish" })).toBeInTheDocument();
+    expect(within(needs).getByRole("button", { name: "Approve & auto-schedule" })).toBeInTheDocument();
   });
 
   it("expand/collapse all, per-row chevron, and persisted Compact view", async () => {
@@ -91,12 +93,60 @@ describe("Queue compact rows", () => {
     expect(screen.getAllByTestId("queue-row-compact")).toHaveLength(3);
   });
 
-  it("minimises an item right after it is approved", async () => {
+  it("Approve & auto-schedule approves, takes the next slot, then minimises", async () => {
     const user = userEvent.setup();
     renderQueue();
     const needs = await screen.findByRole("region", { name: "Needs action" });
-    await user.click(within(needs).getByRole("button", { name: "Approve for publish" }));
+    const btn = within(needs).getByRole("button", { name: "Approve & auto-schedule" });
+    expect(btn).toBeDisabled();
+    expect(within(needs).getByText("Choose a caption below to schedule.")).toBeInTheDocument();
+    await user.click(await within(needs).findByRole("radio"));
+    expect(btn).toBeEnabled();
+    await user.click(btn);
     expect(await screen.findAllByTestId("queue-row-compact")).toHaveLength(3);
     expect(mockApi).toHaveBeenCalledWith("/api/queue/q-todo/approve", { method: "POST" });
+    expect(mockApi).toHaveBeenCalledWith(
+      "/api/queue/q-todo/schedule",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"auto_slot"') }),
+    );
+  });
+
+  it("Approve only keeps the card open; Pick time offers an explicit time", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    const needs = await screen.findByRole("region", { name: "Needs action" });
+    await user.click(within(needs).getByRole("button", { name: "Approve only" }));
+    expect(mockApi).toHaveBeenCalledWith("/api/queue/q-todo/approve", { method: "POST" });
+    expect(within(needs).queryByTestId("queue-row-compact")).toBeNull();
+    await user.click(within(needs).getByRole("button", { name: "Pick time…" }));
+    expect(within(needs).getByLabelText(/Publish time/)).toBeInTheDocument();
+    expect(within(needs).getByRole("button", { name: "Approve & schedule at this time" })).toBeDisabled();
+  });
+
+  it("collapses whole groups from their headers and remembers it", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+    const scheduled = await screen.findByRole("region", { name: "Scheduled" });
+    const schedToggle = within(scheduled).getByRole("button", { name: /Scheduled \(2\)/ });
+    expect(schedToggle).toHaveAttribute("aria-expanded", "true");
+    expect(schedToggle).toHaveTextContent(/next: \w{3} 11:00 ART/);
+    await user.click(schedToggle);
+    expect(schedToggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(scheduled).queryAllByTestId("queue-row-compact")).toHaveLength(0);
+    expect(window.localStorage.getItem("instamagic.queue.groupCollapsed.scheduled")).toBe("true");
+
+    const needs = screen.getByRole("region", { name: "Needs action" });
+    const needsToggle = within(needs).getByRole("button", { name: /Needs action \(1\)/ });
+    needsToggle.focus();
+    await user.keyboard("{Enter}");
+    expect(needsToggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(needs).queryByRole("button", { name: "Approve & auto-schedule" })).toBeNull();
+
+    cleanup();
+    renderQueue();
+    const again = await screen.findByRole("region", { name: "Scheduled" });
+    expect(within(again).getByRole("button", { name: /Scheduled \(2\)/ })).toHaveAttribute("aria-expanded", "false");
+    await user.click(screen.getByRole("button", { name: /Needs action \(1\)/ }));
+    expect(screen.getByRole("button", { name: "Approve & auto-schedule" })).toBeInTheDocument();
   });
 });

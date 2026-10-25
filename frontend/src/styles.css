@@ -1292,3 +1292,18 @@ input, select, textarea {
   -webkit-box-orient: vertical;
 }
 .tile .tile-rating { flex: 0 0 auto; white-space: nowrap; color: #cfc8be; }
+.queue-group-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  padding: 6px 8px;
+}
+.queue-group-chevron { width: 1em; display: inline-block; }
+.queue-group-next { font-weight: 400; font-size: 12px; margin-left: auto; }
+.queue-group-body { display: grid; gap: 6px; }
+.queue-schedule-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.queue-pick-time { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }

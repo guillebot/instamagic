@@ -14,11 +14,15 @@ import {
   groupActiveQueue,
   hashtagCount,
   isAutoScheduled,
+  nextSlotLabel,
+  readGroupCollapsed,
+  type QueueGroupKey,
   queuePostTypeLabel,
   readCompactView,
   readPublishedSectionExpanded,
   splitQueueItems,
   writeCompactView,
+  writeGroupCollapsed,
   writePublishedSectionExpanded,
 } from "../queueGrouping";
 import {
@@ -33,6 +37,16 @@ export function QueuePage() {
   const queryClient = useQueryClient();
   const [carouselPick, setCarouselPick] = useState<string[]>([]);
   const [publishedOpen, setPublishedOpen] = useState(() => readPublishedSectionExpanded());
+  const [groupCollapsed, setGroupCollapsed] = useState<Record<QueueGroupKey, boolean>>(() => ({
+    scheduled: readGroupCollapsed("scheduled"),
+    needsAction: readGroupCollapsed("needsAction"),
+  }));
+  const toggleGroup = (group: QueueGroupKey) =>
+    setGroupCollapsed((prev) => {
+      const next = !prev[group];
+      writeGroupCollapsed(group, next);
+      return { ...prev, [group]: next };
+    });
   const queue = useQuery({
     queryKey: ["queue"],
     queryFn: () => api<QueueItem[]>("/api/queue"),
@@ -80,18 +94,20 @@ export function QueuePage() {
     if (!focusAfter || !queue.data) return;
     const next = needsAction.find((item) => item.id !== focusAfter && !isCollapsed(item));
     setFocusAfter(null);
-    if (!next) return;
+    // A collapsed Needs action group is the user's choice: don't scroll into it.
+    if (!next || groupCollapsed.needsAction) return;
     window.requestAnimationFrame(() => {
       const el = document.getElementById(`queue-item-${next.id}`);
       el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
       el?.focus?.({ preventScroll: true });
     });
-  }, [focusAfter, queue.data, needsAction]);
+  }, [focusAfter, queue.data, needsAction, groupCollapsed.needsAction]);
 
   async function approve(id: string) {
     try {
       await api(`/api/queue/${id}/approve`, { method: "POST" });
-      markScheduled(id);
+      // Approved without a slot still needs scheduling: keep the card open.
+      setCollapsedOverride((prev) => ({ ...prev, [id]: false }));
     } catch (err) {
       window.alert(err instanceof ApiError ? err.message : "Could not approve this item.");
     }
@@ -206,36 +222,56 @@ export function QueuePage() {
       <div className="card-list">
         {stageFilter === "posted" ? null : (
           [
-            ["Scheduled", scheduled],
-            ["Needs action", needsAction],
+            ["scheduled", "Scheduled", scheduled],
+            ["needsAction", "Needs action", needsAction],
           ] as const
-        ).map(([title, items]) =>
-          items.length > 0 ? (
-            <section key={title} className="queue-group" aria-label={title}>
+        ).map(([key, title, items]) => {
+          if (items.length === 0) return null;
+          const groupIsCollapsed = groupCollapsed[key];
+          const nextSlot = key === "scheduled" ? nextSlotLabel(items) : null;
+          const bodyId = `queue-group-body-${key}`;
+          return (
+            <section key={key} className="queue-group" aria-label={title}>
               <h2 className="queue-group-title">
-                {title} ({items.length})
+                <button
+                  type="button"
+                  className="queue-group-toggle ghost"
+                  aria-expanded={!groupIsCollapsed}
+                  aria-controls={bodyId}
+                  onClick={() => toggleGroup(key)}
+                >
+                  <span className="queue-group-chevron" aria-hidden="true">
+                    {groupIsCollapsed ? "▸" : "▾"}
+                  </span>
+                  {title} ({items.length})
+                  {nextSlot ? <span className="queue-group-next muted">next: {nextSlot}</span> : null}
+                </button>
               </h2>
-              {items.map((item) => (
-                <QueueCard
-                  key={item.id}
-                  item={item}
-                  policy={config.data?.gemini_policy ?? "text_only"}
-                  instagramReady={Boolean(ig.data?.configured)}
-                  carouselPick={carouselPick}
-                  onToggleCarouselPick={toggleCarouselPick}
-                  onApprove={() => void approve(item.id)}
-                  onChanged={() => void queryClient.invalidateQueries({ queryKey: ["queue"] })}
-                  onScheduled={() => markScheduled(item.id)}
-                  justCollapsed={justCollapsed === item.id}
-                  collapsed={isCollapsed(item)}
-                  onToggleCollapsed={() =>
-                    setCollapsedOverride((prev) => ({ ...prev, [item.id]: !isCollapsed(item) }))
-                  }
-                />
-              ))}
+              {groupIsCollapsed ? null : (
+                <div id={bodyId} className="queue-group-body">
+                {items.map((item) => (
+                  <QueueCard
+                    key={item.id}
+                    item={item}
+                    policy={config.data?.gemini_policy ?? "text_only"}
+                    instagramReady={Boolean(ig.data?.configured)}
+                    carouselPick={carouselPick}
+                    onToggleCarouselPick={toggleCarouselPick}
+                    onApprove={() => void approve(item.id)}
+                    onChanged={() => void queryClient.invalidateQueries({ queryKey: ["queue"] })}
+                    onScheduled={() => markScheduled(item.id)}
+                    justCollapsed={justCollapsed === item.id}
+                    collapsed={isCollapsed(item)}
+                    onToggleCollapsed={() =>
+                      setCollapsedOverride((prev) => ({ ...prev, [item.id]: !isCollapsed(item) }))
+                    }
+                  />
+                ))}
+                </div>
+              )}
             </section>
-          ) : null,
-        )}
+          );
+        })}
         {queue.data && queue.data.length === 0 ? <p>Nothing queued yet. Press P on a reviewed photograph.</p> : null}
       </div>
       {published.length > 0 ? (
@@ -382,20 +418,36 @@ function QueueCard({
     onError: (err) => setError(err instanceof ApiError ? err.message : "Hashtag request failed."),
   });
 
-  const scheduleAuto = useMutation({
-    mutationFn: () =>
-      api(`/api/queue/${item.id}/schedule`, {
+  const [pickOpen, setPickOpen] = useState(false);
+  const [pickAt, setPickAt] = useState("");
+  /** Approve (if still a candidate) and schedule: auto slot, or an explicit time. */
+  const scheduleWith = useMutation({
+    mutationFn: async ({ approveFirst, at }: { approveFirst: boolean; at: string | null }) => {
+      if (approveFirst) await api(`/api/queue/${item.id}/approve`, { method: "POST" });
+      const captionId = isStory ? null : selectedCaptionId;
+      return api<QueueItem>(`/api/queue/${item.id}/schedule`, {
         method: "POST",
-        body: JSON.stringify({
-          mode: "auto_slot",
-          caption_id: isStory ? null : selectedCaptionId,
-        }),
-      }),
-    onSuccess: () => {
-      onScheduled?.();
+        body: JSON.stringify(
+          at
+            ? { mode: "explicit", scheduled_at: new Date(at).toISOString(), caption_id: captionId }
+            : { mode: "auto_slot", caption_id: captionId },
+        ),
+      });
+    },
+    onMutate: () => setError(""),
+    onSuccess: (body) => {
+      if (body?.scheduled_at) {
+        onScheduled?.();
+      } else {
+        setError("Approved, but no free auto-slot was found. Pick a time instead.");
+        setPickOpen(true);
+      }
       onChanged();
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Schedule failed."),
+    onError: (err) => {
+      setError(err instanceof ApiError ? err.message : "Schedule failed.");
+      onChanged();
+    },
   });
 
   const saveStory = useMutation({
@@ -444,6 +496,11 @@ function QueueCard({
   const isCarousel = item.media_type === "CAROUSEL" && (item.slides?.length ?? 0) > 1;
   const reelSlides = isReel ? (item.slides?.length ?? 1) : 0;
   const editable = item.state === "CANDIDATE" || item.state === "FAILED";
+
+  const isCandidate = item.state === "CANDIDATE";
+  const needsSchedule = isCandidate || (item.state === "APPROVED" && !item.scheduled_at);
+  const needsCaption = !isStory && !selectedCaptionId;
+  const scheduleBusy = scheduleWith.isPending || approveBusy;
 
   const canPublish =
     (item.state === "APPROVED" || item.state === "FAILED") &&
@@ -697,23 +754,70 @@ function QueueCard({
               Select
             </label>
           ) : null}
-          {item.state === "CANDIDATE" ? (
-            <button
-              type="button"
-              className="button"
-              disabled={approveBusy}
-              onClick={() => {
-                if (approveBusy) return;
-                setApproveBusy(true);
-                void Promise.resolve(onApprove()).finally(() => setApproveBusy(false));
-              }}
-            >
-              <PendingButtonLabel
-                pending={approveBusy}
-                pendingLabel="Approving…"
-                label="Approve for publish"
-              />
-            </button>
+          {needsSchedule ? (
+            <div className="queue-schedule-actions" data-testid="queue-schedule-actions">
+              <button
+                type="button"
+                className="button"
+                disabled={scheduleBusy || needsCaption}
+                title={needsCaption ? "Choose a caption first" : "Next free posting slot"}
+                onClick={() => scheduleWith.mutate({ approveFirst: isCandidate, at: null })}
+              >
+                <PendingButtonLabel
+                  pending={scheduleWith.isPending && !pickOpen}
+                  pendingLabel="Scheduling…"
+                  label={isCandidate ? "Approve & auto-schedule" : "Add to auto-slot schedule"}
+                />
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                aria-expanded={pickOpen}
+                disabled={scheduleBusy}
+                onClick={() => setPickOpen((open) => !open)}
+              >
+                Pick time…
+              </button>
+              {isCandidate ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={scheduleBusy}
+                  onClick={() => {
+                    if (approveBusy) return;
+                    setApproveBusy(true);
+                    void Promise.resolve(onApprove()).finally(() => setApproveBusy(false));
+                  }}
+                >
+                  <PendingButtonLabel pending={approveBusy} pendingLabel="Approving…" label="Approve only" />
+                </button>
+              ) : (
+                <span className="muted">Approved — not scheduled yet.</span>
+              )}
+              {needsCaption ? <span className="muted">Choose a caption below to schedule.</span> : null}
+              {pickOpen ? (
+                <span className="queue-pick-time">
+                  <input
+                    type="datetime-local"
+                    aria-label="Publish time (your local time, ART)"
+                    value={pickAt}
+                    onChange={(event) => setPickAt(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={!pickAt || scheduleBusy || needsCaption}
+                    onClick={() => scheduleWith.mutate({ approveFirst: isCandidate, at: pickAt })}
+                  >
+                    <PendingButtonLabel
+                      pending={scheduleWith.isPending && pickOpen}
+                      pendingLabel="Scheduling…"
+                      label={isCandidate ? "Approve & schedule at this time" : "Schedule at this time"}
+                    />
+                  </button>
+                </span>
+              ) : null}
+            </div>
           ) : null}
           {item.state !== "PUBLISHED" && item.state !== "PUBLISHING" && !isStory ? (
             <>
@@ -787,20 +891,6 @@ function QueueCard({
                 />
               </button>
             </>
-          ) : null}
-          {item.state === "APPROVED" && (isStory || selectedCaptionId) ? (
-            <button
-              className="ghost"
-              type="button"
-              disabled={scheduleAuto.isPending}
-              onClick={() => scheduleAuto.mutate()}
-            >
-              <PendingButtonLabel
-                pending={scheduleAuto.isPending}
-                pendingLabel="Scheduling…"
-                label="Add to auto-slot schedule"
-              />
-            </button>
           ) : null}
           {item.scheduled_at ? (
             <Link className="ghost" to="/queue/schedule">

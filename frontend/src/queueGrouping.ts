@@ -107,3 +107,41 @@ export function writeCompactView(on: boolean): void {
     /* ignore quota / private mode */
   }
 }
+
+export type QueueGroupKey = "scheduled" | "needsAction";
+const GROUP_COLLAPSED_KEY_PREFIX = "instamagic.queue.groupCollapsed.";
+
+/** Whole-group collapse (Scheduled / Needs action). Default: expanded. */
+export function readGroupCollapsed(group: QueueGroupKey): boolean {
+  try {
+    return window.localStorage.getItem(GROUP_COLLAPSED_KEY_PREFIX + group) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeGroupCollapsed(group: QueueGroupKey, collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(GROUP_COLLAPSED_KEY_PREFIX + group, collapsed ? "true" : "false");
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Earliest upcoming slot among scheduled items, e.g. "Sun 19:00 ART"; null if none. */
+export function nextSlotLabel(items: QueueItem[], now: number = Date.now()): string | null {
+  const times = items
+    .map((item) => Date.parse(item.scheduled_at ?? ""))
+    .filter((t) => !Number.isNaN(t))
+    .sort((a, b) => a - b);
+  if (times.length === 0) return null;
+  const next = times.find((t) => t >= now) ?? times[0];
+  const text = new Date(next).toLocaleString("en-GB", {
+    timeZone: QUEUE_DISPLAY_TIMEZONE,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${text.replace(",", "")} ART`;
+}
