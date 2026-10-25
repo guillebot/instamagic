@@ -8,8 +8,16 @@ import { lifecycleLabel } from "../lifecycle";
 import { publishConfirmPreviewUrl } from "../publishPresentation";
 import {
   captionFirstLine,
+  captionSummary,
+  formatArt,
+  groupActiveQueue,
+  hashtagCount,
+  isAutoScheduled,
+  queuePostTypeLabel,
+  readCompactView,
   readPublishedSectionExpanded,
   splitQueueItems,
+  writeCompactView,
   writePublishedSectionExpanded,
 } from "../queueGrouping";
 import {
@@ -26,6 +34,13 @@ export function QueuePage() {
   const [publishedOpen, setPublishedOpen] = useState(() => readPublishedSectionExpanded());
   const queue = useQuery({ queryKey: ["queue"], queryFn: () => api<QueueItem[]>("/api/queue") });
   const { active, published } = useMemo(() => splitQueueItems(queue.data ?? []), [queue.data]);
+  const { scheduled, needsAction } = useMemo(() => groupActiveQueue(active), [active]);
+  const [compactView, setCompactView] = useState(() => readCompactView());
+  /** Per-item manual override: true = collapsed, false = expanded. Absent = default. */
+  const [collapsedOverride, setCollapsedOverride] = useState<Record<string, boolean>>({});
+  const isCollapsed = (item: QueueItem) => collapsedOverride[item.id] ?? (compactView || isAutoScheduled(item));
+  const setAllCollapsed = (collapsed: boolean) =>
+    setCollapsedOverride(Object.fromEntries(active.map((item) => [item.id, collapsed])));
   const config = useQuery({ queryKey: ["config"], queryFn: () => api<AppConfig>("/api/config") });
   const ig = useQuery({
     queryKey: ["instagram-status"],
@@ -110,19 +125,59 @@ export function QueuePage() {
           crossfade slideshow), Story creates one 9:16 story per photo.
         </p>
       </div>
+      <div className="row queue-view-controls">
+        <button className="ghost" type="button" disabled={active.length === 0} onClick={() => setAllCollapsed(true)}>
+          Collapse all
+        </button>
+        <button className="ghost" type="button" disabled={active.length === 0} onClick={() => setAllCollapsed(false)}>
+          Expand all
+        </button>
+        <label className="queue-compact-toggle">
+          <input
+            type="checkbox"
+            checked={compactView}
+            onChange={(event) => {
+              const next = event.target.checked;
+              setCompactView(next);
+              writeCompactView(next);
+              setCollapsedOverride({});
+            }}
+          />{" "}
+          Compact view
+        </label>
+        <span className="muted">Auto-scheduled items start collapsed; Compact view collapses everything.</span>
+      </div>
       <div className="card-list">
-        {active.map((item) => (
-          <QueueCard
-            key={item.id}
-            item={item}
-            policy={config.data?.gemini_policy ?? "text_only"}
-            instagramReady={Boolean(ig.data?.configured)}
-            carouselPick={carouselPick}
-            onToggleCarouselPick={toggleCarouselPick}
-            onApprove={() => void approve(item.id)}
-            onChanged={() => void queryClient.invalidateQueries({ queryKey: ["queue"] })}
-          />
-        ))}
+        {(
+          [
+            ["Scheduled", scheduled],
+            ["Needs action", needsAction],
+          ] as const
+        ).map(([title, items]) =>
+          items.length > 0 ? (
+            <section key={title} className="queue-group" aria-label={title}>
+              <h2 className="queue-group-title">
+                {title} ({items.length})
+              </h2>
+              {items.map((item) => (
+                <QueueCard
+                  key={item.id}
+                  item={item}
+                  policy={config.data?.gemini_policy ?? "text_only"}
+                  instagramReady={Boolean(ig.data?.configured)}
+                  carouselPick={carouselPick}
+                  onToggleCarouselPick={toggleCarouselPick}
+                  onApprove={() => void approve(item.id)}
+                  onChanged={() => void queryClient.invalidateQueries({ queryKey: ["queue"] })}
+                  collapsed={isCollapsed(item)}
+                  onToggleCollapsed={() =>
+                    setCollapsedOverride((prev) => ({ ...prev, [item.id]: !isCollapsed(item) }))
+                  }
+                />
+              ))}
+            </section>
+          ) : null,
+        )}
         {queue.data && queue.data.length === 0 ? <p>Nothing queued yet. Press P on a reviewed photograph.</p> : null}
       </div>
       {published.length > 0 ? (
@@ -192,6 +247,8 @@ function QueueCard({
   onToggleCarouselPick,
   onApprove,
   onChanged,
+  collapsed = false,
+  onToggleCollapsed,
 }: {
   item: QueueItem;
   policy: string;
@@ -200,6 +257,8 @@ function QueueCard({
   onToggleCarouselPick: (imageId: string) => void;
   onApprove: () => void | Promise<void>;
   onChanged: () => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
   const [selectedCaptionId, setSelectedCaptionId] = useState<string | null>(item.caption_id ?? null);
   const [error, setError] = useState("");
@@ -380,6 +439,49 @@ function QueueCard({
     onChanged();
   }
 
+  const selectedCaption = captions.data?.find((c) => c.id === selectedCaptionId) ?? null;
+  const captionText = selectedCaption?.text ?? item.published_caption ?? null;
+  const title = isCarousel
+    ? `Carousel (${item.slides?.length ?? 0})`
+    : isReel
+      ? `Reel (${reelSlides} photo${reelSlides === 1 ? "" : "s"})`
+      : isStory
+        ? `Story · ${item.image.filename}`
+        : item.image.filename;
+
+  if (collapsed) {
+    const thumb =
+      (isCarousel || isReel ? item.slides?.[0]?.image.thumbnail_url : null) ?? item.image.thumbnail_url ?? null;
+    const tags = hashtagCount(captionText);
+    return (
+      <article className="queue-row-compact" data-testid="queue-row-compact">
+        {thumb ? <img src={thumb} alt="" className="queue-compact-thumb" loading="lazy" /> : <span className="queue-compact-thumb empty" />}
+        <div className="queue-compact-body">
+          <div className="queue-compact-line">
+            <strong className="queue-compact-title">{isCarousel || isReel ? title : item.image.filename}</strong>
+            <span className="queue-badge">{queuePostTypeLabel(item)}</span>
+            <span className={`queue-badge state-${item.state.toLowerCase()}`}>{item.state}</span>
+            <span className="queue-compact-when">{formatArt(item.scheduled_at)}</span>
+          </div>
+          <p className="queue-compact-caption">
+            {isStory ? "Story — no caption" : captionSummary(captionText)}
+            {!isStory ? <span className="muted"> · {tags} hashtag{tags === 1 ? "" : "s"}</span> : null}
+            {item.last_error ? <span className="error"> · {item.last_error}</span> : null}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="ghost queue-chevron"
+          aria-expanded={false}
+          aria-label={`Expand ${item.image.filename}`}
+          onClick={onToggleCollapsed}
+        >
+          ▸
+        </button>
+      </article>
+    );
+  }
+
   return (
     <article className="card queue-card">
       {isStory && item.story_preview_url ? (
@@ -431,18 +533,23 @@ function QueueCard({
         <div />
       )}
       <div className="queue-body">
-        <strong>
-          {isCarousel
-            ? `Carousel (${item.slides?.length ?? 0})`
-            : isReel
-              ? `Reel (${reelSlides} photo${reelSlides === 1 ? "" : "s"})`
-              : isStory
-                ? `Story · ${item.image.filename}`
-                : item.image.filename}
-        </strong>
+        <div className="queue-card-head">
+          <strong>{title}</strong>
+          {onToggleCollapsed ? (
+            <button
+              type="button"
+              className="ghost queue-chevron"
+              aria-expanded
+              aria-label={`Collapse ${item.image.filename}`}
+              onClick={onToggleCollapsed}
+            >
+              ▾
+            </button>
+          ) : null}
+        </div>
         <p>
           {item.state}
-          {item.scheduled_at ? ` · scheduled ${new Date(item.scheduled_at).toLocaleString()}` : ""}
+          {item.scheduled_at ? ` · scheduled ${formatArt(item.scheduled_at)}` : ""}
           {item.last_error ? ` · ${item.last_error}` : ""} · {lifecycleLabel(item.image.effective_state)} ·
           model {item.image.model_state}
         </p>
