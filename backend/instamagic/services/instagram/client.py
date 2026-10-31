@@ -5,6 +5,7 @@ No unofficial mobile API. Tokens come from env only and must never be logged.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -101,13 +102,24 @@ class MediaInsightSnapshot:
 class InstagramClient(Protocol):
     def configured(self) -> bool: ...
 
-    def publish_image(self, *, image_url: str, caption: str) -> PublishResult: ...
+    def publish_image(
+        self, *, image_url: str, caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult: ...
 
-    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult: ...
+    def publish_carousel(
+        self, *, image_urls: list[str], caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult: ...
 
     def publish_story(self, *, image_url: str) -> PublishResult: ...
 
-    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult: ...
+    def publish_reel(
+        self,
+        *,
+        video_url: str,
+        caption: str,
+        cover_url: str | None = None,
+        collaborators: list[str] | None = None,
+    ) -> PublishResult: ...
 
     def fetch_account_details(self) -> InstagramAccountDetails: ...
 
@@ -134,6 +146,19 @@ class InstagramClient(Protocol):
     def post_comment_reply(self, comment_id: str, message: str) -> None: ...
 
 
+def collaborators_param(collaborators: list[str] | None) -> str | None:
+    """Graph ``collaborators`` value: JSON array of up to 3 usernames (no ``@``), or None.
+
+    Valid for feed images, carousels (parent container only) and Reels; never Stories.
+    """
+    from instamagic.services.posting.collaborators import normalize_collaborators
+
+    names = normalize_collaborators(collaborators or [])
+    if not names:
+        return None
+    return json.dumps(names)
+
+
 def mask_access_token(token: str) -> str | None:
     """Never return the full token. Empty → None; short → opaque; else last 4 only."""
     value = token.strip()
@@ -148,20 +173,31 @@ class NotConfiguredInstagramClient:
     def configured(self) -> bool:
         return False
 
-    def publish_image(self, *, image_url: str, caption: str) -> PublishResult:
-        del image_url, caption
+    def publish_image(
+        self, *, image_url: str, caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult:
+        del image_url, caption, collaborators
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
-    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
-        del image_urls, caption
+    def publish_carousel(
+        self, *, image_urls: list[str], caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult:
+        del image_urls, caption, collaborators
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def publish_story(self, *, image_url: str) -> PublishResult:
         del image_url
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
-    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult:
-        del video_url, caption
+    def publish_reel(
+        self,
+        *,
+        video_url: str,
+        caption: str,
+        cover_url: str | None = None,
+        collaborators: list[str] | None = None,
+    ) -> PublishResult:
+        del video_url, caption, cover_url, collaborators
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def fetch_account_details(self) -> InstagramAccountDetails:
@@ -216,14 +252,18 @@ class FakeInstagramClient:
     def configured(self) -> bool:
         return True
 
-    def publish_image(self, *, image_url: str, caption: str) -> PublishResult:
+    def publish_image(
+        self, *, image_url: str, caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult:
         if not image_url.startswith(("http://", "https://")):
             raise NotConfigured("Fake Instagram publisher requires an http(s) image_url.")
         if not caption.strip():
             raise NotConfigured("Caption is required.")
         container_id = f"fake-container-{uuid.uuid4().hex[:12]}"
         media_id = f"fake-media-{uuid.uuid4().hex[:12]}"
-        self.calls.append({"image_url": image_url, "caption": caption, "media_id": media_id})
+        self.calls.append(
+            {"image_url": image_url, "caption": caption, "media_id": media_id, "collaborators": list(collaborators or [])}
+        )
         return PublishResult(
             container_id=container_id,
             media_id=media_id,
@@ -242,21 +282,38 @@ class FakeInstagramClient:
             permalink=None,
         )
 
-    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult:
+    def publish_reel(
+        self,
+        *,
+        video_url: str,
+        caption: str,
+        cover_url: str | None = None,
+        collaborators: list[str] | None = None,
+    ) -> PublishResult:
         if not video_url.startswith(("http://", "https://")):
             raise NotConfigured("Fake Instagram publisher requires an http(s) video_url.")
         if not caption.strip():
             raise NotConfigured("Caption is required.")
         container_id = f"fake-reel-container-{uuid.uuid4().hex[:12]}"
         media_id = f"fake-reel-media-{uuid.uuid4().hex[:12]}"
-        self.reel_calls.append({"video_url": video_url, "caption": caption, "media_id": media_id})
+        self.reel_calls.append(
+            {
+                "video_url": video_url,
+                "caption": caption,
+                "media_id": media_id,
+                "cover_url": cover_url,
+                "collaborators": list(collaborators or []),
+            }
+        )
         return PublishResult(
             container_id=container_id,
             media_id=media_id,
             permalink=f"https://www.instagram.com/reel/{media_id}/",
         )
 
-    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
+    def publish_carousel(
+        self, *, image_urls: list[str], caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult:
         if len(image_urls) < 2 or len(image_urls) > 10:
             raise NotConfigured("Carousel requires 2–10 image URLs.")
         for url in image_urls:
@@ -266,7 +323,14 @@ class FakeInstagramClient:
             raise NotConfigured("Caption is required.")
         container_id = f"fake-carousel-{uuid.uuid4().hex[:12]}"
         media_id = f"fake-media-{uuid.uuid4().hex[:12]}"
-        self.carousel_calls.append({"image_urls": list(image_urls), "caption": caption, "media_id": media_id})
+        self.carousel_calls.append(
+            {
+                "image_urls": list(image_urls),
+                "caption": caption,
+                "media_id": media_id,
+                "collaborators": list(collaborators or []),
+            }
+        )
         return PublishResult(
             container_id=container_id,
             media_id=media_id,
@@ -423,14 +487,18 @@ class GraphInstagramClient:
     def configured(self) -> bool:
         return bool(self._token and self._ig_user_id)
 
-    def publish_image(self, *, image_url: str, caption: str) -> PublishResult:
+    def publish_image(
+        self, *, image_url: str, caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         if not image_url.startswith("https://"):
             raise NotConfigured("Instagram requires a publicly reachable https image_url.")
         if not caption.strip():
             raise NotConfigured("Caption is required.")
-        container_id = self._create_container(image_url=image_url, caption=caption.strip())
+        container_id = self._create_container(
+            image_url=image_url, caption=caption.strip(), collaborators=collaborators
+        )
         self._wait_for_container(container_id)
         media_id = self._publish_container(container_id)
         permalink = self._permalink(media_id)
@@ -446,7 +514,14 @@ class GraphInstagramClient:
         media_id = self._publish_container(container_id)
         return PublishResult(container_id=container_id, media_id=media_id, permalink=None)
 
-    def publish_reel(self, *, video_url: str, caption: str) -> PublishResult:
+    def publish_reel(
+        self,
+        *,
+        video_url: str,
+        caption: str,
+        cover_url: str | None = None,
+        collaborators: list[str] | None = None,
+    ) -> PublishResult:
         """Reel via resumable-free ``video_url`` upload: REELS container, wait FINISHED, publish."""
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
@@ -455,16 +530,21 @@ class GraphInstagramClient:
         if not caption.strip():
             raise NotConfigured("Caption is required.")
         url = f"{self._base}/{self._ig_user_id}/media"
+        data = {
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption.strip(),
+            "share_to_feed": "true",
+        }
+        if cover_url and cover_url.startswith("https://"):
+            data["cover_url"] = cover_url
+        collab = collaborators_param(collaborators)
+        if collab:
+            data["collaborators"] = collab
         try:
             response = httpx.post(
                 url,
-                data={
-                    "media_type": "REELS",
-                    "video_url": video_url,
-                    "caption": caption.strip(),
-                    "share_to_feed": "true",
-                    "access_token": self._token,
-                },
+                data={**data, "access_token": self._token},
                 timeout=self._timeout,
             )
         except httpx.HTTPError as exc:
@@ -481,7 +561,9 @@ class GraphInstagramClient:
         permalink = self._permalink(media_id)
         return PublishResult(container_id=container_id, media_id=media_id, permalink=permalink)
 
-    def publish_carousel(self, *, image_urls: list[str], caption: str) -> PublishResult:
+    def publish_carousel(
+        self, *, image_urls: list[str], caption: str, collaborators: list[str] | None = None
+    ) -> PublishResult:
         if not self.configured():
             raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
         if len(image_urls) < 2 or len(image_urls) > 10:
@@ -495,7 +577,9 @@ class GraphInstagramClient:
             child_id = self._create_container(image_url=url, caption="", is_carousel_item=True)
             self._wait_for_container(child_id)
             child_ids.append(child_id)
-        container_id = self._create_carousel_parent(child_ids=child_ids, caption=caption.strip())
+        container_id = self._create_carousel_parent(
+            child_ids=child_ids, caption=caption.strip(), collaborators=collaborators
+        )
         self._wait_for_container(container_id)
         media_id = self._publish_container(container_id)
         permalink = self._permalink(media_id)
@@ -575,6 +659,7 @@ class GraphInstagramClient:
         caption: str,
         is_carousel_item: bool = False,
         media_type: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> str:
         url = f"{self._base}/{self._ig_user_id}/media"
         payload: dict[str, str] = {
@@ -587,6 +672,9 @@ class GraphInstagramClient:
             payload["is_carousel_item"] = "true"
         elif caption:
             payload["caption"] = caption
+        collab = collaborators_param(collaborators) if not is_carousel_item and media_type != "STORIES" else None
+        if collab:
+            payload["collaborators"] = collab
         try:
             response = httpx.post(
                 url,
@@ -601,17 +689,18 @@ class GraphInstagramClient:
             raise NotConfigured("Instagram did not return a media container id.")
         return str(creation_id)
 
-    def _create_carousel_parent(self, *, child_ids: list[str], caption: str) -> str:
+    def _create_carousel_parent(
+        self, *, child_ids: list[str], caption: str, collaborators: list[str] | None = None
+    ) -> str:
         url = f"{self._base}/{self._ig_user_id}/media"
+        data = {"media_type": "CAROUSEL", "children": ",".join(child_ids), "caption": caption}
+        collab = collaborators_param(collaborators)
+        if collab:
+            data["collaborators"] = collab  # parent only: Graph rejects collaborators on children
         try:
             response = httpx.post(
                 url,
-                data={
-                    "media_type": "CAROUSEL",
-                    "children": ",".join(child_ids),
-                    "caption": caption,
-                    "access_token": self._token,
-                },
+                data={**data, "access_token": self._token},
                 timeout=self._timeout,
             )
         except httpx.HTTPError as exc:

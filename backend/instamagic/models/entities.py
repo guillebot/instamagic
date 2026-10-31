@@ -338,6 +338,10 @@ class PublishingQueueItem(Base):
     reel_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     reel_duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     reel_rendered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Up to 3 Instagram usernames (JSON list) sent as Graph ``collaborators`` (feed/carousel/reel).
+    collaborators_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A REELS candidate auto-prepared as the Reel version of a feed item that landed in the Reel slot.
+    reel_for_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
 
     image: Mapped[Image] = relationship(back_populates="queue_items")
     publish_attempts: Mapped[list[PublishAttempt]] = relationship(back_populates="queue_item")
@@ -391,9 +395,24 @@ class PostingScheduleConfig(Base):
     enrichment_prefetch_daily_cap: Mapped[int] = mapped_column(Integer, default=300, server_default="300")
     enrichment_prefetch_paused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     enrichment_prefetch_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Daily feed slot reserved for a Reel (local HH:MM); empty/disabled = no Reel slot.
+    reel_slot_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    reel_slot_time: Mapped[str] = mapped_column(String(8), default="11:00", server_default="11:00")
+    # Operator-editable hashtag pools: {"niche": [...], "mono": [...], "allow": [...]} (null = defaults).
+    hashtag_pools_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now
     )
+
+
+class ShootCollaborators(Base):
+    """Collaborator handles remembered per shoot/folder to pre-fill the next queue item."""
+
+    __tablename__ = "shoot_collaborators"
+
+    shoot_key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    collaborators_json: Mapped[str] = mapped_column(Text, default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
 
 
 class PublishAttempt(Base):

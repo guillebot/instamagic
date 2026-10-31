@@ -96,12 +96,24 @@ def _busy_times(session: Session, start: datetime, end: datetime, lane: str = "f
     return out
 
 
+REEL_SLOT_FALLBACK = timedelta(hours=24)
+
+
+def is_reel_slot(config: ScheduleConfigView, slot: datetime) -> bool:
+    """The daily feed slot reserved for a Reel (default 11:00 local)."""
+    if not getattr(config, "reel_slot_enabled", False):
+        return False
+    local = slot.astimezone(ZoneInfo(config.timezone))
+    return local.strftime("%H:%M") == (getattr(config, "reel_slot_time", None) or "11:00")
+
+
 def next_available_slot(
     session: Session,
     config: ScheduleConfigView,
     now: datetime | None = None,
     *,
     media_type: str | None = None,
+    item: PublishingQueueItem | None = None,
 ) -> datetime | None:
     """Pick the earliest open slot respecting max_posts_per_day and min_gap_hours.
 
@@ -109,6 +121,10 @@ def next_available_slot(
     already published), so empty slots before a later scheduled item get filled
     instead of always appending after the last scheduled post. Existing items are
     never moved.
+
+    Reel slot (feed lane, when enabled): Reels take the earliest free Reel slot first (any slot
+    if none is free); photos/carousels skip Reel slots unless the slot is within 24 h and still
+    free, so the slot never goes empty. Skin/body posts (``item`` given) also respect the 1-in-5 cap.
     """
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
@@ -120,12 +136,30 @@ def next_available_slot(
     lane = lane_for_media_type(media_type)
     lane_kw = {} if lane == "feed" else {"lane": lane}
     busy = _busy_times(session, candidates[0] - min_gap, candidates[-1] + min_gap, **lane_kw)
-    for slot in candidates:
+    reel_aware = media_type is not None and lane == "feed" and bool(getattr(config, "reel_slot_enabled", False))
+
+    def _open(slot: datetime) -> bool:
         if any(abs(slot - b) < min_gap for b in busy):
-            continue
+            return False
         if _scheduled_today_count(session, config, slot, **lane_kw) >= lane_cap(config, lane):
-            continue
-        return slot
+            return False
+        if item is not None and lane == "feed":
+            from instamagic.services.posting.content_mix import sensitive_slot_allowed
+
+            if not sensitive_slot_allowed(session, item, slot):
+                return False
+        return True
+
+    if reel_aware and media_type == QueueMediaType.REELS.value:
+        for slot in candidates:
+            if is_reel_slot(config, slot) and _open(slot):
+                return slot
+    for slot in candidates:
+        if reel_aware and media_type != QueueMediaType.REELS.value and is_reel_slot(config, slot):
+            if slot - now > REEL_SLOT_FALLBACK:
+                continue
+        if _open(slot):
+            return slot
     return None
 
 
@@ -136,7 +170,14 @@ def assign_auto_slots(session: Session, items: list[PublishingQueueItem], config
     for item in items:
         if item.scheduled_at is not None:
             continue
-        slot = next_available_slot(session, config, now=now, media_type=item.media_type)
+        from instamagic.services.posting.reel_slot import take_source_reel_slot
+
+        if take_source_reel_slot(session, item, config):
+            item.schedule_mode = "auto_slot"
+            session.flush()
+            assigned += 1
+            continue
+        slot = next_available_slot(session, config, now=now, media_type=item.media_type, item=item)
         if slot is None:
             continue
         item.scheduled_at = slot
@@ -144,4 +185,7 @@ def assign_auto_slots(session: Session, items: list[PublishingQueueItem], config
         session.flush()
         assigned += 1
     session.commit()
+    from instamagic.services.posting.reel_slot import prepare_reel_versions_for
+
+    prepare_reel_versions_for(session, items, config)
     return assigned

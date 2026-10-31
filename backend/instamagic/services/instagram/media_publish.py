@@ -39,6 +39,7 @@ from instamagic.services.blurs.unlock import blur_gate_passes
 from instamagic.services.images.paths import safe_join
 from instamagic.services.instagram.assets import (
     REEL_TTL_SECONDS,
+    is_allowed_publish_relative_path,
     mint_publish_token,
     public_image_url,
 )
@@ -55,6 +56,7 @@ from instamagic.services.instagram.story_image import (
     write_story_jpeg,
 )
 from instamagic.services.pipeline import is_attested
+from instamagic.services.posting.collaborators import item_collaborators
 from instamagic.services.posting.publish_errors import (
     is_permanent_publish_error,
     is_transient_publish_error,
@@ -413,6 +415,19 @@ def assert_reel_fresh(session: Session, settings: Settings, item: PublishingQueu
     return item.reel_relative_path
 
 
+def _reel_cover_url(item: PublishingQueueItem, settings: Settings, public_base: str, token_kwargs: dict) -> str | None:
+    """Cover = the first slide's verified feed derivative (the same gated/blurred render)."""
+    try:
+        recorded = json.loads(item.reel_source_json or "{}")
+        feed = recorded.get("sources", [])[0]["feed"]
+    except (ValueError, LookupError, TypeError):
+        return None
+    if not feed or not is_allowed_publish_relative_path(feed):
+        return None
+    token = mint_publish_token(relative_path=feed, secret=settings.app_secret, **token_kwargs)
+    return public_image_url(public_base_url=public_base, token=token)
+
+
 def assert_ready_for_approval(session: Session, settings: Settings, item: PublishingQueueItem) -> None:
     if item.media_type == QueueMediaType.REELS.value:
         assert_reel_fresh(session, settings, item)
@@ -441,7 +456,7 @@ def final_caption_text(session: Session, item: PublishingQueueItem, caption: Cap
     image = session.get(Image, caption.image_id)
     if image is None:
         raise NotFound("Caption image was not found.")
-    return publish_caption_text(caption, image)
+    return publish_caption_text(caption, image, session)
 
 
 def _next_attempt_number(session: Session, item_id: UUID, kind: str) -> int:
@@ -547,7 +562,12 @@ def publish_media_item(
         if is_story:
             result: PublishResult = client.publish_story(image_url=asset_url)
         else:
-            result = client.publish_reel(video_url=asset_url, caption=caption_text)
+            result = client.publish_reel(
+                video_url=asset_url,
+                caption=caption_text,
+                cover_url=_reel_cover_url(item, settings, public_base, token_kwargs),
+                collaborators=item_collaborators(item) or None,
+            )
     except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
         err = str(getattr(exc, "detail", None) or exc)
         _fail(exc, err)

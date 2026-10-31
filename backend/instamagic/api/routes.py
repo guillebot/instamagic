@@ -69,6 +69,7 @@ from instamagic.schemas.dto import (
     CaptionUpdate,
     CarouselQueueIn,
     CarouselReorderIn,
+    CollaboratorsIn,
     CommentDraftIn,
     CommentDraftUpdate,
     CropApproveIn,
@@ -227,6 +228,8 @@ from instamagic.services.posting.carousel_queue import (
     reorder_carousel_slides,
     slides_for_item,
 )
+from instamagic.services.posting.collaborators import item_collaborators
+from instamagic.services.posting.content_mix import classify_image
 from instamagic.services.posting.hashtags import clean_tags as clean_hashtags
 from instamagic.services.posting.queue_schedule import (
     fill_slots_from_approved,
@@ -239,6 +242,7 @@ from instamagic.services.posting.schedule_config import config_as_dict, config_v
 from instamagic.services.posting.schedule_config import (
     get_or_create_config as get_or_create_schedule_config,
 )
+from instamagic.services.posting.slots import is_reel_slot
 from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, snapshot_queues
 from instamagic.services.recommendations.candidates_bulk import bulk_enqueue, bulk_reject
 from instamagic.services.recommendations.curate import (
@@ -1600,7 +1604,10 @@ def enqueue_reel(
     """One Reel candidate from 1-10 photos (Ken Burns for one, crossfade slideshow for many)."""
     from instamagic.services.instagram.media_publish import create_reel_item
 
-    return _queue_out(session, create_reel_item(session, body.image_ids))
+    item = create_reel_item(session, body.image_ids)
+    _prefill_collaborators(session, item)
+    session.commit()
+    return _queue_out(session, item)
 
 
 @router.post("/api/queue/{item_id}/post-type")
@@ -1674,6 +1681,8 @@ def enqueue_carousel(
     session: Session = db_dep,
 ) -> dict[str, object]:
     item = create_carousel_queue_item(session, body.image_ids)
+    _prefill_collaborators(session, item)
+    session.commit()
     return _queue_out(session, item)
 
 
@@ -1735,6 +1744,8 @@ def enqueue(
         is_new=True,
     )
     session.add(item)
+    session.flush()
+    _prefill_collaborators(session, item)
     session.commit()
     _wake_enrichment_for_queue(settings, [image])
     return _queue_out(session, item)
@@ -1772,6 +1783,55 @@ def patch_queue_item(
     )
     session.commit()
     return _queue_out(session, item)
+
+
+def _prefill_collaborators(session: Session, item: PublishingQueueItem) -> None:
+    from instamagic.services.posting.collaborators import prefill_from_shoot
+
+    prefill_from_shoot(session, item, session.get(Image, item.image_id) if item.image_id else None)
+
+
+@router.put("/api/queue/{item_id}/collaborators")
+def set_queue_collaborators(
+    item_id: UUID,
+    body: CollaboratorsIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Up to 3 Instagram handles invited as collaborators (feed, carousel, Reel; never Stories).
+
+    Remembered for the shoot/folder so other photos from the same shoot are pre-filled.
+    """
+    from instamagic.services.posting.collaborators import set_item_collaborators
+
+    item = session.get(PublishingQueueItem, item_id)
+    if item is None:
+        raise NotFound("Queue item was not found.")
+    set_item_collaborators(session, item, body.usernames)
+    session.commit()
+    return _queue_out(session, item)
+
+
+@router.get("/api/carousel-suggestions")
+def carousel_suggestions(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """3-5 publishable photos from the same shoot/folder, strongest non-skin/body cover first."""
+    from instamagic.services.posting.carousel_builder import suggest_carousels
+
+    groups = suggest_carousels(session)
+    return {
+        "suggestions": [
+            {
+                "shoot": g.label,
+                "shoot_key": g.key,
+                "reasons": g.reasons,
+                "images": [_image_out(session, image).model_dump(mode="json") for image in g.images],
+            }
+            for g in groups
+        ]
+    }
 
 
 @router.get("/api/queue")
@@ -1857,6 +1917,9 @@ def put_posting_schedule_config(
         blur_coverage_threshold=body.blur_coverage_threshold,
         blur_region_padding_px=body.blur_region_padding_px,
         blur_detector_overrules_coverage=body.blur_detector_overrules_coverage,
+        reel_slot_enabled=body.reel_slot_enabled,
+        reel_slot_time=body.reel_slot_time,
+        hashtag_pools=body.hashtag_pools,
     )
     return config_as_dict(view)
 
@@ -2126,6 +2189,7 @@ def _candidate_inputs(
                 performance_score=(
                     image_performance_boost(perf_signals, str(image.id), tags) if perf_signals else 0.0
                 ),
+                content_boost=classify_image(image).boost,
             )
         )
         images[str(image.id)] = image
@@ -3562,9 +3626,26 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
             if item.media_type == QueueMediaType.REELS.value and item.reel_sha256
             else None
         ),
+        "collaborators": item_collaborators(item),
+        "collaborators_allowed": item.media_type != QueueMediaType.STORY.value,
+        "reel_for_item_id": item.reel_for_item_id,
+        "reel_version_id": _reel_version_id(session, item),
+        "is_reel_slot": bool(
+            item.scheduled_at is not None and is_reel_slot(config_view(session), item.scheduled_at)
+        ),
+        "content_mix": classify_image(image).label,
         "image": image_payload,
         **queue_item_stage(item.state, item.scheduled_at, image_payload),
     }
+
+
+def _reel_version_id(session: Session, item: PublishingQueueItem) -> UUID | None:
+    if item.media_type not in {QueueMediaType.IMAGE.value, QueueMediaType.CAROUSEL.value}:
+        return None
+    from instamagic.services.posting.reel_slot import existing_reel_version
+
+    found = existing_reel_version(session, item.id)
+    return found.id if found is not None else None
 
 
 def _caption_out(row: Caption) -> dict[str, object]:

@@ -31,7 +31,7 @@ import {
   storyShareFromQueueItem,
   StoryShareControls,
 } from "../StoryShareControls";
-import type { AppConfig, CaptionItem, QueueItem } from "../types";
+import type { AppConfig, CaptionItem, CarouselSuggestion, QueueItem } from "../types";
 
 export function QueuePage() {
   const queryClient = useQueryClient();
@@ -156,6 +156,7 @@ export function QueuePage() {
         {ig.data?.configured ? `ready (${ig.data.provider})` : "not configured"}.{" "}
         <Link to="/instagram">Connection helper</Link>.
       </p>
+      <CarouselSuggestions />
       <div className="row carousel-builder">
         <button
           className="button"
@@ -669,6 +670,7 @@ function QueueCard({
         <div className="queue-card-head">
           <strong>{title}</strong>
           <StagePill image={item} />
+          <GrowthBadges item={item} />
           {onToggleCollapsed ? (
             <button
               type="button"
@@ -688,6 +690,16 @@ function QueueCard({
           model {item.image.model_state}
         </p>
         {!isStory && !isReel && formatStoryStatus(item) ? <p className="muted">{formatStoryStatus(item)}</p> : null}
+        {item.reel_for_item_id ? (
+          <p className="muted">
+            Reel version prepared for the Reel slot. Approve it to post it as a Reel in place of the photo/carousel
+            (the original is kept, unscheduled).
+          </p>
+        ) : null}
+        {item.reel_version_id && !item.scheduled_at ? (
+          <p className="muted">Its Reel version took the Reel slot. Schedule this again if you want to post both.</p>
+        ) : null}
+        {!isStory ? <CollaboratorsField item={item} /> : null}
         {!isCarousel && editable && reelSlides <= 1 ? (
           <label className="post-type-select">
             Post type{" "}
@@ -998,4 +1010,200 @@ function hashtagsPending(item: QueueItem): boolean {
   if ((item.image.enrich_hashtags ?? []).length > 0) return false;
   if (item.image.gemini_refused) return false;
   return item.image.human_rating === "safe" || item.image.human_rating === "excellent";
+}
+
+export function GrowthBadges({ item }: { item: QueueItem }) {
+  const isReel = item.media_type === "REELS";
+  return (
+    <>
+      {isReel ? <span className="badge badge-reel">Reel</span> : null}
+      {!isReel && item.is_reel_slot && item.state !== "PUBLISHED" ? (
+        <span className="badge" title="This time is the daily Reel slot. A Reel version is prepared for you to approve.">
+          Reel slot
+        </span>
+      ) : null}
+      {item.content_mix ? (
+        <span className="badge muted" title="Local content-mix class used for ranking and the 1-in-5 skin/body cap">
+          {item.content_mix}
+        </span>
+      ) : null}
+      {(item.collaborators?.length ?? 0) > 0 ? (
+        <span className="badge" title="Instagram collaborators (they must accept the invite)">
+          with {item.collaborators!.map((handle) => `@${handle}`).join(", ")}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+export function CollaboratorsField({ item }: { item: QueueItem }) {
+  const queryClient = useQueryClient();
+  const initial = (item.collaborators ?? []).map((handle) => `@${handle}`).join(" ");
+  const [text, setText] = useState(initial);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setText(initial), [initial]);
+  const locked = item.collaborators_allowed === false || item.state === "PUBLISHING" || item.state === "PUBLISHED";
+  const save = useMutation({
+    mutationFn: () =>
+      api<QueueItem>(`/api/queue/${item.id}/collaborators`, {
+        method: "PUT",
+        body: JSON.stringify({
+          usernames: text
+            .split(/[\s,]+/)
+            .map((handle) => handle.replace(/^@/, "").trim())
+            .filter(Boolean),
+        }),
+      }),
+    onSuccess: () => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["queue"] });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Could not save collaborators."),
+  });
+  if (locked && !(item.collaborators?.length ?? 0)) return null;
+  return (
+    <div className="collaborators-field">
+      <label>
+        Collaborators (model&apos;s Instagram, max 3){" "}
+        <input
+          value={text}
+          placeholder="@model_handle"
+          disabled={locked || save.isPending}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </label>
+      {!locked ? (
+        <button className="ghost" type="button" disabled={save.isPending || text === initial} onClick={() => save.mutate()}>
+          Save collaborators
+        </button>
+      ) : null}
+      {error ? <p className="error">{error}</p> : null}
+      <p className="muted">
+        Saved for the whole shoot and filled in for its other photos. The post goes out on its own; it appears on their
+        profile only after they accept the invite (public accounts only).
+      </p>
+    </div>
+  );
+}
+
+export function CarouselSuggestions() {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const suggestions = useQuery({
+    queryKey: ["carousel-suggestions"],
+    queryFn: () => api<{ suggestions: CarouselSuggestion[] }>("/api/carousel-suggestions"),
+    enabled: open,
+  });
+  const [edits, setEdits] = useState<Record<string, string[]>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  function order(group: CarouselSuggestion): string[] {
+    return edits[group.shoot_key] ?? group.images.map((image) => image.id);
+  }
+  function update(group: CarouselSuggestion, ids: string[]) {
+    setEdits((prev) => ({ ...prev, [group.shoot_key]: ids }));
+  }
+  function move(group: CarouselSuggestion, id: string, direction: -1 | 1) {
+    const ids = [...order(group)];
+    const at = ids.indexOf(id);
+    const to = at + direction;
+    if (at < 0 || to < 0 || to >= ids.length) return;
+    [ids[at], ids[to]] = [ids[to], ids[at]];
+    update(group, ids);
+  }
+  async function create(group: CarouselSuggestion, kind: "carousel" | "reel") {
+    const ids = order(group);
+    if (kind === "carousel" && ids.length < 2) return;
+    setBusy(`${group.shoot_key}:${kind}`);
+    setMessage(null);
+    try {
+      await api(`/api/queue/${kind}`, { method: "POST", body: JSON.stringify({ image_ids: ids }) });
+      setMessage(
+        kind === "carousel"
+          ? `Carousel from ${group.shoot} added to the queue. Approve and schedule it below.`
+          : `Reel slideshow from ${group.shoot} added. Render it, then approve.`,
+      );
+      setEdits((prev) => ({ ...prev, [group.shoot_key]: [] }));
+    } catch (err) {
+      setMessage(err instanceof ApiError ? err.message : "Could not create it.");
+    }
+    setBusy(null);
+    await queryClient.invalidateQueries({ queryKey: ["queue"] });
+    await queryClient.invalidateQueries({ queryKey: ["carousel-suggestions"] });
+  }
+
+  return (
+    <section className="card carousel-suggestions">
+      <div className="row">
+        <h2>Carousel builder</h2>
+        <button className="ghost" type="button" onClick={() => setOpen((value) => !value)}>
+          {open ? "Hide suggestions" : "Suggest carousels from the same shoot"}
+        </button>
+      </div>
+      {open ? (
+        <>
+          <p className="muted">
+            3–5 photos from one shoot, with a strong cover first. Every photo is SAFE or EXCELLENT, or uses its verified
+            blurred render. Skin/body shots are kept as slides, not covers.
+          </p>
+          {suggestions.isLoading ? <p className="muted">Finding shoots…</p> : null}
+          {suggestions.data?.suggestions.length === 0 ? <p className="muted">No same-shoot sets ready right now.</p> : null}
+          {message ? <p className="muted">{message}</p> : null}
+          {suggestions.data?.suggestions.map((group) => {
+            const ids = order(group);
+            if (ids.length === 0) return null;
+            const byId = new Map(group.images.map((image) => [image.id, image]));
+            return (
+              <div key={group.shoot_key} className="carousel-suggestion">
+                <strong>{group.shoot}</strong>
+                {group.reasons.length ? <span className="muted"> · {group.reasons.join(" · ")}</span> : null}
+                <div className="carousel-thumbs">
+                  {ids.map((id, idx) => {
+                    const image = byId.get(id);
+                    if (!image) return null;
+                    return (
+                      <div key={id} className="carousel-thumb">
+                        {image.thumbnail_url ? <img src={image.thumbnail_url} alt={image.filename} /> : <span />}
+                        <span className="muted">{idx === 0 ? "Cover" : `Slide ${idx + 1}`}</span>
+                        <div className="row">
+                          <button className="ghost" type="button" aria-label="Move left" onClick={() => move(group, id, -1)}>
+                            ←
+                          </button>
+                          <button className="ghost" type="button" aria-label="Move right" onClick={() => move(group, id, 1)}>
+                            →
+                          </button>
+                          <button
+                            className="ghost"
+                            type="button"
+                            aria-label={`Remove ${image.filename}`}
+                            onClick={() => update(group, ids.filter((other) => other !== id))}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="row">
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busy !== null || ids.length < 2}
+                    onClick={() => void create(group, "carousel")}
+                  >
+                    Create carousel ({ids.length})
+                  </button>
+                  <button className="ghost" type="button" disabled={busy !== null} onClick={() => void create(group, "reel")}>
+                    Make Reel slideshow
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      ) : null}
+    </section>
+  );
 }

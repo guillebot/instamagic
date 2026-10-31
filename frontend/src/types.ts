@@ -326,6 +326,12 @@ export type QueueItem = {
   reel_duration_s?: number | null;
   reel_rendered_at?: string | null;
   reel_video_url?: string | null;
+  collaborators?: string[];
+  collaborators_allowed?: boolean;
+  reel_for_item_id?: string | null;
+  reel_version_id?: string | null;
+  is_reel_slot?: boolean;
+  content_mix?: string | null;
   image: ImageItem;
 };
 
@@ -343,6 +349,20 @@ export type PostingScheduleConfig = {
   blur_region_padding_px?: number;
   blur_detector_overrules_coverage?: boolean;
   updated_at?: string | null;
+  reel_slot_enabled?: boolean;
+  reel_slot_time?: string;
+  hashtag_pools?: HashtagPools;
+  hashtag_pool_defaults?: HashtagPools;
+  hashtag_content_allowlist?: string[];
+};
+
+export type HashtagPools = { niche: string[]; mono: string[]; allow: string[] };
+
+export type CarouselSuggestion = {
+  shoot: string;
+  shoot_key: string;
+  reasons: string[];
+  images: ImageItem[];
 };
 
 export type RelatedAccountItem = {

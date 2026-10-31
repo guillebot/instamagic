@@ -35,6 +35,7 @@ from instamagic.models import (
 )
 from instamagic.models.enums import CurationBatchStatus, CurationPickStatus, QueueMediaType
 from instamagic.services.pipeline import is_attested
+from instamagic.services.posting.content_mix import classify_image
 from instamagic.services.recommendations.curate import collect_eligible
 from instamagic.services.recommendations.curate_skipped import latest_rating_times, record_skipped
 from instamagic.services.recommendations.gates import publishing_gate
@@ -159,6 +160,11 @@ def sync_live_batch(session: Session, *, covering_blur_fn) -> CurationBatch:
         reasons = ["Rated " + (item.image.human_rating or "safe").lower()]
         if item.covering_blur or (item.image.model_state == "DO_NOT_POST"):
             reasons.append("Blurred (verified): only the blurred render is used")
+        mix = classify_image(item.image)
+        if mix.sensitive:
+            reasons.append("Skin/body: max 1 in 5 feed posts, best as a carousel slide")
+        elif mix.boost > 0:
+            reasons.append("Growth pick: " + ", ".join(mix.reasons[:2]))
         pool[str(item.image.id)] = (item.image, int(item.local_score), reasons)
     for image in _refused_but_publishable(session, exclude=set(pool)):
         pool[str(image.id)] = (

@@ -14,6 +14,13 @@ from instamagic.services.blurs.coverage_settings import (
     validate_padding_px,
     validate_threshold_percent,
 )
+from instamagic.services.posting.hashtags import (
+    CONTENT_ALLOWLIST,
+    DEFAULT_POOLS,
+    HashtagPools,
+    pools_from_json,
+    sanitize_pools,
+)
 from sqlalchemy.orm import Session
 
 DEFAULT_TIMEZONE = "America/Buenos_Aires"
@@ -45,6 +52,9 @@ class ScheduleConfigView:
     updated_at: datetime | None
     blur_detector_overrules_coverage: bool = True
     max_stories_per_day: int = 2
+    reel_slot_enabled: bool = True
+    reel_slot_time: str = "11:00"
+    hashtag_pools: dict[str, list[str]] | None = None
 
 
 def _parse_slots(raw: str) -> dict[str, list[str]]:
@@ -107,7 +117,28 @@ def config_view(session: Session) -> ScheduleConfigView:
         blur_region_padding_px=int(row.blur_region_padding_px or DEFAULT_REGION_PADDING_PX),
         blur_detector_overrules_coverage=row.blur_detector_overrules_coverage is not False,
         updated_at=row.updated_at,
+        reel_slot_enabled=row.reel_slot_enabled is not False,
+        reel_slot_time=normalize_slot_time(getattr(row, "reel_slot_time", None) or "11:00") or "11:00",
+        hashtag_pools=pools_from_json(getattr(row, "hashtag_pools_json", None)).as_dict(),
     )
+
+
+def normalize_slot_time(value: str) -> str | None:
+    """'11:00' / '9:30' -> 'HH:MM'; None when invalid."""
+    try:
+        hour_s, minute_s = str(value).strip().split(":", 1)
+        hour, minute = int(hour_s), int(minute_s)
+    except (ValueError, AttributeError):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def hashtag_pools(session: Session) -> HashtagPools:
+    """Operator-edited hashtag pools (read-only; never creates the config row)."""
+    row = session.get(PostingScheduleConfig, "default")
+    return pools_from_json(row.hashtag_pools_json if row is not None else None)
 
 
 def update_config(
@@ -125,8 +156,22 @@ def update_config(
     blur_coverage_threshold: int | None = None,
     blur_region_padding_px: int | None = None,
     blur_detector_overrules_coverage: bool | None = None,
+    reel_slot_enabled: bool | None = None,
+    reel_slot_time: str | None = None,
+    hashtag_pools: dict[str, list[str]] | None = None,
 ) -> ScheduleConfigView:
     row = get_or_create_config(session)
+    if reel_slot_enabled is not None:
+        row.reel_slot_enabled = bool(reel_slot_enabled)
+    if reel_slot_time is not None:
+        normalized = normalize_slot_time(reel_slot_time)
+        if normalized is None:
+            from instamagic.errors import NotAllowed
+
+            raise NotAllowed("Reel slot time must be HH:MM.")
+        row.reel_slot_time = normalized
+    if hashtag_pools is not None:
+        row.hashtag_pools_json = json.dumps(sanitize_pools(hashtag_pools).as_dict())
     if timezone is not None:
         row.timezone = timezone.strip() or DEFAULT_TIMEZONE
     if weekday_slots is not None:
@@ -171,4 +216,9 @@ def config_as_dict(view: ScheduleConfigView) -> dict[str, Any]:
         "blur_region_padding_px": view.blur_region_padding_px,
         "blur_detector_overrules_coverage": view.blur_detector_overrules_coverage,
         "updated_at": view.updated_at,
+        "reel_slot_enabled": view.reel_slot_enabled,
+        "reel_slot_time": view.reel_slot_time,
+        "hashtag_pools": view.hashtag_pools or DEFAULT_POOLS.as_dict(),
+        "hashtag_pool_defaults": DEFAULT_POOLS.as_dict(),
+        "hashtag_content_allowlist": list(CONTENT_ALLOWLIST),
     }

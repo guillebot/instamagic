@@ -6,11 +6,16 @@ import json
 from pathlib import Path
 
 from instamagic.services.posting.hashtags import (
+    DEFAULT_POOLS,
+    DROPPED_GENERIC,
     MAX_TAGS,
     MIN_TAGS,
+    MONO_POOL,
+    NICHE_POOL,
     clean_tags,
     compose_caption,
     is_blocked,
+    sanitize_pools,
     tags_in_text,
 )
 from tests.conftest import login
@@ -51,11 +56,49 @@ def test_compose_appends_5_to_10_clean_tags_and_is_idempotent() -> None:
     assert MIN_TAGS <= len(tags) <= MAX_TAGS
     assert len(set(tags)) == len(tags)
     assert not any(is_blocked(t) for t in tags)
-    assert tags[0] == "monochrome"
     assert compose_caption(out, STORED, seed="a") == out
     # Varies per post.
     others = {tuple(tags_in_text(compose_caption("x", STORED, seed=str(i)))) for i in range(8)}
     assert len(others) > 1
+
+
+def test_curated_pools_allowlist_and_dropped_generic_tags() -> None:
+    allowed = DEFAULT_POOLS.allowed()
+    for seed in range(20):
+        stored = [*STORED, "formandlight", "moodyports", "stilllife", "naturallight", "photography", "art"]
+        tags = tags_in_text(compose_caption("Quiet light.", stored, seed=str(seed)))
+        assert MIN_TAGS <= len(tags) <= MAX_TAGS
+        assert set(tags) <= allowed, set(tags) - allowed
+        assert "formandlight" not in tags and "moodyports" not in tags  # made-up Gemini tags
+        assert not set(tags) & DROPPED_GENERIC  # monochrome, blackandwhite, photography, art, ...
+        assert not any(is_blocked(t) for t in tags)
+        pool = [t for t in tags if t in NICHE_POOL or t in MONO_POOL]
+        assert 4 <= len(pool) <= 8
+        content = [t for t in tags if t not in NICHE_POOL and t not in MONO_POOL]
+        assert len(content) <= 3
+    # STORED says monochrome -> the B&W pool is used instead of the dropped giants.
+    mono = tags_in_text(compose_caption("x", STORED, seed="m"))
+    assert any(t in MONO_POOL for t in mono)
+    colour = tags_in_text(compose_caption("x", ["stilllife", "softlight"], seed="c"))
+    assert not any(t in MONO_POOL for t in colour)
+
+
+def test_old_generated_block_is_replaced_and_blocklist_applies() -> None:
+    old = "Form and light.\n\n#monochrome #blackandwhite #photography #art #sexy #formandlight #lightandshadow"
+    out = compose_caption(old, STORED, seed="z")
+    tags = tags_in_text(out)
+    assert out.startswith("Form and light.\n\n#")
+    assert "lightandshadow" in tags
+    assert not {"monochrome", "blackandwhite", "photography", "art", "sexy", "formandlight"} & set(tags)
+    assert MIN_TAGS <= len(tags) <= MAX_TAGS
+
+
+def test_pools_editable_and_sanitized() -> None:
+    pools = sanitize_pools({"niche": ["#MyNiche", "sexy", "photography", "retratos"], "mono": [], "allow": ["girl"]})
+    assert pools.niche == ("myniche", "retratos")
+    assert pools.allow == ()
+    tags = tags_in_text(compose_caption("x", [], seed="p", pools=pools))
+    assert set(tags) <= {"myniche", "retratos"}
 
 
 def test_compose_respects_manual_tags_and_strips_blocked() -> None:
@@ -102,7 +145,9 @@ def test_published_caption_carries_hashtags(client, app_env) -> None:
     tags = tags_in_text(sent)
     assert MIN_TAGS <= len(tags) <= MAX_TAGS
     assert "sexy" not in tags and "boudoir" not in tags and "followforfollow" not in tags
-    assert "monochrome" in tags
+    assert "monochrome" not in tags and "blackandwhite" not in tags
+    assert any(t in MONO_POOL for t in tags)  # STORED is a B&W photo
+    assert set(tags) <= DEFAULT_POOLS.allowed()
 
 
 def test_backfill_adds_tags_to_safe_captions(client, app_env) -> None:

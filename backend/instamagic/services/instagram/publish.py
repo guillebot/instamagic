@@ -31,6 +31,7 @@ from instamagic.services.instagram.publish_derivative import (
     ensure_publish_derivative,
 )
 from instamagic.services.pipeline import is_attested
+from instamagic.services.posting.collaborators import item_collaborators
 from instamagic.services.posting.hashtags import compose_caption, parse_stored
 from instamagic.services.posting.publish_errors import (
     is_permanent_publish_error,
@@ -122,7 +123,7 @@ def publish_queue_item(
     caption = session.get(Caption, resolved_caption_id)
     if caption is None or caption.image_id != image.id:
         raise NotFound("Caption was not found for this image.")
-    caption_text = publish_caption_text(caption, image)
+    caption_text = publish_caption_text(caption, image, session)
     if not caption_text.strip():
         raise NotAllowed("Caption text is empty.")
 
@@ -190,7 +191,9 @@ def publish_queue_item(
                 item.scheduled_at = None
 
     try:
-        result = client.publish_image(image_url=image_url, caption=caption_text)
+        result = client.publish_image(
+            image_url=image_url, caption=caption_text, collaborators=item_collaborators(item) or None
+        )
     except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
         err = str(exc.detail if hasattr(exc, "detail") else exc)
         _fail_publish(exc, err)
@@ -239,9 +242,19 @@ def publish_queue_item(
     return outcome
 
 
-def publish_caption_text(caption: Caption, image: Image) -> str:
-    """Caption text plus the photo's hashtags (blocklist applied); what is actually sent to Instagram."""
-    return compose_caption(caption.text or "", parse_stored(image.enrich_hashtags_json), seed=str(image.id)).strip()
+def publish_caption_text(caption: Caption, image: Image, session: Session | None = None) -> str:
+    """Caption text plus the curated hashtag block (blocklist + allowlist); what is sent to Instagram."""
+    from instamagic.services.posting.content_mix import image_is_mono
+    from instamagic.services.posting.schedule_config import hashtag_pools
+
+    pools = hashtag_pools(session) if session is not None else None
+    return compose_caption(
+        caption.text or "",
+        parse_stored(image.enrich_hashtags_json),
+        seed=str(image.id),
+        pools=pools,
+        mono=image_is_mono(image),
+    ).strip()
 
 
 def _record_success(
@@ -370,7 +383,9 @@ def _publish_carousel_item(
                 item.scheduled_at = None
 
     try:
-        result = client.publish_carousel(image_urls=image_urls, caption=caption_text)
+        result = client.publish_carousel(
+            image_urls=image_urls, caption=caption_text, collaborators=item_collaborators(item) or None
+        )
     except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
         err = str(exc.detail if hasattr(exc, "detail") else exc)
         _fail_publish(exc, err)

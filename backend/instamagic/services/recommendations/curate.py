@@ -51,6 +51,7 @@ from instamagic.services.gemini.growth import append_voice_to_context
 from instamagic.services.images.folders import escape_like, normalize_folder
 from instamagic.services.images.presentation import normalize_human_rating_filter
 from instamagic.services.pipeline import is_attested
+from instamagic.services.posting.content_mix import classify_image
 from instamagic.services.recommendations.gates import gemini_gate, publishing_gate
 from instamagic.services.recommendations.performance import (
     image_performance_boost,
@@ -229,6 +230,7 @@ def collect_eligible(
             sharpness=score.sharpness if score else 0,
             composition=score.composition if score else 0,
             performance_score=perf_score,
+            content_boost=classify_image(image).boost,
         )
         local = rank_candidates([ranked_input], limit=1, performance_weight=performance_weight)[0]
         eligible.append(

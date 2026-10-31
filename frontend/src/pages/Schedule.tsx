@@ -2,7 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import type { PostingScheduleConfig, QueueItem } from "../types";
+import type { HashtagPools, PostingScheduleConfig, QueueItem } from "../types";
+
+const splitTags = (text: string) =>
+  text
+    .split(/[\s,]+/)
+    .map((tag) => tag.replace(/^#/, "").trim().toLowerCase())
+    .filter(Boolean);
 
 export function SchedulePage() {
   const queryClient = useQueryClient();
@@ -23,6 +29,9 @@ export function SchedulePage() {
   const [blurCoverageThreshold, setBlurCoverageThreshold] = useState(95);
   const [blurRegionPadding, setBlurRegionPadding] = useState(6);
   const [detectorOverrules, setDetectorOverrules] = useState(true);
+  const [reelSlotEnabled, setReelSlotEnabled] = useState(true);
+  const [reelSlotTime, setReelSlotTime] = useState("11:00");
+  const [pools, setPools] = useState<Record<keyof HashtagPools, string>>({ niche: "", mono: "", allow: "" });
 
   const saveConfig = useMutation({
     mutationFn: () =>
@@ -39,6 +48,13 @@ export function SchedulePage() {
           blur_coverage_threshold: blurCoverageThreshold,
           blur_region_padding_px: blurRegionPadding,
           blur_detector_overrules_coverage: detectorOverrules,
+          reel_slot_enabled: reelSlotEnabled,
+          reel_slot_time: reelSlotTime,
+          hashtag_pools: {
+            niche: splitTags(pools.niche),
+            mono: splitTags(pools.mono),
+            allow: splitTags(pools.allow),
+          },
         }),
       }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["posting-schedule-config"] }),
@@ -71,6 +87,14 @@ export function SchedulePage() {
     setBlurCoverageThreshold(config.data.blur_coverage_threshold ?? 95);
     setBlurRegionPadding(config.data.blur_region_padding_px ?? 6);
     setDetectorOverrules(config.data.blur_detector_overrules_coverage ?? true);
+    setReelSlotEnabled(config.data.reel_slot_enabled ?? true);
+    setReelSlotTime(config.data.reel_slot_time ?? "11:00");
+    const current = config.data.hashtag_pools;
+    setPools({
+      niche: (current?.niche ?? []).join(" "),
+      mono: (current?.mono ?? []).join(" "),
+      allow: (current?.allow ?? []).join(" "),
+    });
   }, [config.data]);
 
   const paused = config.data?.paused ?? false;
@@ -135,6 +159,55 @@ export function SchedulePage() {
             Story default (also share new queue items to Story)
           </label>
         </div>
+        <section className="reel-slot-settings">
+          <h3>Reel slot</h3>
+          <div className="row">
+            <label>
+              <input type="checkbox" checked={reelSlotEnabled} onChange={(e) => setReelSlotEnabled(e.target.checked)} />{" "}
+              Make one daily slot a Reel
+            </label>
+            <label>
+              Reel slot time
+              <input type="time" value={reelSlotTime} onChange={(e) => setReelSlotTime(e.target.value)} />
+            </label>
+          </div>
+          <p className="help">
+            Fill slots puts a queued Reel here. If there isn't one, an approved photo or carousel scheduled here gets
+            a Reel version (slow zoom, or a slideshow for a carousel) as a candidate in the Queue. You approve it before
+            it can post. Instagram's API can't add trending audio, so Reels post without music.
+          </p>
+        </section>
+        <section className="hashtag-pool-settings">
+          <h3>Hashtag pools</h3>
+          <p className="help">
+            Each post gets 5–8 shuffled niche tags (B&amp;W photos get some from the mono pool) plus 2–3 Gemini tags,
+            and only tags on the allowlist. The blocklist always applies, even to tags you add here. Separate tags with spaces.
+          </p>
+          {(["niche", "mono", "allow"] as const).map((key) => (
+            <label key={key} className="pool-field">
+              {key === "niche" ? "Niche pool" : key === "mono" ? "Mono (B&W) pool" : "Extra allowed Gemini tags"}
+              <textarea
+                rows={key === "niche" ? 4 : 2}
+                value={pools[key]}
+                onChange={(e) => setPools((prev) => ({ ...prev, [key]: e.target.value }))}
+              />
+            </label>
+          ))}
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => {
+              const defaults = config.data?.hashtag_pool_defaults;
+              if (!defaults) return;
+              setPools({ niche: defaults.niche.join(" "), mono: defaults.mono.join(" "), allow: defaults.allow.join(" ") });
+            }}
+          >
+            Reset pools to defaults
+          </button>
+          {config.data?.hashtag_content_allowlist?.length ? (
+            <p className="help">Built-in Gemini allowlist: {config.data.hashtag_content_allowlist.join(", ")}</p>
+          ) : null}
+        </section>
         <section className="blur-gate-settings">
           <h3>Blur unlock gates</h3>
           <p className="help">
