@@ -342,6 +342,10 @@ class PublishingQueueItem(Base):
     collaborators_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # A REELS candidate auto-prepared as the Reel version of a feed item that landed in the Reel slot.
     reel_for_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    # Reel music: None = auto (library rotation/random), "none" = silent, else a music_tracks id.
+    music_choice: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # True for Reel slideshows proposed automatically (still CANDIDATE until the user approves).
+    reel_auto: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     image: Mapped[Image] = relationship(back_populates="queue_items")
     publish_attempts: Mapped[list[PublishAttempt]] = relationship(back_populates="queue_item")
@@ -395,9 +399,17 @@ class PostingScheduleConfig(Base):
     enrichment_prefetch_daily_cap: Mapped[int] = mapped_column(Integer, default=300, server_default="300")
     enrichment_prefetch_paused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     enrichment_prefetch_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Daily feed slot reserved for a Reel (local HH:MM); empty/disabled = no Reel slot.
+    # Reel schedule (its own lane, separate from the feed photo slots): enabled flag, daily local
+    # HH:MM slots (JSON list), daily cap and share_to_feed. reel_slot_time is legacy (unused).
     reel_slot_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     reel_slot_time: Mapped[str] = mapped_column(String(8), default="11:00", server_default="11:00")
+    reel_slots_json: Mapped[str] = mapped_column(
+        Text, default='["15:00", "21:00"]', server_default='["15:00", "21:00"]'
+    )
+    reels_per_day: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    reel_share_to_feed: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Music for Reels: "rotate" (least recently used enabled track) or "random".
+    music_pick_mode: Mapped[str] = mapped_column(String(16), default="rotate", server_default="rotate")
     # Operator-editable hashtag pools: {"niche": [...], "mono": [...], "allow": [...]} (null = defaults).
     hashtag_pools_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -769,3 +781,19 @@ class EngageTarget(Base):
 # Imported by decision code via the string values stored on Image.
 SAFETY_VALUES = {state.value for state in SafetyState}
 RATING_VALUES = {rating.value for rating in HumanRating}
+
+
+class MusicTrack(Base):
+    """A royalty-free/licensed audio file uploaded by the operator for Reel slideshows."""
+
+    __tablename__ = "music_tracks"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(String(200))
+    relative_path: Mapped[str] = mapped_column(String(512))
+    sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())

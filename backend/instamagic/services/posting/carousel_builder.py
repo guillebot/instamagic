@@ -1,4 +1,4 @@
-"""Carousel builder: 3-5 publishable photos from the same shoot/folder with a strong cover.
+"""Carousel builder: 3-5 publishable photos (3-6 for Reel slideshows) from the same shoot/folder with a strong cover.
 
 Only photos that already pass every publish gate are suggested (rated SAFE/EXCELLENT, attested
 library, approved crop/blur where needed; DO_NOT_POST only with a verified blur, published as the
@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from instamagic.errors import NotAllowed
-from instamagic.models import Image, PublishingQueueSlide
+from instamagic.models import Image, PublishingQueueItem, PublishingQueueSlide, QueueMediaType
 from instamagic.services.pipeline import is_attested
 from instamagic.services.posting.collaborators import shoot_key
 from instamagic.services.posting.content_mix import classify_image
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 MIN_PHOTOS = 3
 MAX_PHOTOS = 5
 MAX_SUGGESTIONS = 8
+REEL_MAX_PHOTOS = 6
 SCAN_LIMIT = 800
 
 
@@ -50,8 +51,36 @@ def _publishable(session: Session, image: Image) -> bool:
     return True
 
 
-def suggest_carousels(session: Session) -> list[CarouselSuggestion]:
-    used = set(session.scalars(select(PublishingQueueSlide.image_id)).all())
+def _reel_used_image_ids(session: Session) -> set:
+    """Photos already in any Reel (any state, incl. rejected: never re-proposed)."""
+    reel_ids = select(PublishingQueueItem.id).where(PublishingQueueItem.media_type == QueueMediaType.REELS.value)
+    used = set(session.scalars(select(PublishingQueueSlide.image_id).where(PublishingQueueSlide.queue_item_id.in_(reel_ids))).all())
+    used |= set(
+        session.scalars(
+            select(PublishingQueueItem.image_id).where(PublishingQueueItem.media_type == QueueMediaType.REELS.value)
+        ).all()
+    )
+    return used
+
+
+def suggest_carousels(
+    session: Session,
+    *,
+    min_photos: int = MIN_PHOTOS,
+    max_photos: int = MAX_PHOTOS,
+    for_reels: bool = False,
+    limit: int = MAX_SUGGESTIONS,
+) -> list[CarouselSuggestion]:
+    """Same-shoot groups with a non-skin/body cover first.
+
+    ``for_reels``: Reel slideshows (3-6 photos). Photos already posted to the feed may be reused
+    (a Reel is a different format), but never a photo that is already in any Reel; at most a third
+    of the slides (min 1) may be skin/body shots, always after the cover.
+    """
+    if for_reels:
+        used = _reel_used_image_ids(session)
+    else:
+        used = set(session.scalars(select(PublishingQueueSlide.image_id)).all())
     rows = session.scalars(
         select(Image)
         .where(Image.skip_reason.is_(None))
@@ -63,7 +92,7 @@ def suggest_carousels(session: Session) -> list[CarouselSuggestion]:
     attested: dict = {}
     groups: dict[str, list[Image]] = defaultdict(list)
     for image in rows:
-        if image.id in used or image.queue_items:
+        if image.id in used or (not for_reels and image.queue_items):
             continue
         if image.model_state == "DO_NOT_POST" and image.blur_unlock_status != "verified":
             continue
@@ -73,7 +102,7 @@ def suggest_carousels(session: Session) -> list[CarouselSuggestion]:
         groups[key].append(image)
     out: list[CarouselSuggestion] = []
     for key, images in groups.items():
-        if len(images) < MIN_PHOTOS:
+        if len(images) < min_photos:
             continue
         lib = images[0].library_id
         if lib not in attested:
@@ -81,15 +110,26 @@ def suggest_carousels(session: Session) -> list[CarouselSuggestion]:
         if not attested[lib]:
             continue
         ranked = sorted(images, key=_quality, reverse=True)
-        picked = [image for image in ranked if _publishable(session, image)][: MAX_PHOTOS * 2]
-        if len(picked) < MIN_PHOTOS:
+        picked = [image for image in ranked if _publishable(session, image)][: max_photos * 2]
+        if len(picked) < min_photos:
             continue
         profiles = {image.id: classify_image(image) for image in picked}
         covers = [image for image in picked if not profiles[image.id].sensitive]
         if not covers:
             continue  # never lead with a skin/body shot
         cover = max(covers, key=lambda image: (profiles[image.id].boost, _quality(image)))
-        rest = [image for image in picked if image.id != cover.id][: MAX_PHOTOS - 1]
+        rest = [image for image in picked if image.id != cover.id]
+        if for_reels:
+            calm = [image for image in rest if not profiles[image.id].sensitive]
+            skin = [image for image in rest if profiles[image.id].sensitive]
+            allowed_skin = max(1, max_photos // 3)
+            rest = calm[: max_photos - 1]
+            room = max_photos - 1 - len(rest)
+            rest += skin[: min(room, allowed_skin)]
+            rest.sort(key=_quality, reverse=True)
+            if len(rest) + 1 < min_photos:
+                continue
+        rest = rest[: max_photos - 1]
         chosen = [cover, *rest]
         reasons = [f"{len(chosen)} photos from the same shoot", f"Cover: {profiles[cover.id].label}"]
         sensitive = sum(1 for image in rest if profiles[image.id].sensitive)
@@ -98,4 +138,4 @@ def suggest_carousels(session: Session) -> list[CarouselSuggestion]:
         label = key.split(":", 1)[1] if key.startswith("session:") else key.rsplit(":", 1)[-1]
         out.append(CarouselSuggestion(key=key, label=label or "shoot", images=chosen, reasons=reasons))
     out.sort(key=lambda s: -sum(_quality(image) for image in s.images) / len(s.images))
-    return out[:MAX_SUGGESTIONS]
+    return out[:limit]

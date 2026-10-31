@@ -331,6 +331,9 @@ export type QueueItem = {
   reel_for_item_id?: string | null;
   reel_version_id?: string | null;
   is_reel_slot?: boolean;
+  reel_auto?: boolean;
+  music_choice?: string | null;
+  reel_music?: ReelMusic | null;
   content_mix?: string | null;
   image: ImageItem;
 };
@@ -350,10 +353,38 @@ export type PostingScheduleConfig = {
   blur_detector_overrules_coverage?: boolean;
   updated_at?: string | null;
   reel_slot_enabled?: boolean;
-  reel_slot_time?: string;
+  reel_slots?: string[];
+  reels_per_day?: number;
+  reel_share_to_feed?: boolean;
+  music_pick_mode?: "rotate" | "random";
   hashtag_pools?: HashtagPools;
   hashtag_pool_defaults?: HashtagPools;
   hashtag_content_allowlist?: string[];
+};
+
+export type ReelMusic = {
+  track: { id: string; title: string } | null;
+  silent: boolean;
+  reason: string | null;
+  warning: string | null;
+};
+
+export type MusicTrack = {
+  id: string;
+  title: string;
+  duration_s: number;
+  size_bytes: number;
+  enabled: boolean;
+  last_used_at?: string | null;
+  created_at?: string | null;
+  preview_url: string;
+};
+
+export type MusicLibrary = {
+  tracks: MusicTrack[];
+  enabled_count: number;
+  pick_mode: "rotate" | "random";
+  license_note: string;
 };
 
 export type HashtagPools = { niche: string[]; mono: string[]; allow: string[] };

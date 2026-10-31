@@ -31,7 +31,7 @@ import {
   storyShareFromQueueItem,
   StoryShareControls,
 } from "../StoryShareControls";
-import type { AppConfig, CaptionItem, CarouselSuggestion, QueueItem } from "../types";
+import type { AppConfig, CaptionItem, CarouselSuggestion, MusicLibrary, QueueItem } from "../types";
 
 export function QueuePage() {
   const queryClient = useQueryClient();
@@ -156,6 +156,7 @@ export function QueuePage() {
         {ig.data?.configured ? `ready (${ig.data.provider})` : "not configured"}.{" "}
         <Link to="/instagram">Connection helper</Link>.
       </p>
+      <ReelProposals />
       <CarouselSuggestions />
       <div className="row carousel-builder">
         <button
@@ -690,15 +691,6 @@ function QueueCard({
           model {item.image.model_state}
         </p>
         {!isStory && !isReel && formatStoryStatus(item) ? <p className="muted">{formatStoryStatus(item)}</p> : null}
-        {item.reel_for_item_id ? (
-          <p className="muted">
-            Reel version prepared for the Reel slot. Approve it to post it as a Reel in place of the photo/carousel
-            (the original is kept, unscheduled).
-          </p>
-        ) : null}
-        {item.reel_version_id && !item.scheduled_at ? (
-          <p className="muted">Its Reel version took the Reel slot. Schedule this again if you want to post both.</p>
-        ) : null}
         {!isStory ? <CollaboratorsField item={item} /> : null}
         {!isCarousel && editable && reelSlides <= 1 ? (
           <label className="post-type-select">
@@ -750,9 +742,7 @@ function QueueCard({
             {item.reel_status === "stale" ? (
               <p className="error">Photos, blurs or look changed since rendering — render the reel again.</p>
             ) : null}
-            <p className="muted">
-              Instagram&apos;s music library can&apos;t be added through the API — reels publish with a silent track.
-            </p>
+            <ReelMusicField item={item} editable={item.state === "CANDIDATE" || item.state === "FAILED"} />
           </div>
         ) : null}
         <div className="row">
@@ -1017,9 +1007,22 @@ export function GrowthBadges({ item }: { item: QueueItem }) {
   return (
     <>
       {isReel ? <span className="badge badge-reel">Reel</span> : null}
-      {!isReel && item.is_reel_slot && item.state !== "PUBLISHED" ? (
-        <span className="badge" title="This time is the daily Reel slot. A Reel version is prepared for you to approve.">
-          Reel slot
+      {isReel && item.state === "CANDIDATE" ? (
+        <span
+          className="badge badge-warn"
+          title={item.reel_auto ? "Proposed automatically for the Reel schedule. Preview, then approve." : "Preview, then approve."}
+        >
+          Reel · needs approval
+        </span>
+      ) : null}
+      {isReel && item.reel_music?.silent && item.reel_music.warning ? (
+        <span className="badge badge-warn" title={item.reel_music.warning}>
+          Silent Reel
+        </span>
+      ) : null}
+      {isReel && item.reel_music?.track ? (
+        <span className="badge muted" title="Music baked into the Reel video">
+          ♪ {item.reel_music.track.title}
         </span>
       ) : null}
       {item.content_mix ? (
@@ -1033,6 +1036,87 @@ export function GrowthBadges({ item }: { item: QueueItem }) {
         </span>
       ) : null}
     </>
+  );
+}
+
+export function ReelMusicField({ item, editable }: { item: QueueItem; editable: boolean }) {
+  const queryClient = useQueryClient();
+  const library = useQuery({
+    queryKey: ["music"],
+    queryFn: () => api<MusicLibrary>("/api/music"),
+    staleTime: 60_000,
+  });
+  const [error, setError] = useState<string | null>(null);
+  const choose = useMutation({
+    mutationFn: (choice: string | null) =>
+      api<QueueItem>(`/api/queue/${item.id}/music`, { method: "PUT", body: JSON.stringify({ choice }) }),
+    onSuccess: () => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["queue"] });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Could not change the music."),
+  });
+  const tracks = library.data?.tracks ?? [];
+  const value = item.music_choice ?? "";
+  const music = item.reel_music;
+  return (
+    <div className="reel-music">
+      <label className="post-type-select">
+        Music{" "}
+        <select
+          aria-label="Reel music"
+          value={value}
+          disabled={!editable || choose.isPending}
+          onChange={(event) => choose.mutate(event.target.value || null)}
+        >
+          <option value="">Auto ({library.data?.pick_mode === "random" ? "random" : "rotation"})</option>
+          <option value="none">Silent</option>
+          {tracks.map((track) => (
+            <option key={track.id} value={track.id} disabled={!track.enabled && track.id !== value}>
+              {track.title}
+              {track.enabled ? "" : " (disabled)"}
+            </option>
+          ))}
+        </select>
+      </label>
+      {music?.track ? <span className="muted"> Rendered with ♪ {music.track.title}.</span> : null}
+      {music?.silent && music.warning ? <p className="error">{music.warning}</p> : null}
+      {library.data && library.data.enabled_count === 0 && !music ? (
+        <p className="muted">
+          The <Link to="/music">Music library</Link> is empty: Reels render silent until you add royalty-free tracks.
+        </p>
+      ) : null}
+      {error ? <p className="error">{error}</p> : null}
+    </div>
+  );
+}
+
+export function ReelProposals() {
+  const queryClient = useQueryClient();
+  const [message, setMessage] = useState<string | null>(null);
+  const propose = useMutation({
+    mutationFn: () => api<{ created: number }>("/api/reel-candidates/propose", { method: "POST" }),
+    onSuccess: (data) => {
+      setMessage(
+        data.created
+          ? `Proposed ${data.created} Reel slideshow${data.created === 1 ? "" : "s"}. Preview and approve below.`
+          : "No new Reel slideshow found (needs 3+ publishable photos from one shoot not already in a Reel).",
+      );
+      void queryClient.invalidateQueries({ queryKey: ["queue"] });
+    },
+    onError: (err) => setMessage(err instanceof ApiError ? err.message : "Could not propose Reels."),
+  });
+  return (
+    <div className="row reel-proposals">
+      <button className="button" type="button" disabled={propose.isPending} onClick={() => propose.mutate()}>
+        <PendingButtonLabel pending={propose.isPending} pendingLabel="Proposing…" label="Propose Reels" />
+      </button>
+      <span className="muted">
+        Reel slideshows (3–6 blurred-safe photos from one shoot, with music) are also proposed hourly for the{" "}
+        <Link to="/queue/schedule">Reel schedule</Link>. Each one waits for your approval.
+      </span>
+      {message ? <span className="muted">{message}</span> : null}
+    </div>
   );
 }
 

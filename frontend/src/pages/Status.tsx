@@ -43,6 +43,7 @@ export type AppStatus = {
   queue: Section<{ states: Counts; approved_unscheduled: number;
     upcoming: { id: string; filename: string; state: string; media_type: string; scheduled_at: string | null; story: boolean }[];
     open_slots: string[];
+    open_reel_slots?: string[];
     schedule: { timezone: string; paused: boolean; max_posts_per_day: number; min_gap_hours: number } }>;
   publish: Section<{ attempts: number; succeeded: number; failed: number; posts_total: number;
     by_kind: Record<string, { attempts: number; succeeded: number; failed: number }>;
@@ -349,6 +350,12 @@ export function StatusPage() {
                     {data.queue.open_slots.map((slot) => <span key={slot} className="st-chip">{when(slot)}</span>)}
                   </div>
                 ) : <p className="muted">No open slots.</p>}
+                <h3>Open Reel slots (next 72h)</h3>
+                {data.queue.open_reel_slots?.length ? (
+                  <div className="st-chips">
+                    {data.queue.open_reel_slots.map((slot) => <span key={slot} className="st-chip">{when(slot)}</span>)}
+                  </div>
+                ) : <p className="muted">No open Reel slots.</p>}
               </>
             )}
           </Card>

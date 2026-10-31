@@ -119,6 +119,7 @@ class InstagramClient(Protocol):
         caption: str,
         cover_url: str | None = None,
         collaborators: list[str] | None = None,
+        share_to_feed: bool = True,
     ) -> PublishResult: ...
 
     def fetch_account_details(self) -> InstagramAccountDetails: ...
@@ -196,8 +197,9 @@ class NotConfiguredInstagramClient:
         caption: str,
         cover_url: str | None = None,
         collaborators: list[str] | None = None,
+        share_to_feed: bool = True,
     ) -> PublishResult:
-        del video_url, caption, cover_url, collaborators
+        del video_url, caption, cover_url, collaborators, share_to_feed
         raise InstagramNotConfigured(_NOT_CONFIGURED_MSG)
 
     def fetch_account_details(self) -> InstagramAccountDetails:
@@ -289,6 +291,7 @@ class FakeInstagramClient:
         caption: str,
         cover_url: str | None = None,
         collaborators: list[str] | None = None,
+        share_to_feed: bool = True,
     ) -> PublishResult:
         if not video_url.startswith(("http://", "https://")):
             raise NotConfigured("Fake Instagram publisher requires an http(s) video_url.")
@@ -303,6 +306,7 @@ class FakeInstagramClient:
                 "media_id": media_id,
                 "cover_url": cover_url,
                 "collaborators": list(collaborators or []),
+                "share_to_feed": share_to_feed,
             }
         )
         return PublishResult(
@@ -521,6 +525,7 @@ class GraphInstagramClient:
         caption: str,
         cover_url: str | None = None,
         collaborators: list[str] | None = None,
+        share_to_feed: bool = True,
     ) -> PublishResult:
         """Reel via resumable-free ``video_url`` upload: REELS container, wait FINISHED, publish."""
         if not self.configured():
@@ -534,7 +539,7 @@ class GraphInstagramClient:
             "media_type": "REELS",
             "video_url": video_url,
             "caption": caption.strip(),
-            "share_to_feed": "true",
+            "share_to_feed": "true" if share_to_feed else "false",
         }
         if cover_url and cover_url.startswith("https://"):
             data["cover_url"] = cover_url

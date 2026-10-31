@@ -9,7 +9,6 @@ from instamagic.errors import NotAllowed, NotFound
 from instamagic.models import PublishingQueueItem, QueueMediaType, QueueState
 from instamagic.models.enums import ScheduleMode
 from instamagic.services.posting.content_mix import growth_rank_key
-from instamagic.services.posting.reel_slot import prepare_reel_versions_for, take_source_reel_slot
 from instamagic.services.posting.schedule_config import config_view
 from instamagic.services.posting.slots import assign_auto_slots, next_available_slot
 from sqlalchemy import or_, select
@@ -40,17 +39,13 @@ def schedule_queue_item(
     else:
         item.scheduled_at = None
         config = config_view(session)
-        if not take_source_reel_slot(session, item, config):
-            slot = next_available_slot(session, config, media_type=item.media_type, item=item)
-            if slot is not None:
-                item.scheduled_at = slot
+        slot = next_available_slot(session, config, media_type=item.media_type, item=item)
+        if slot is not None:
+            item.scheduled_at = slot
     item.publish_retry_after = None
     item.last_error = None
     session.commit()
     session.refresh(item)
-    if mode == ScheduleMode.AUTO_SLOT.value:
-        prepare_reel_versions_for(session, [item], config_view(session))
-        session.refresh(item)
     return item
 
 

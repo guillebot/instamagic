@@ -34,9 +34,9 @@ def _local(y, m, d, h, mi=0) -> datetime:
 
 
 def _patch(monkeypatch, busy: list[datetime], per_day: dict | None = None) -> None:
-    monkeypatch.setattr(slots_mod, "_busy_times", lambda session, start, end: list(busy))
+    monkeypatch.setattr(slots_mod, "_busy_times", lambda session, start, end, lane="feed": list(busy))
 
-    def count(session, config, when):
+    def count(session, config, when, lane="feed"):
         return (per_day or {}).get(when.astimezone(TZ).date(), 0)
 
     monkeypatch.setattr(slots_mod, "_scheduled_today_count", count)

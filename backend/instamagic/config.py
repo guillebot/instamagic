@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://instamagic:instamagic@127.0.0.1:5432/instamagic"
     redis_url: str = "redis://127.0.0.1:6379/0"
     derivatives_root: Path = Path("./data/derivatives")
+    # Operator-uploaded royalty-free/licensed Reel music (host bind mount in Compose).
+    music_root: Path = Path("./data/music")
     allowed_library_roots: str = ""
     suggested_library_root: str = ""
     # When true (Compose), every ALLOWED_LIBRARY_ROOTS entry must be a real host bind mount.
