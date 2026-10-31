@@ -244,16 +244,21 @@ def _section_enrichment(settings: Settings, session: Session, redis) -> dict[str
     return status
 
 
-def open_slots(session: Session, view, now: datetime, *, hours: int = 72, limit: int = 12) -> list[datetime]:
-    """Slots in the next `hours` a new approved post could take, filled greedily in order."""
-    from instamagic.services.posting.slots import _busy_times, best_slots
+def open_slots(
+    session: Session, view, now: datetime, *, hours: int = 72, limit: int = 12, lane: str = "feed"
+) -> list[datetime]:
+    """Slots in the next `hours` a new approved post of `lane` could take, filled greedily in order."""
+    from instamagic.services.posting.slots import _busy_times, best_slots, lane_cap, lane_gap
 
     horizon = now + timedelta(hours=hours)
-    candidates = [s for s in best_slots(view, from_day=now, days=(hours // 24) + 2) if now < s <= horizon]
+    candidates = [
+        s for s in best_slots(view, from_day=now, days=(hours // 24) + 2, lane=lane) if now < s <= horizon
+    ]
     if not candidates:
         return []
-    gap = timedelta(hours=view.min_gap_hours)
-    busy = _busy_times(session, candidates[0] - gap, candidates[-1] + gap)
+    gap = lane_gap(view, lane)
+    cap = lane_cap(view, lane)
+    busy = _busy_times(session, candidates[0] - gap, candidates[-1] + gap, lane=lane)
     tz = ZoneInfo(view.timezone)
     per_day: dict[str, int] = {}
     for value in busy:
@@ -264,7 +269,7 @@ def open_slots(session: Session, view, now: datetime, *, hours: int = 72, limit:
         key = slot.astimezone(tz).date().isoformat()
         if any(abs(slot - b) < gap for b in busy):
             continue
-        if per_day.get(key, 0) >= view.max_posts_per_day:
+        if per_day.get(key, 0) >= cap:
             continue
         out.append(slot)
         busy.append(slot)
@@ -312,6 +317,7 @@ def _section_queue(settings: Settings, session: Session, redis) -> dict[str, Any
             for item, filename in upcoming_rows
         ],
         "open_slots": [_iso(s) for s in slots],
+        "open_reel_slots": [_iso(s) for s in open_slots(session, view, now, lane="reel")],
         "schedule": {
             "timezone": view.timezone,
             "paused": view.paused,

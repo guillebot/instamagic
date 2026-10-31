@@ -12,6 +12,8 @@ from instamagic.services.posting.scheduler import run_scheduler_job
 
 log = get_logger("worker.scheduler")
 _INTERVAL_SECONDS = 60
+_REEL_PROPOSE_EVERY_SECONDS = 3600
+_last_reel_propose = 0.0
 
 
 def _run_scheduler_tick() -> int:
@@ -33,6 +35,23 @@ def _kick_enrichment() -> None:
         log.info("enrichment_kicked")
 
 
+def _maybe_propose_reels(now: float | None = None) -> int:
+    """Hourly: top up Reel slideshow candidates (CANDIDATE only; the user approves each one)."""
+    global _last_reel_propose
+    now = time.monotonic() if now is None else now
+    if _last_reel_propose and now - _last_reel_propose < _REEL_PROPOSE_EVERY_SECONDS:
+        return 0
+    _last_reel_propose = now
+    from instamagic.db import session_factory
+    from instamagic.services.posting.reel_candidates import propose_reel_candidates
+
+    with session_factory()() as session:
+        made = propose_reel_candidates(session)
+    if made:
+        log.info("reel_candidates_proposed", count=len(made))
+    return len(made)
+
+
 def _run_forever() -> None:
     while True:
         try:
@@ -41,6 +60,10 @@ def _run_forever() -> None:
                 log.info("scheduled_publish_tick", published=count)
         except Exception:
             log.exception("scheduled_publish_tick_failed")
+        try:
+            _maybe_propose_reels()
+        except Exception:
+            log.info("reel_candidates_propose_failed")
         try:
             _kick_enrichment()
         except Exception:

@@ -135,8 +135,11 @@ class PostingScheduleConfigIn(BaseModel):
     blur_region_padding_px: int | None = Field(default=None, ge=0, le=20)
     blur_detector_overrules_coverage: bool | None = None
     reel_slot_enabled: bool | None = None
-    reel_slot_time: str | None = Field(default=None, max_length=5)
     hashtag_pools: dict[str, list[str]] | None = None
+    reel_slots: list[str] | None = Field(default=None, max_length=10)
+    reels_per_day: int | None = Field(default=None, ge=1, le=10)
+    reel_share_to_feed: bool | None = None
+    music_pick_mode: str | None = Field(default=None, max_length=16)
 
 
 class CollaboratorsIn(BaseModel):
@@ -545,3 +548,13 @@ class HealthStatusOut(BaseModel):
     overall: str
     checks: list[HealthCheckOut]
     cached_seconds: int = 25
+
+
+class MusicTrackPatchIn(BaseModel):
+    enabled: bool | None = None
+    title: str | None = Field(default=None, max_length=200)
+
+
+class ReelMusicIn(BaseModel):
+    # null = auto (library rotation/random), "none" = silent, else a music track id.
+    choice: str | None = Field(default=None, max_length=64)

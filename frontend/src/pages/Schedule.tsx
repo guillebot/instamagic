@@ -10,6 +10,12 @@ const splitTags = (text: string) =>
     .map((tag) => tag.replace(/^#/, "").trim().toLowerCase())
     .filter(Boolean);
 
+export const splitTimes = (text: string) =>
+  text
+    .split(/[\s,]+/)
+    .map((time) => time.trim())
+    .filter(Boolean);
+
 export function SchedulePage() {
   const queryClient = useQueryClient();
   const config = useQuery({
@@ -30,7 +36,10 @@ export function SchedulePage() {
   const [blurRegionPadding, setBlurRegionPadding] = useState(6);
   const [detectorOverrules, setDetectorOverrules] = useState(true);
   const [reelSlotEnabled, setReelSlotEnabled] = useState(true);
-  const [reelSlotTime, setReelSlotTime] = useState("11:00");
+  const [reelSlots, setReelSlots] = useState("15:00 21:00");
+  const [reelsPerDay, setReelsPerDay] = useState(2);
+  const [reelShareToFeed, setReelShareToFeed] = useState(true);
+  const [musicPickMode, setMusicPickMode] = useState<"rotate" | "random">("rotate");
   const [pools, setPools] = useState<Record<keyof HashtagPools, string>>({ niche: "", mono: "", allow: "" });
 
   const saveConfig = useMutation({
@@ -49,7 +58,10 @@ export function SchedulePage() {
           blur_region_padding_px: blurRegionPadding,
           blur_detector_overrules_coverage: detectorOverrules,
           reel_slot_enabled: reelSlotEnabled,
-          reel_slot_time: reelSlotTime,
+          reel_slots: splitTimes(reelSlots),
+          reels_per_day: reelsPerDay,
+          reel_share_to_feed: reelShareToFeed,
+          music_pick_mode: musicPickMode,
           hashtag_pools: {
             niche: splitTags(pools.niche),
             mono: splitTags(pools.mono),
@@ -88,7 +100,10 @@ export function SchedulePage() {
     setBlurRegionPadding(config.data.blur_region_padding_px ?? 6);
     setDetectorOverrules(config.data.blur_detector_overrules_coverage ?? true);
     setReelSlotEnabled(config.data.reel_slot_enabled ?? true);
-    setReelSlotTime(config.data.reel_slot_time ?? "11:00");
+    setReelSlots((config.data.reel_slots ?? ["15:00", "21:00"]).join(" "));
+    setReelsPerDay(config.data.reels_per_day ?? 2);
+    setReelShareToFeed(config.data.reel_share_to_feed ?? true);
+    setMusicPickMode(config.data.music_pick_mode ?? "rotate");
     const current = config.data.hashtag_pools;
     setPools({
       niche: (current?.niche ?? []).join(" "),
@@ -160,21 +175,57 @@ export function SchedulePage() {
           </label>
         </div>
         <section className="reel-slot-settings">
-          <h3>Reel slot</h3>
+          <h3>Reel schedule</h3>
           <div className="row">
             <label>
               <input type="checkbox" checked={reelSlotEnabled} onChange={(e) => setReelSlotEnabled(e.target.checked)} />{" "}
-              Make one daily slot a Reel
+              Post Reels on their own schedule
+            </label>
+            <label title="Daily Reel times (HH:MM), separated by spaces. Separate from the feed photo slots.">
+              Reel slots
+              <input
+                aria-label="Reel slots"
+                value={reelSlots}
+                placeholder="15:00 21:00"
+                onChange={(e) => setReelSlots(e.target.value)}
+              />
             </label>
             <label>
-              Reel slot time
-              <input type="time" value={reelSlotTime} onChange={(e) => setReelSlotTime(e.target.value)} />
+              Reels / day
+              <input
+                aria-label="Reels per day"
+                type="number"
+                min={1}
+                max={10}
+                value={reelsPerDay}
+                onChange={(e) => setReelsPerDay(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={reelShareToFeed}
+                onChange={(e) => setReelShareToFeed(e.target.checked)}
+              />{" "}
+              Also show Reels in the feed grid (share_to_feed)
+            </label>
+            <label>
+              Music pick
+              <select
+                aria-label="Music pick"
+                value={musicPickMode}
+                onChange={(e) => setMusicPickMode(e.target.value as "rotate" | "random")}
+              >
+                <option value="rotate">Rotate (least recently used)</option>
+                <option value="random">Random</option>
+              </select>
             </label>
           </div>
           <p className="help">
-            Fill slots puts a queued Reel here. If there isn't one, an approved photo or carousel scheduled here gets
-            a Reel version (slow zoom, or a slideshow for a carousel) as a candidate in the Queue. You approve it before
-            it can post. Instagram's API can't add trending audio, so Reels post without music.
+            Reels have their own slots and daily cap: they never take a feed photo slot and don't count toward Max posts /
+            day or the min gap. Reel slideshows (3–6 photos from one shoot, blurred renders only) are proposed in the Queue
+            as "Reel · needs approval"; nothing posts until you approve it. Music comes from your{" "}
+            <Link to="/music">Music library</Link> (royalty-free tracks only), baked into the video.
           </p>
         </section>
         <section className="hashtag-pool-settings">

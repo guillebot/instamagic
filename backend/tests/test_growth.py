@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,7 +23,7 @@ from instamagic.services.posting.content_mix import (
 from instamagic.services.recommendations.rank import CandidateInput, rank_candidates
 from tests.conftest import login
 from tests.test_publish import _attested_library, _marked
-from tests.test_slot_gap_fill import _config, _local, _patch
+from tests.test_slot_gap_fill import DAYS, _config, _local, _patch
 
 # --- collaborators -------------------------------------------------------------------------
 
@@ -192,28 +193,107 @@ def test_rank_prefers_growth_mix_over_skin_body() -> None:
     assert [r.image_id for r in ranked] == ["still", "plain", "skin"]
 
 
-# --- Reel slot -----------------------------------------------------------------------------
+# --- Reel schedule (own lane) --------------------------------------------------------------
 
 
-def test_reel_slot_reserved_for_reels(monkeypatch) -> None:
+def test_reel_lane_uses_own_slots_and_never_takes_feed_slots(monkeypatch) -> None:
     now = _local(2026, 5, 4, 8)  # Monday 08:00 local
     _patch(monkeypatch, busy=[])
     config = _config()
-    assert config.reel_slot_enabled and config.reel_slot_time == "11:00"
-    # Legacy callers (no media type) are unchanged.
+    assert config.reel_slot_enabled and config.reel_slots == ("15:00", "21:00") and config.reels_per_day == 2
+    # Feed photos keep the weekday slots (the 11:00 photo slot is never reserved/converted).
     assert slots_mod.next_available_slot(None, config, now=now) == _local(2026, 5, 4, 9)
-    # A Reel goes straight to the 11:00 Reel slot.
-    reel = slots_mod.next_available_slot(None, config, now=now, media_type="REELS")
-    assert reel == _local(2026, 5, 4, 11)
-    # Photos skip far-away Reel slots but may fill one within 24 h so it never sits empty.
-    _patch(monkeypatch, busy=[_local(2026, 5, 4, h) for h in (4, 9, 13, 15, 17, 19, 21)])
-    photo = slots_mod.next_available_slot(None, config, now=now, media_type="IMAGE")
-    assert photo == _local(2026, 5, 4, 11)
-    # A Reel slot more than 24 h away stays reserved for a Reel.
-    busy = [_local(2026, 5, d, h) for d in (4, 5) for h in (4, 9, 13, 15, 17, 19, 21)] + [_local(2026, 5, 4, 11)]
-    _patch(monkeypatch, busy=busy)
-    photo = slots_mod.next_available_slot(None, config, now=now, media_type="IMAGE")
-    assert photo == _local(2026, 5, 6, 4)  # skips Tue 11:00 (27 h away)
-    assert slots_mod.next_available_slot(None, config, now=now, media_type="REELS") == _local(2026, 5, 5, 11)
-    assert slots_mod.is_reel_slot(config, _local(2026, 5, 6, 11))
-    assert not slots_mod.is_reel_slot(config, _local(2026, 5, 6, 19))
+    assert slots_mod.next_available_slot(None, config, now=now, media_type="IMAGE") == _local(2026, 5, 4, 9)
+    # Reels go to the Reel slots only.
+    assert slots_mod.next_available_slot(None, config, now=now, media_type="REELS") == _local(2026, 5, 4, 15)
+    reel_slots = slots_mod.best_slots(config, from_day=now, days=2, lane="reel")
+    assert reel_slots == [_local(2026, 5, d, h) for d in (4, 5) for h in (15, 21)]
+    # Disabled Reel schedule -> no Reel slots at all (feed unchanged).
+    off = replace(config, reel_slot_enabled=False)
+    assert slots_mod.next_available_slot(None, off, now=now, media_type="REELS") is None
+    assert slots_mod.next_available_slot(None, off, now=now, media_type="IMAGE") == _local(2026, 5, 4, 9)
+    assert not hasattr(slots_mod, "is_reel_slot")
+
+
+def test_reel_lane_editable_slots(monkeypatch) -> None:
+    now = _local(2026, 5, 4, 16)
+    _patch(monkeypatch, busy=[])
+    config = replace(_config(), reel_slots=("10:30", "18:45", "22:00"), reels_per_day=3)
+    assert slots_mod.next_available_slot(None, config, now=now, media_type="REELS") == _local(2026, 5, 4, 18, 45)
+
+
+def _feed_and_reel_items(client, app_env, count: int = 8) -> list:
+    library: Path = app_env["library"]
+    for n in range(count):
+        _marked(library / "shoot" / f"{n}.jpg", (30 + n * 20, 120, 30), (20, 20, 80 + n * 5, 80))
+    login(client)
+    library_id = _attested_library(client, library)
+    ids = [i["id"] for i in client.get("/api/images", params={"library_id": library_id}).json()["items"]]
+    for image_id in ids:
+        client.post(f"/api/images/{image_id}/rating", json={"rating": "safe"})
+    return ids
+
+
+def test_reels_do_not_count_toward_feed_cap_or_gap(client, app_env) -> None:
+    from uuid import UUID
+
+    from instamagic.db import session_factory
+    from instamagic.models import PublishingQueueItem
+    from instamagic.services.posting.schedule_config import config_view, update_config
+
+    ids = _feed_and_reel_items(client, app_env, 4)
+    session = session_factory()()
+    try:
+        update_config(
+            session,
+            weekday_slots={d: ["11:00", "19:00"] for d in DAYS},
+            max_posts_per_day=2,
+            min_gap_hours=6,
+        )
+        config = config_view(session)
+        assert config.reel_slots == ("15:00", "21:00")
+        now = _local(2026, 5, 4, 8)
+        # Two Reels already on Monday at 15:00 and 21:00.
+        for hour in (15, 21):
+            session.add(
+                PublishingQueueItem(
+                    image_id=UUID(ids[0]), media_type="REELS", state="APPROVED", scheduled_at=_local(2026, 5, 4, hour)
+                )
+            )
+        session.commit()
+        # Feed still gets both Monday photo slots (Reels are not in the feed cap or 6 h gap).
+        first = slots_mod.next_available_slot(session, config, now=now, media_type="IMAGE")
+        assert first == _local(2026, 5, 4, 11)
+        session.add(PublishingQueueItem(image_id=UUID(ids[1]), media_type="IMAGE", state="APPROVED", scheduled_at=first))
+        session.commit()
+        second = slots_mod.next_available_slot(session, config, now=now, media_type="IMAGE")
+        assert second == _local(2026, 5, 4, 19)
+        session.add(PublishingQueueItem(image_id=UUID(ids[2]), media_type="IMAGE", state="APPROVED", scheduled_at=second))
+        session.commit()
+        # Feed full Monday -> Tuesday 11:00; Reel lane full Monday -> Tuesday 15:00.
+        assert slots_mod.next_available_slot(session, config, now=now, media_type="IMAGE") == _local(2026, 5, 5, 11)
+        assert slots_mod.next_available_slot(session, config, now=now, media_type="REELS") == _local(2026, 5, 5, 15)
+        # Reels per day = 1 -> still Tuesday (Monday has 2 already).
+        update_config(session, reels_per_day=1)
+        config = config_view(session)
+        assert slots_mod.next_available_slot(session, config, now=now, media_type="REELS") == _local(2026, 5, 5, 15)
+    finally:
+        session.close()
+
+
+def test_schedule_config_reel_fields_roundtrip(client, app_env) -> None:
+    login(client)
+    data = client.get("/api/posting-schedule/config").json()
+    assert data["reel_slots"] == ["15:00", "21:00"] and data["reels_per_day"] == 2
+    assert data["reel_share_to_feed"] is True and data["music_pick_mode"] == "rotate"
+    ok = client.put(
+        "/api/posting-schedule/config",
+        json={"reel_slots": ["21:00", "14:30"], "reels_per_day": 3, "reel_share_to_feed": False, "music_pick_mode": "random"},
+    )
+    assert ok.status_code == 200, ok.text
+    out = ok.json()
+    assert out["reel_slots"] == ["14:30", "21:00"] and out["reels_per_day"] == 3
+    assert out["reel_share_to_feed"] is False and out["music_pick_mode"] == "random"
+    assert out["weekday_slots"] == data["weekday_slots"]  # feed slots untouched
+    for bad in ({"reel_slots": ["25:00"]}, {"reels_per_day": 0}, {"music_pick_mode": "loud"}):
+        assert client.put("/api/posting-schedule/config", json=bad).status_code in {400, 403, 409, 422}

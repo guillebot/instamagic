@@ -1,4 +1,7 @@
-"""Render vertical 1080x1920 Reel MP4s from verified 9:16 story frames (ffmpeg, no audio library).
+"""Render vertical 1080x1920 Reel MP4s from verified 9:16 story frames (ffmpeg).
+
+Audio: an operator-uploaded music track (trimmed to the video, faded in/out, loudness-normalized)
+or a silent AAC track when no music is chosen / the library is empty.
 
 Every frame is a crop/zoom of a 9:16 composition built *only* from the verified feed publish
 derivative (see ``story_image``), so a Reel can never contain sharper pixels than the feed post
@@ -116,8 +119,39 @@ def probe_video(path: Path) -> dict[str, object]:
     return json.loads(out.stdout or b"{}")
 
 
-def write_reel_mp4(frames: list[Image.Image], dest: Path) -> ReelRender:
-    """Encode frames to an Instagram-compatible MP4 (H.264 High, yuv420p, 30fps, silent AAC)."""
+MUSIC_FADE_IN_SECONDS = 0.8
+MUSIC_FADE_OUT_SECONDS = 1.5
+# Integrated loudness target for mobile playback (Instagram/most platforms normalize near -14 LUFS).
+MUSIC_LOUDNESS = "I=-14:TP=-1.5:LRA=11"
+
+
+def music_filter(total: float) -> str:
+    """Trim to the video length, normalize loudness, then fade in/out (48 kHz stereo)."""
+    fade_out = max(0.0, total - MUSIC_FADE_OUT_SECONDS)
+    return (
+        f"[1:a]atrim=0:{total:.3f},asetpts=N/SR/TB,loudnorm={MUSIC_LOUDNESS},"
+        "aformat=sample_rates=48000:channel_layouts=stereo,"
+        f"afade=t=in:st=0:d={MUSIC_FADE_IN_SECONDS},"
+        f"afade=t=out:st={fade_out:.3f}:d={MUSIC_FADE_OUT_SECONDS}[aout]"
+    )
+
+
+def _audio_args(music: Path | None, total: float) -> list[str]:
+    if music is None:
+        return [
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-map", "0:v:0", "-map", "1:a:0",
+        ]
+    # Loop short tracks so the audio always covers the whole video.
+    return [
+        "-stream_loop", "-1", "-i", str(music),
+        "-filter_complex", music_filter(total),
+        "-map", "0:v:0", "-map", "[aout]",
+    ]
+
+
+def write_reel_mp4(frames: list[Image.Image], dest: Path, *, music: Path | None = None) -> ReelRender:
+    """Encode frames to an Instagram-compatible MP4 (H.264 High, yuv420p, 30fps, AAC music or silence)."""
     if not 1 <= len(frames) <= 10:
         raise NotConfigured("A reel needs between 1 and 10 photos.")
     binary = ffmpeg_binary()
@@ -127,8 +161,8 @@ def write_reel_mp4(frames: list[Image.Image], dest: Path) -> ReelRender:
     cmd = [
         binary, "-hide_banner", "-loglevel", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{REEL_WIDTH}x{REEL_HEIGHT}", "-r", str(REEL_FPS), "-i", "-",
-        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-map", "0:v:0", "-map", "1:a:0", "-t", f"{total:.3f}", "-shortest",
+        *_audio_args(music, total),
+        "-t", f"{total:.3f}", "-shortest",
         "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-level", "4.1",
         "-pix_fmt", "yuv420p", "-crf", "20", "-maxrate", "8M", "-bufsize", "16M",
         "-g", str(REEL_FPS * 2), "-keyint_min", str(REEL_FPS), "-sc_threshold", "0", "-r", str(REEL_FPS),

@@ -94,6 +94,7 @@ from instamagic.schemas.dto import (
     ManualCaptionIn,
     MediaQueueIn,
     MetaAppCredentialsIn,
+    MusicTrackPatchIn,
     PostingScheduleConfigIn,
     PostTypeIn,
     PublishIn,
@@ -101,6 +102,7 @@ from instamagic.schemas.dto import (
     QueuesOut,
     QueueStoryUpdateIn,
     RatingIn,
+    ReelMusicIn,
     RelatedAccountIn,
     ScheduleIn,
     StageCountsOut,
@@ -231,6 +233,7 @@ from instamagic.services.posting.carousel_queue import (
 from instamagic.services.posting.collaborators import item_collaborators
 from instamagic.services.posting.content_mix import classify_image
 from instamagic.services.posting.hashtags import clean_tags as clean_hashtags
+from instamagic.services.posting.music import reel_music_out
 from instamagic.services.posting.queue_schedule import (
     fill_slots_from_approved,
     list_upcoming,
@@ -242,7 +245,6 @@ from instamagic.services.posting.schedule_config import config_as_dict, config_v
 from instamagic.services.posting.schedule_config import (
     get_or_create_config as get_or_create_schedule_config,
 )
-from instamagic.services.posting.slots import is_reel_slot
 from instamagic.services.queues import QUEUE_GEMINI, QUEUE_IO, snapshot_queues
 from instamagic.services.recommendations.candidates_bulk import bulk_enqueue, bulk_reject
 from instamagic.services.recommendations.curate import (
@@ -1812,6 +1814,145 @@ def set_queue_collaborators(
     return _queue_out(session, item)
 
 
+@router.get("/api/music")
+def list_music(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    from instamagic.services.posting.music import (
+        LICENSE_NOTE,
+        enabled_tracks,
+        list_tracks,
+        track_out,
+    )
+
+    tracks = list_tracks(session)
+    return {
+        "tracks": [track_out(track) for track in tracks],
+        "enabled_count": len(enabled_tracks(session, settings)),
+        "pick_mode": config_view(session).music_pick_mode,
+        "license_note": LICENSE_NOTE,
+    }
+
+
+@router.post("/api/music", status_code=201)
+async def upload_music(
+    request: Request,
+    filename: str = Query(..., min_length=1, max_length=200),
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """LAN-only raw upload (body = the audio file). Only royalty-free / licensed tracks."""
+    from instamagic.services.posting.music import MAX_UPLOAD_BYTES, save_upload, track_out
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > MAX_UPLOAD_BYTES:
+        raise NotAllowed("Track is too large (max 40 MB).")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_UPLOAD_BYTES:
+            raise NotAllowed("Track is too large (max 40 MB).")
+        chunks.append(chunk)
+
+    def _save() -> dict[str, object]:
+        return track_out(save_upload(session, settings, filename, chunks))
+
+    return await run_in_threadpool(_save)
+
+
+@router.patch("/api/music/{track_id}")
+def patch_music(
+    track_id: UUID,
+    body: MusicTrackPatchIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    from instamagic.services.posting.music import track_out, update_track
+
+    return track_out(update_track(session, track_id, enabled=body.enabled, title=body.title))
+
+
+@router.delete("/api/music/{track_id}")
+def delete_music(
+    track_id: UUID,
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, bool]:
+    from instamagic.services.posting.music import delete_track
+
+    delete_track(session, settings, track_id)
+    return {"ok": True}
+
+
+@router.get("/api/music/{track_id}/audio")
+def music_audio(
+    track_id: UUID,
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> FileResponse:
+    """LAN-only preview of an uploaded track."""
+    import mimetypes
+
+    from instamagic.services.posting.music import get_track, track_path
+
+    track = get_track(session, track_id)
+    path = track_path(settings, track)
+    if not path.is_file():
+        raise NotFound("Music file was not found.")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, no-cache"})
+
+
+@router.put("/api/queue/{item_id}/music")
+def set_reel_music(
+    item_id: UUID,
+    body: ReelMusicIn,
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Pick this Reel's music (auto / silent / a track). The Reel must be rendered again."""
+    from instamagic.services.instagram.media_publish import REEL_STATUS_READY, REEL_STATUS_STALE
+    from instamagic.services.posting.music import MUSIC_NONE, get_track
+
+    item = session.get(PublishingQueueItem, item_id)
+    if item is None or item.media_type != QueueMediaType.REELS.value:
+        raise NotFound("Reel was not found.")
+    if item.state not in {QueueState.CANDIDATE.value, QueueState.FAILED.value}:
+        raise NotAllowed("Music can only be changed before the Reel is approved.")
+    choice = (body.choice or "").strip() or None
+    if choice is not None and choice != MUSIC_NONE:
+        choice = str(get_track(session, choice).id)
+    if choice != item.music_choice:
+        item.music_choice = choice
+        if item.reel_status == REEL_STATUS_READY:
+            item.reel_status = REEL_STATUS_STALE
+    session.commit()
+    session.refresh(item)
+    return _queue_out(session, item)
+
+
+@router.post("/api/reel-candidates/propose")
+def propose_reels(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Propose up to 2 Reel slideshows now (CANDIDATE: each still needs approval)."""
+    from instamagic.services.posting.reel_candidates import propose_reel_candidates
+
+    made = propose_reel_candidates(session, force=True)
+    return {"created": len(made), "items": [_queue_out(session, item) for item in made]}
+
+
 @router.get("/api/carousel-suggestions")
 def carousel_suggestions(
     _auth: None = Depends(require_session),
@@ -1918,8 +2059,11 @@ def put_posting_schedule_config(
         blur_region_padding_px=body.blur_region_padding_px,
         blur_detector_overrules_coverage=body.blur_detector_overrules_coverage,
         reel_slot_enabled=body.reel_slot_enabled,
-        reel_slot_time=body.reel_slot_time,
         hashtag_pools=body.hashtag_pools,
+        reel_slots=body.reel_slots,
+        reels_per_day=body.reels_per_day,
+        reel_share_to_feed=body.reel_share_to_feed,
+        music_pick_mode=body.music_pick_mode,
     )
     return config_as_dict(view)
 
@@ -3630,9 +3774,10 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
         "collaborators_allowed": item.media_type != QueueMediaType.STORY.value,
         "reel_for_item_id": item.reel_for_item_id,
         "reel_version_id": _reel_version_id(session, item),
-        "is_reel_slot": bool(
-            item.scheduled_at is not None and is_reel_slot(config_view(session), item.scheduled_at)
-        ),
+        "is_reel_slot": bool(item.scheduled_at is not None and item.media_type == QueueMediaType.REELS.value),
+        "reel_auto": bool(getattr(item, "reel_auto", False)),
+        "music_choice": item.music_choice,
+        "reel_music": reel_music_out(item) if item.media_type == QueueMediaType.REELS.value else None,
         "content_mix": classify_image(image).label,
         "image": image_payload,
         **queue_item_stage(item.state, item.scheduled_at, image_payload),
@@ -3642,7 +3787,7 @@ def _queue_out(session: Session, item: PublishingQueueItem) -> dict[str, object]
 def _reel_version_id(session: Session, item: PublishingQueueItem) -> UUID | None:
     if item.media_type not in {QueueMediaType.IMAGE.value, QueueMediaType.CAROUSEL.value}:
         return None
-    from instamagic.services.posting.reel_slot import existing_reel_version
+    from instamagic.services.posting.reel_candidates import existing_reel_version
 
     found = existing_reel_version(session, item.id)
     return found.id if found is not None else None

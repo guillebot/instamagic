@@ -12,6 +12,7 @@ import { EngagePage } from "./pages/Engage";
 import { InboxPage } from "./pages/Inbox";
 import { InsightsPage } from "./pages/Insights";
 import { SchedulePage } from "./pages/Schedule";
+import { MusicPage } from "./pages/Music";
 import { RelatedAccountsPage } from "./pages/RelatedAccounts";
 import { ReviewPage } from "./pages/Review";
 import { StatusPage } from "./pages/Status";
@@ -54,6 +55,7 @@ function Shell() {
           <NavLink to="/curate">Curate</NavLink>
           <NavLink to="/queue">Queue</NavLink>
           <NavLink to="/queue/schedule">Schedule</NavLink>
+          <NavLink to="/music">Music</NavLink>
           <NavLink to="/candidates">Next</NavLink>
           <NavLink to="/related">Related</NavLink>
           <NavLink to="/insights">Insights</NavLink>
@@ -86,6 +88,7 @@ export function App() {
         <Route path="/" element={<ReviewPage />} />
         <Route path="/queue" element={<QueuePage />} />
         <Route path="/queue/schedule" element={<SchedulePage />} />
+        <Route path="/music" element={<MusicPage />} />
         <Route path="/curate" element={<CuratePage />} />
         <Route path="/candidates" element={<CandidatesPage />} />
         <Route path="/related" element={<RelatedAccountsPage />} />

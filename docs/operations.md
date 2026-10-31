@@ -163,14 +163,27 @@ docker compose down
 
 That stops the containers. Volumes remain until you remove them yourself. Removing `postgres_data` drops the catalog of paths, ratings, and captions. It does not remove the photo library.
 
-## Growth features (Reel slot, collaborators, curated hashtags, content mix, carousel builder)
+## Growth features (Reel schedule, music, collaborators, curated hashtags, content mix, carousel builder)
 
-- **Reel slot** (Schedule → Reel slot, default 11:00). Fill slots puts a queued, approved Reel there. If an
-  approved photo or carousel lands on that slot instead, a Reel version is prepared: slow zoom for one photo,
-  crossfade slideshow for a carousel. It's a CANDIDATE that you approve in the Queue. Once approved and auto
-  scheduled, it takes the slot and the original stays approved but unscheduled. Reels publish as
-  `media_type=REELS` with `share_to_feed=true` and a `cover_url` (the verified feed derivative). The Graph API
-  can't attach trending/licensed audio.
+- **Reel schedule** (Schedule → Reel schedule). Reels have their own lane: default slots 15:00 and 21:00
+  (editable list), "Reels per day" (default 2) and a 1 h gap between Reels. Reels never count toward the feed's
+  posts/day or min gap, and feed photo slots (e.g. 11:00 / 19:00) are never converted into Reels. The old
+  "Reel version" behaviour from 0028 is gone (migration 0029 re-enables auto-slot for any original it had left
+  unscheduled). Reels publish as `media_type=REELS` with `share_to_feed` from this setting (default on) and a
+  `cover_url` (the verified feed derivative).
+- **Reel proposals**. Every hour the io worker (and Queue → "Propose Reels") tops up Reel candidates until
+  there are `2 × Reels per day` waiting or approved: 3–6 publishable photos from the same shoot (carousel
+  builder in Reel mode: never a photo that is already in a Reel, at most a third skin/body shots, cover never a
+  skin/body shot), rendered from the verified blurred feed derivatives. They show in the Queue as
+  "Reel · needs approval"; nothing is approved, scheduled or published until you approve each one. A candidate
+  needs a caption before it can be scheduled (pre-filled from the cover photo when it already has one).
+- **Music library** (top nav → Music). Upload royalty-free / properly licensed tracks only (mp3, m4a, aac, wav,
+  ogg, flac; max 40 MB; 3 s–20 min; LAN only). Files live on the host in `${MUSIC_HOST_DIR:-./data/music}`
+  (`/opt/docker/instamagic/data/music` on stage), mounted at `/data/music` in backend and worker-io
+  (`MUSIC_ROOT`). Each Reel gets a track baked into the MP4 (looped/trimmed to the video, fade in/out, loudness
+  normalised): auto = rotation (least recently used) or random (Schedule → Reel schedule → music pick), or a
+  specific track / silent per Reel in the Queue. Changing a Reel's music marks the render stale. With an empty
+  library Reels render silent and show a warning badge. The Graph API can't attach Instagram's licensed audio.
 - **Collaborators** (Queue card → Collaborators). Up to 3 validated handles, sent as the Graph `collaborators`
   parameter on feed images, carousel parent containers and Reels, never on Stories or carousel children.
   They're saved per shoot (session, otherwise folder) and pre-filled for that shoot's other photos. The invited

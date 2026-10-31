@@ -37,6 +37,21 @@ DEFAULT_WEEKDAY_SLOTS: dict[str, list[str]] = {
 }
 
 
+DEFAULT_REEL_SLOTS: tuple[str, ...] = ("15:00", "21:00")
+MUSIC_PICK_MODES = ("rotate", "random")
+
+
+def parse_reel_slots(raw: str | None) -> tuple[str, ...]:
+    try:
+        payload = json.loads(raw) if raw else list(DEFAULT_REEL_SLOTS)
+    except json.JSONDecodeError:
+        payload = list(DEFAULT_REEL_SLOTS)
+    if not isinstance(payload, list):
+        return DEFAULT_REEL_SLOTS
+    cleaned = sorted({t for t in (normalize_slot_time(str(v)) for v in payload) if t})
+    return tuple(cleaned)
+
+
 @dataclass(frozen=True)
 class ScheduleConfigView:
     timezone: str
@@ -53,8 +68,11 @@ class ScheduleConfigView:
     blur_detector_overrules_coverage: bool = True
     max_stories_per_day: int = 2
     reel_slot_enabled: bool = True
-    reel_slot_time: str = "11:00"
     hashtag_pools: dict[str, list[str]] | None = None
+    reel_slots: tuple[str, ...] = DEFAULT_REEL_SLOTS
+    reels_per_day: int = 2
+    reel_share_to_feed: bool = True
+    music_pick_mode: str = "rotate"
 
 
 def _parse_slots(raw: str) -> dict[str, list[str]]:
@@ -118,8 +136,13 @@ def config_view(session: Session) -> ScheduleConfigView:
         blur_detector_overrules_coverage=row.blur_detector_overrules_coverage is not False,
         updated_at=row.updated_at,
         reel_slot_enabled=row.reel_slot_enabled is not False,
-        reel_slot_time=normalize_slot_time(getattr(row, "reel_slot_time", None) or "11:00") or "11:00",
         hashtag_pools=pools_from_json(getattr(row, "hashtag_pools_json", None)).as_dict(),
+        reel_slots=parse_reel_slots(getattr(row, "reel_slots_json", None)),
+        reels_per_day=int(getattr(row, "reels_per_day", None) or 2),
+        reel_share_to_feed=getattr(row, "reel_share_to_feed", True) is not False,
+        music_pick_mode=(getattr(row, "music_pick_mode", None) or "rotate")
+        if (getattr(row, "music_pick_mode", None) or "rotate") in MUSIC_PICK_MODES
+        else "rotate",
     )
 
 
@@ -157,19 +180,33 @@ def update_config(
     blur_region_padding_px: int | None = None,
     blur_detector_overrules_coverage: bool | None = None,
     reel_slot_enabled: bool | None = None,
-    reel_slot_time: str | None = None,
     hashtag_pools: dict[str, list[str]] | None = None,
+    reel_slots: list[str] | None = None,
+    reels_per_day: int | None = None,
+    reel_share_to_feed: bool | None = None,
+    music_pick_mode: str | None = None,
 ) -> ScheduleConfigView:
+    from instamagic.errors import NotAllowed
+
     row = get_or_create_config(session)
     if reel_slot_enabled is not None:
         row.reel_slot_enabled = bool(reel_slot_enabled)
-    if reel_slot_time is not None:
-        normalized = normalize_slot_time(reel_slot_time)
-        if normalized is None:
-            from instamagic.errors import NotAllowed
-
-            raise NotAllowed("Reel slot time must be HH:MM.")
-        row.reel_slot_time = normalized
+    if reel_slots is not None:
+        normalized_slots = [normalize_slot_time(value) for value in reel_slots]
+        if any(value is None for value in normalized_slots):
+            raise NotAllowed("Reel slot times must be HH:MM.")
+        if len(normalized_slots) > 10:
+            raise NotAllowed("At most 10 Reel slots per day.")
+        row.reel_slots_json = json.dumps(sorted(set(normalized_slots)))
+    if reels_per_day is not None:
+        row.reels_per_day = max(1, min(int(reels_per_day), 10))
+    if reel_share_to_feed is not None:
+        row.reel_share_to_feed = bool(reel_share_to_feed)
+    if music_pick_mode is not None:
+        mode = music_pick_mode.strip().lower()
+        if mode not in MUSIC_PICK_MODES:
+            raise NotAllowed("Music pick mode must be rotate or random.")
+        row.music_pick_mode = mode
     if hashtag_pools is not None:
         row.hashtag_pools_json = json.dumps(sanitize_pools(hashtag_pools).as_dict())
     if timezone is not None:
@@ -217,7 +254,10 @@ def config_as_dict(view: ScheduleConfigView) -> dict[str, Any]:
         "blur_detector_overrules_coverage": view.blur_detector_overrules_coverage,
         "updated_at": view.updated_at,
         "reel_slot_enabled": view.reel_slot_enabled,
-        "reel_slot_time": view.reel_slot_time,
+        "reel_slots": list(view.reel_slots),
+        "reels_per_day": view.reels_per_day,
+        "reel_share_to_feed": view.reel_share_to_feed,
+        "music_pick_mode": view.music_pick_mode,
         "hashtag_pools": view.hashtag_pools or DEFAULT_POOLS.as_dict(),
         "hashtag_pool_defaults": DEFAULT_POOLS.as_dict(),
         "hashtag_content_allowlist": list(CONTENT_ALLOWLIST),

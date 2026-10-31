@@ -61,6 +61,7 @@ services:
       BIND_HOST: 0.0.0.0
       ALLOW_CONTAINER_BIND: "true"
       DERIVATIVES_ROOT: /data/derivatives
+      MUSIC_ROOT: /data/music
       ALLOWED_LIBRARY_ROOTS: /data/originals
       SUGGESTED_LIBRARY_ROOT: /data/originals
       REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
@@ -77,6 +78,7 @@ services:
       - ${ORIGINALS_ROOT:-./fixtures/library}:/data/originals:ro
       - ./models:/models:ro
       - derivatives:/data/derivatives
+      - ${MUSIC_HOST_DIR:-./data/music}:/data/music
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -102,6 +104,7 @@ services:
       BIND_HOST: 0.0.0.0
       ALLOW_CONTAINER_BIND: "true"
       DERIVATIVES_ROOT: /data/derivatives
+      MUSIC_ROOT: /data/music
       ALLOWED_LIBRARY_ROOTS: /data/originals
       REQUIRE_EXTERNAL_LIBRARY_MOUNTS: "true"
       SAFETY_CLASSIFIER: ${SAFETY_CLASSIFIER:-onnx}
@@ -115,6 +118,7 @@ services:
       - ${ORIGINALS_ROOT:-./fixtures/library}:/data/originals:ro
       - ./models:/models:ro
       - derivatives:/data/derivatives
+      - ${MUSIC_HOST_DIR:-./data/music}:/data/music
     depends_on:
       migrate:
         condition: service_completed_successfully

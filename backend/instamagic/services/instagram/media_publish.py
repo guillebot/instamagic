@@ -355,7 +355,10 @@ def render_reel_item(session: Session, settings: Settings, item_id: UUID) -> Pub
             frames.append(frame)
         relative = reel_item_relative_path(item)
         dest = safe_join(settings.derivatives_root, relative)
-        result = write_reel_mp4(frames, dest)
+        from instamagic.services.posting.music import resolve_reel_music
+
+        track, music_path, music_note = resolve_reel_music(session, settings, item)
+        result = write_reel_mp4(frames, dest, music=music_path)
         # Sources must not have changed while we were encoding.
         if _reel_sources(session, settings, item) != sources:
             dest.unlink(missing_ok=True)
@@ -375,7 +378,15 @@ def render_reel_item(session: Session, settings: Settings, item_id: UUID) -> Pub
     item.reel_status = REEL_STATUS_READY
     item.reel_relative_path = relative
     item.reel_sha256 = result.sha256
-    item.reel_source_json = json.dumps({"mode": mode, "border": border, "sources": sources}, sort_keys=True)
+    music_record = (
+        {"id": str(track.id), "title": track.title, "sha256": track.sha256} if track is not None else None
+    )
+    item.reel_source_json = json.dumps(
+        {"mode": mode, "border": border, "sources": sources, "music": music_record, "music_note": music_note},
+        sort_keys=True,
+    )
+    if track is not None:
+        track.last_used_at = datetime.now(UTC)
     item.reel_duration_s = result.duration_s
     item.reel_rendered_at = datetime.now(UTC)
     item.reel_error = None
@@ -403,10 +414,19 @@ def assert_reel_fresh(session: Session, settings: Settings, item: PublishingQueu
         recorded = {}
     mode, border = _fit_mode(session, item)
     current = _reel_sources(session, settings, item)
-    if recorded.get("sources") != current or recorded.get("mode") != mode or recorded.get("border") != border:
+    from instamagic.services.posting.music import music_choice_matches
+
+    if (
+        recorded.get("sources") != current
+        or recorded.get("mode") != mode
+        or recorded.get("border") != border
+        or not music_choice_matches(item, recorded.get("music"))
+    ):
         item.reel_status = REEL_STATUS_STALE
         session.commit()
-        raise NotAllowed("Photos, blurs or render options changed since the reel was rendered; render it again.")
+        raise NotAllowed(
+            "Photos, blurs, music or render options changed since the reel was rendered; render it again."
+        )
     path = safe_join(settings.derivatives_root, item.reel_relative_path)
     if not path.is_file() or file_sha256(path) != item.reel_sha256:
         item.reel_status = REEL_STATUS_STALE
@@ -426,6 +446,12 @@ def _reel_cover_url(item: PublishingQueueItem, settings: Settings, public_base: 
         return None
     token = mint_publish_token(relative_path=feed, secret=settings.app_secret, **token_kwargs)
     return public_image_url(public_base_url=public_base, token=token)
+
+
+def _reel_share_to_feed(session: Session) -> bool:
+    from instamagic.services.posting.schedule_config import config_view
+
+    return bool(config_view(session).reel_share_to_feed)
 
 
 def assert_ready_for_approval(session: Session, settings: Settings, item: PublishingQueueItem) -> None:
@@ -567,6 +593,7 @@ def publish_media_item(
                 caption=caption_text,
                 cover_url=_reel_cover_url(item, settings, public_base, token_kwargs),
                 collaborators=item_collaborators(item) or None,
+                share_to_feed=_reel_share_to_feed(session),
             )
     except (InstagramNotConfigured, NotConfigured, NotAllowed) as exc:
         err = str(getattr(exc, "detail", None) or exc)
