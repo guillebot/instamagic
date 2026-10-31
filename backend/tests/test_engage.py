@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -200,7 +201,9 @@ def test_sanitize_caption_avoids_forbidden_markers() -> None:
     assert "originals" not in text.lower() and "/photos/" not in text and "file://" not in text
 
 
-def test_engage_api_flow(client) -> None:
+def test_engage_api_flow(client, monkeypatch) -> None:
+    # The API run uses the real clock: keep fake media recent relative to it (not the fixed NOW).
+    monkeypatch.setattr(sys.modules[__name__], "NOW", datetime.now(UTC))
     assert client.get("/api/engage").status_code == 401
     login(client)
     client.app.state.instagram = EngageFakeClient()
