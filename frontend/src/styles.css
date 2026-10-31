@@ -1307,3 +1307,10 @@ input, select, textarea {
 .queue-group-body { display: grid; gap: 6px; }
 .queue-schedule-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .queue-pick-time { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* Growth features */
+.badge-reel { background: #6b2d8a; color: #fff; }
+.carousel-suggestions .carousel-suggestion { margin: 10px 0; }
+.collaborators-field input { min-width: 220px; }
+.hashtag-pool-settings .pool-field { display: block; margin: 6px 0; }
+.hashtag-pool-settings textarea { width: 100%; }

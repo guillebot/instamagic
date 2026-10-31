@@ -162,3 +162,28 @@ docker compose down
 ```
 
 That stops the containers. Volumes remain until you remove them yourself. Removing `postgres_data` drops the catalog of paths, ratings, and captions. It does not remove the photo library.
+
+## Growth features (Reel slot, collaborators, curated hashtags, content mix, carousel builder)
+
+- **Reel slot** (Schedule → Reel slot, default 11:00). Fill slots puts a queued, approved Reel there. If an
+  approved photo or carousel lands on that slot instead, a Reel version is prepared: slow zoom for one photo,
+  crossfade slideshow for a carousel. It's a CANDIDATE that you approve in the Queue. Once approved and auto
+  scheduled, it takes the slot and the original stays approved but unscheduled. Reels publish as
+  `media_type=REELS` with `share_to_feed=true` and a `cover_url` (the verified feed derivative). The Graph API
+  can't attach trending/licensed audio.
+- **Collaborators** (Queue card → Collaborators). Up to 3 validated handles, sent as the Graph `collaborators`
+  parameter on feed images, carousel parent containers and Reels, never on Stories or carousel children.
+  They're saved per shoot (session, otherwise folder) and pre-filled for that shoot's other photos. The invited
+  account has to accept before the post shows on its profile.
+- **Hashtags**. Each post gets 5–8 shuffled tags from the niche pool (B&W photos also draw from the mono pool),
+  plus 2–3 Gemini tags that pass the allowlist (pools + built-in content allowlist + Settings "extra"). Generic
+  tags (monochrome, blackandwhite, photography, art, fineartphotography) are dropped, and the blocklist still
+  applies at generation and at publish. Pools are edited in Schedule → Hashtag pools.
+- **Content mix**. See the docstring in `backend/instamagic/services/posting/content_mix.py` for the heuristic.
+  It uses local signals only. Colour photos, portraits with a face, and still lifes rank first in Fill slots and
+  Curate/Next best. Skin/body/tattoo/projected-light shots are capped at 1 in any 5 consecutive feed posts on the
+  auto-scheduling paths. They're also avoided as carousel covers.
+- **Carousel builder** (Queue → Carousel builder). Suggests 3–5 photos from the same shoot. Each one is
+  SAFE/EXCELLENT, or a DO_NOT_POST photo with a verified blur (the blurred render is what gets published), and
+  the cover isn't a skin/body shot. You can reorder, remove, create a carousel (approve/schedule as one post)
+  or make a Reel slideshow.

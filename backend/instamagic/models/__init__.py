@@ -35,6 +35,7 @@ from instamagic.models.entities import (
     RelatedAccountDiscovery,
     SafetyAssessment,
     SafetyRegion,
+    ShootCollaborators,
 )
 from instamagic.models.enums import (
     CaptionStatus,
@@ -53,6 +54,7 @@ from instamagic.models.enums import (
 )
 
 __all__ = [
+    "ShootCollaborators",
     "AdultAttestation",
     "Base",
     "BlurCover",

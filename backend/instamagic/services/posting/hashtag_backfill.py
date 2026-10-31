@@ -12,7 +12,9 @@ import json
 
 from instamagic.models import Caption, CaptionStatus, Image, PublishingQueueItem, QueueState
 from instamagic.models.enums import HumanRating
+from instamagic.services.posting.content_mix import image_is_mono
 from instamagic.services.posting.hashtags import clean_tags, compose_caption, parse_stored
+from instamagic.services.posting.schedule_config import hashtag_pools
 from sqlalchemy import false, select
 from sqlalchemy.orm import Session
 
@@ -49,7 +51,13 @@ def backfill_hashtags(session: Session, *, dry_run: bool = False) -> dict[str, i
         image = session.get(Image, caption.image_id)
         if image is None:
             continue
-        new_text = compose_caption(caption.text or "", parse_stored(image.enrich_hashtags_json), seed=str(image.id))
+        new_text = compose_caption(
+            caption.text or "",
+            parse_stored(image.enrich_hashtags_json),
+            seed=str(image.id),
+            pools=hashtag_pools(session),
+            mono=image_is_mono(image),
+        )
         if new_text != (caption.text or "").strip() and new_text != caption.text:
             stats["captions_updated"] += 1
             if not dry_run:

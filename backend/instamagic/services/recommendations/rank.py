@@ -16,6 +16,11 @@ class CandidateInput:
     sharpness: float
     composition: float
     performance_score: float = 0.0
+    # Growth mix (services/posting/content_mix.py): -1 skin/body .. +1 colour/portrait/still life.
+    content_boost: float = 0.0
+
+
+CONTENT_BOOST_WEIGHT = 0.15
 
 
 @dataclass
@@ -79,6 +84,7 @@ def _score(item: CandidateInput, *, performance_weight: float = 0.0) -> float:
         + 0.10 * crop_bonus
         + 0.10 * _clamp(item.composition)
     )
+    local += CONTENT_BOOST_WEIGHT * max(-1.0, min(1.0, item.content_boost))
     if performance_weight <= 0:
         return local
     perf = _clamp(item.performance_score)
@@ -99,6 +105,10 @@ def _reasons(item: CandidateInput, held: int, *, performance_weight: float = 0.0
         reasons.append(f"Local safety state is {item.model_state}.")
     if held:
         reasons.append(f"{held} near-duplicate frames were held back.")
+    if item.content_boost > 0:
+        reasons.append("Growth mix: colour, portrait with a face or still life ranks first.")
+    elif item.content_boost < 0:
+        reasons.append("Skin/body shot: ranked lower, max 1 in 5 feed posts, best as a carousel slide.")
     if performance_weight > 0 and item.performance_score > 0.05:
         reasons.append("Past Instagram engagement for similar tags or this frame boosted the rank.")
     elif performance_weight > 0:

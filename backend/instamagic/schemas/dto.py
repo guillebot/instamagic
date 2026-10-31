@@ -134,6 +134,13 @@ class PostingScheduleConfigIn(BaseModel):
     blur_coverage_threshold: int | None = Field(default=None, ge=60, le=100)
     blur_region_padding_px: int | None = Field(default=None, ge=0, le=20)
     blur_detector_overrules_coverage: bool | None = None
+    reel_slot_enabled: bool | None = None
+    reel_slot_time: str | None = Field(default=None, max_length=5)
+    hashtag_pools: dict[str, list[str]] | None = None
+
+
+class CollaboratorsIn(BaseModel):
+    usernames: list[str] = Field(default_factory=list, max_length=10)
 
 
 class RelatedAccountIn(BaseModel):
