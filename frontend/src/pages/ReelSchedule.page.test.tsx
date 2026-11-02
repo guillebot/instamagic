@@ -66,4 +66,68 @@ describe("Reel schedule UI", () => {
     expect(await screen.findByText(/royalty-free music/)).toBeTruthy();
     expect(screen.getByText(/Reels render silent/)).toBeTruthy();
   });
+
+  it("music search shows licence badges and imports through the backend", async () => {
+    const library: MusicLibrary = {
+      tracks: [
+        {
+          id: "t1",
+          title: "Night Glass",
+          artist: "Ada Lune",
+          duration_s: 95,
+          size_bytes: 2_000_000,
+          enabled: true,
+          preview_url: "/api/music/t1/audio",
+          source: "openverse",
+          source_url: "https://www.jamendo.com/track/1",
+          license: "by",
+          license_label: "CC BY 4.0",
+          license_url: "https://creativecommons.org/licenses/by/4.0/",
+          attribution: '"Night Glass" by Ada Lune is licensed under CC BY 4.0.',
+        },
+      ],
+      enabled_count: 1,
+      pick_mode: "rotate",
+      license_note: "Only royalty-free music.",
+    };
+    mockApi.mockImplementation(async (path: string) => {
+      if (path.startsWith("/api/music/sources/search")) {
+        return {
+          source: "openverse",
+          policy: "CC0 and CC BY only",
+          results: [
+            {
+              source: "openverse",
+              id: "abc",
+              title: "Still Water",
+              artist: "Kai",
+              source_url: "https://www.jamendo.com/track/2",
+              license: "cc0",
+              license_label: "CC0 1.0",
+              license_url: "https://creativecommons.org/publicdomain/zero/1.0/",
+              duration_s: 120,
+              genres: ["ambient"],
+              tags: [],
+              instrumental: true,
+              vocals: false,
+              preview_url: "/api/music/sources/openverse/abc/preview",
+              imported: false,
+            },
+          ],
+        };
+      }
+      if (path === "/api/music/autorefill") return { enabled: false, target: 15, queries: ["ambient"] };
+      return library;
+    });
+    wrap(<MusicPage />);
+    expect(await screen.findByText("CC BY 4.0")).toBeTruthy();
+    expect(screen.getByText(/is licensed under CC BY 4.0/)).toBeTruthy();
+    screen.getByRole("button", { name: "Search" }).click();
+    expect(await screen.findByText("Still Water")).toBeTruthy();
+    expect(screen.getByText("CC0 1.0")).toBeTruthy();
+    expect(screen.getByLabelText("Preview Still Water").getAttribute("src")).toBe(
+      "/api/music/sources/openverse/abc/preview",
+    );
+    expect(await screen.findByText("Auto-refill")).toBeTruthy();
+  });
 });

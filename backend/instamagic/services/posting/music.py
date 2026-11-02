@@ -1,9 +1,9 @@
 """Reel music library: operator-uploaded royalty-free / licensed tracks baked into Reel MP4s.
 
 Files live under ``settings.music_root`` (a host folder bind-mounted into the backend and the
-render worker). Nothing here downloads music: the operator uploads tracks they have the rights
-to (e.g. YouTube Audio Library, Pixabay Music, Epidemic Sound). Copyrighted songs can get a Reel
-muted or blocked by Instagram.
+render worker). Tracks are either uploaded by the operator (they must hold the rights) or imported
+from an official API with an explicit commercial-use licence (``music_sources``: Openverse, CC0 /
+CC BY only). Copyrighted songs can get a Reel muted or blocked by Instagram.
 
 Per-Reel choice (``PublishingQueueItem.music_choice``): None = auto (rotation or random over the
 enabled tracks, per the schedule setting), "none" = silent, otherwise a track id. With an empty
@@ -38,8 +38,9 @@ MIN_DURATION_S = 3.0
 MAX_DURATION_S = 20 * 60.0
 MUSIC_NONE = "none"
 LICENSE_NOTE = (
-    "Upload only royalty-free or licensed tracks (YouTube Audio Library, Pixabay Music, Epidemic Sound). "
-    "Copyrighted songs can get a Reel muted or blocked."
+    "Only royalty-free or licensed tracks. 'Find royalty-free tracks' imports CC0 / CC BY music via the "
+    "Openverse API (commercial use allowed; CC BY Reels get a credit line in the caption). Manual uploads: "
+    "only tracks you hold the rights to. Copyrighted songs can get a Reel muted or blocked."
 )
 SILENT_EMPTY = "library_empty"
 SILENT_CHOSEN = "silent_chosen"
@@ -70,6 +71,11 @@ def track_path(settings: Settings, track: MusicTrack) -> Path:
 
 def probe_audio(path: Path) -> float:
     """Duration (s) of the first audio stream; raises NotAllowed if the file has no audio."""
+    return probe_audio_info(path)[0]
+
+
+def probe_audio_info(path: Path) -> tuple[float, int | None]:
+    """(duration s, bit rate bps or None) of an audio file; raises NotAllowed if not audio."""
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         raise NotAllowed("ffprobe is not installed; cannot check uploaded music.")
@@ -94,10 +100,28 @@ def probe_audio(path: Path) -> float:
         raise NotAllowed("Track is too short (needs at least 3 seconds).")
     if duration > MAX_DURATION_S:
         raise NotAllowed("Track is too long (max 20 minutes).")
-    return round(duration, 3)
+    bit_rate: int | None = None
+    for raw in [*(s.get("bit_rate") for s in streams if s.get("codec_type") == "audio"), (info.get("format") or {}).get("bit_rate")]:
+        try:
+            bit_rate = int(float(raw))
+            break
+        except (TypeError, ValueError):
+            continue
+    return round(duration, 3), bit_rate
 
 
-def save_upload(session: Session, settings: Settings, filename: str, chunks: Iterable[bytes]) -> MusicTrack:
+def save_upload(
+    session: Session,
+    settings: Settings,
+    filename: str,
+    chunks: Iterable[bytes],
+    *,
+    title: str | None = None,
+    meta: dict[str, object] | None = None,
+    min_bit_rate: int | None = None,
+    min_duration_s: float | None = None,
+) -> MusicTrack:
+    """Store an audio file in the library. ``meta`` = licence/provenance columns (imports)."""
     ext = Path(filename or "").suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise NotAllowed("Upload an mp3, m4a, aac, wav, ogg or flac file.")
@@ -119,7 +143,11 @@ def save_upload(session: Session, settings: Settings, filename: str, chunks: Ite
                 handle.write(chunk)
         if size == 0:
             raise NotAllowed("Empty upload.")
-        duration = probe_audio(tmp)
+        duration, bit_rate = probe_audio_info(tmp)
+        if min_duration_s and duration < min_duration_s:
+            raise NotAllowed(f"Track is too short (needs at least {int(min_duration_s)} seconds).")
+        if min_bit_rate and bit_rate is not None and bit_rate < min_bit_rate:
+            raise NotAllowed(f"Track quality is too low ({bit_rate // 1000} kbps).")
         sha = digest.hexdigest()
         duplicate = session.scalars(select(MusicTrack).where(MusicTrack.sha256 == sha)).first()
         if duplicate is not None:
@@ -130,13 +158,16 @@ def save_upload(session: Session, settings: Settings, filename: str, chunks: Ite
         tmp.unlink(missing_ok=True)
     track = MusicTrack(
         id=track_id,
-        title=_clean_title(filename),
+        title=_sanitize(title) if title else _clean_title(filename),
         relative_path=relative,
         sha256=sha,
         size_bytes=size,
         duration_s=duration,
+        bit_rate=bit_rate,
         enabled=True,
     )
+    for key, value in (meta or {}).items():
+        setattr(track, key, value)
     session.add(track)
     session.commit()
     session.refresh(track)
@@ -272,9 +303,32 @@ def reel_music_out(item: PublishingQueueItem) -> dict[str, object] | None:
             "silent": False,
             "reason": None,
             "warning": None,
+            "credit": music.get("credit"),
         }
     reason = recorded.get("music_note") or SILENT_EMPTY
-    return {"track": None, "silent": True, "reason": reason, "warning": SILENT_WARNINGS.get(reason)}
+    return {"track": None, "silent": True, "reason": reason, "warning": SILENT_WARNINGS.get(reason), "credit": None}
+
+
+def recorded_credit(item: PublishingQueueItem) -> str | None:
+    """Caption credit line of the track baked into this Reel's MP4 (CC BY), else None."""
+    music = _recorded(item).get("music") or {}
+    credit = music.get("credit")
+    return str(credit) if credit else None
+
+
+def track_record(track: MusicTrack) -> dict[str, object]:
+    """What a render stores about its track (reel_source_json["music"])."""
+    from instamagic.services.posting.music_sources import credit_line
+
+    return {
+        "id": str(track.id),
+        "title": track.title,
+        "sha256": track.sha256,
+        "artist": track.artist,
+        "license": track.license,
+        "license_version": track.license_version,
+        "credit": credit_line(track.title, track.artist, track.license, track.license_version),
+    }
 
 
 def track_out(track: MusicTrack) -> dict[str, object]:
@@ -287,4 +341,20 @@ def track_out(track: MusicTrack) -> dict[str, object]:
         "last_used_at": track.last_used_at,
         "created_at": track.created_at,
         "preview_url": f"/api/music/{track.id}/audio",
+        "artist": track.artist,
+        "source": track.source or "upload",
+        "source_url": track.source_url,
+        "license": track.license,
+        "license_version": track.license_version,
+        "license_label": license_label(track.license, track.license_version),
+        "license_url": track.license_url,
+        "attribution": track.attribution,
+        "bit_rate": track.bit_rate,
+        "downloaded_at": track.downloaded_at,
     }
+
+
+def license_label(license_code: str | None, version: str | None) -> str | None:
+    from instamagic.services.posting.music_sources import license_label as _label
+
+    return _label(license_code, version)
