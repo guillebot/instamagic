@@ -378,9 +378,9 @@ def render_reel_item(session: Session, settings: Settings, item_id: UUID) -> Pub
     item.reel_status = REEL_STATUS_READY
     item.reel_relative_path = relative
     item.reel_sha256 = result.sha256
-    music_record = (
-        {"id": str(track.id), "title": track.title, "sha256": track.sha256} if track is not None else None
-    )
+    from instamagic.services.posting.music import track_record
+
+    music_record = track_record(track) if track is not None else None
     item.reel_source_json = json.dumps(
         {"mode": mode, "border": border, "sources": sources, "music": music_record, "music_note": music_note},
         sort_keys=True,
@@ -482,7 +482,14 @@ def final_caption_text(session: Session, item: PublishingQueueItem, caption: Cap
     image = session.get(Image, caption.image_id)
     if image is None:
         raise NotFound("Caption image was not found.")
-    return publish_caption_text(caption, image, session)
+    text = publish_caption_text(caption, image, session)
+    if item.media_type == QueueMediaType.REELS.value:
+        # CC BY music: credit the track (title, artist, licence) in the Reel caption.
+        from instamagic.services.posting.music import recorded_credit
+        from instamagic.services.posting.music_sources import append_credit
+
+        text = append_credit(text, recorded_credit(item))
+    return text
 
 
 def _next_attempt_number(session: Session, item_id: UUID, kind: str) -> int:

@@ -94,6 +94,8 @@ from instamagic.schemas.dto import (
     ManualCaptionIn,
     MediaQueueIn,
     MetaAppCredentialsIn,
+    MusicAutorefillIn,
+    MusicImportIn,
     MusicTrackPatchIn,
     PostingScheduleConfigIn,
     PostTypeIn,
@@ -1866,6 +1868,118 @@ async def upload_music(
         return track_out(save_upload(session, settings, filename, chunks))
 
     return await run_in_threadpool(_save)
+
+
+@router.get("/api/music/sources/search")
+def search_music_sources(
+    q: str = Query(..., min_length=1, max_length=120),
+    min_s: float = Query(20, ge=20, le=300),
+    max_s: float = Query(300, ge=20, le=300),
+    page: int = Query(1, ge=1, le=20),
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    """Openverse audio search, CC0 / CC BY only (commercial use), 20 s - 5 min."""
+    import httpx
+    from instamagic.services.posting.music_sources import search
+
+    try:
+        results = search(session, q, min_s=min_s, max_s=max_s, page=page)
+    except httpx.HTTPError as exc:
+        raise NotAllowed("Openverse did not answer; try again in a minute.") from exc
+    return {
+        "results": results,
+        "source": "openverse",
+        "policy": "CC0 and CC BY only (commercial use allowed). NC, ND and SA licences are excluded.",
+    }
+
+
+@router.get("/api/music/sources/{source}/{source_id}/preview")
+def preview_music_source(
+    source: str,
+    source_id: str,
+    _auth: None = Depends(require_lan_session),
+):
+    """LAN-only preview stream of a search result (URL resolved from the API record, not the client)."""
+    import httpx
+    from fastapi.responses import StreamingResponse
+    from instamagic.services.posting.music_sources import (
+        MAX_DOWNLOAD_BYTES,
+        SOURCE_OPENVERSE,
+        OpenverseClient,
+    )
+
+    if source != SOURCE_OPENVERSE:
+        raise NotFound("Unknown music source.")
+    client = OpenverseClient()
+    try:
+        cand = client.detail(source_id)
+    except httpx.HTTPError as exc:
+        raise NotAllowed("Openverse did not answer; try again in a minute.") from exc
+    ctx = client.stream(cand.audio_url)
+    resp = ctx.__enter__()
+    if resp.status_code >= 400:
+        ctx.__exit__(None, None, None)
+        raise NotAllowed(f"Preview unavailable (HTTP {resp.status_code}).")
+
+    def body():
+        sent = 0
+        try:
+            for chunk in resp.iter_bytes():
+                sent += len(chunk)
+                if sent > MAX_DOWNLOAD_BYTES:
+                    break
+                yield chunk
+        finally:
+            ctx.__exit__(None, None, None)
+
+    media_type = (resp.headers.get("content-type") or "audio/mpeg").split(";")[0]
+    if not media_type.startswith("audio/"):
+        media_type = "audio/mpeg"
+    return StreamingResponse(body(), media_type=media_type, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/api/music/sources/import", status_code=201)
+def import_music_source(
+    body: MusicImportIn,
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Download one CC0 / CC BY track (licence re-verified from the API record) and enable it."""
+    import httpx
+    from instamagic.services.posting.music import track_out
+    from instamagic.services.posting.music_sources import import_track
+    from instamagic.services.posting.reel_candidates import rerender_silent_candidates
+
+    try:
+        track = import_track(session, settings, body.source, body.id)
+    except httpx.HTTPError as exc:
+        raise NotAllowed("Download failed; try again in a minute.") from exc
+    out = track_out(track)
+    out["rerendering"] = rerender_silent_candidates(session, settings)
+    return out
+
+
+@router.get("/api/music/autorefill")
+def get_music_autorefill(
+    _auth: None = Depends(require_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    from instamagic.services.posting.music_sources import autorefill_view
+
+    return autorefill_view(session)
+
+
+@router.put("/api/music/autorefill")
+def put_music_autorefill(
+    body: MusicAutorefillIn,
+    _auth: None = Depends(require_lan_session),
+    session: Session = db_dep,
+) -> dict[str, object]:
+    from instamagic.services.posting.music_sources import update_autorefill
+
+    return update_autorefill(session, enabled=body.enabled, target=body.target, queries=body.queries)
 
 
 @router.patch("/api/music/{track_id}")

@@ -14,6 +14,8 @@ log = get_logger("worker.scheduler")
 _INTERVAL_SECONDS = 60
 _REEL_PROPOSE_EVERY_SECONDS = 3600
 _last_reel_propose = 0.0
+_MUSIC_REFILL_CHECK_SECONDS = 6 * 3600
+_last_music_refill_check = 0.0
 
 
 def _run_scheduler_tick() -> int:
@@ -52,6 +54,26 @@ def _maybe_propose_reels(now: float | None = None) -> int:
     return len(made)
 
 
+def _maybe_refill_music(now: float | None = None) -> int:
+    """Every few hours, check the weekly royalty-free auto-refill (off by default)."""
+    global _last_music_refill_check
+    now = time.monotonic() if now is None else now
+    if _last_music_refill_check and now - _last_music_refill_check < _MUSIC_REFILL_CHECK_SECONDS:
+        return 0
+    _last_music_refill_check = now
+    from instamagic.config import get_settings
+    from instamagic.db import session_factory
+    from instamagic.services.posting.music_sources import run_autorefill
+    from instamagic.services.posting.reel_candidates import rerender_silent_candidates
+
+    settings = get_settings()
+    with session_factory()() as session:
+        made = run_autorefill(session, settings)
+        if made:
+            rerender_silent_candidates(session, settings)
+    return len(made)
+
+
 def _run_forever() -> None:
     while True:
         try:
@@ -64,6 +86,10 @@ def _run_forever() -> None:
             _maybe_propose_reels()
         except Exception:
             log.info("reel_candidates_propose_failed")
+        try:
+            _maybe_refill_music()
+        except Exception:
+            log.info("music_autorefill_failed")
         try:
             _kick_enrichment()
         except Exception:

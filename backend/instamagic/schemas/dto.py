@@ -555,6 +555,17 @@ class MusicTrackPatchIn(BaseModel):
     title: str | None = Field(default=None, max_length=200)
 
 
+class MusicImportIn(BaseModel):
+    source: str = Field(default="openverse", max_length=32)
+    id: str = Field(min_length=8, max_length=64)
+
+
+class MusicAutorefillIn(BaseModel):
+    enabled: bool | None = None
+    target: int | None = Field(default=None, ge=1, le=100)
+    queries: list[str] | None = Field(default=None, max_length=20)
+
+
 class ReelMusicIn(BaseModel):
     # null = auto (library rotation/random), "none" = silent, else a music track id.
     choice: str | None = Field(default=None, max_length=64)

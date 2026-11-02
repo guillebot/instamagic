@@ -133,3 +133,43 @@ def propose_reel_candidates(
             except Exception:  # render can be retried from the Queue
                 log.info("reel_candidate_render_not_started", reel_item_id=str(reel.id))
     return made
+
+
+def silent_auto_candidates(session: Session) -> list[PublishingQueueItem]:
+    """Reels waiting for approval, on Auto music, whose render came out silent (library was empty)."""
+    import json
+
+    out = []
+    rows = session.scalars(
+        select(PublishingQueueItem).where(
+            PublishingQueueItem.media_type == QueueMediaType.REELS.value,
+            PublishingQueueItem.state.in_([QueueState.CANDIDATE.value, QueueState.FAILED.value]),
+            PublishingQueueItem.music_choice.is_(None),
+            PublishingQueueItem.reel_source_json.is_not(None),
+        )
+    ).all()
+    for item in rows:
+        try:
+            recorded = json.loads(item.reel_source_json or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(recorded, dict) and not recorded.get("music"):
+            out.append(item)
+    return out
+
+
+def rerender_silent_candidates(session: Session, settings=None) -> list[str]:
+    """After music arrives: re-render silent Auto-music Reel candidates (never approves anything)."""
+    from instamagic.config import get_settings
+    from instamagic.services.posting.music import enabled_tracks
+
+    settings = settings or get_settings()
+    if not enabled_tracks(session, settings):
+        return []
+    started = []
+    for item in silent_auto_candidates(session):
+        if start_render(item.id):
+            started.append(str(item.id))
+    if started:
+        log.info("reel_silent_rerender_started", count=len(started))
+    return started

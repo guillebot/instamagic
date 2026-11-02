@@ -367,6 +367,7 @@ export type ReelMusic = {
   silent: boolean;
   reason: string | null;
   warning: string | null;
+  credit?: string | null;
 };
 
 export type MusicTrack = {
@@ -378,7 +379,43 @@ export type MusicTrack = {
   last_used_at?: string | null;
   created_at?: string | null;
   preview_url: string;
+  artist?: string | null;
+  source?: string | null;
+  source_url?: string | null;
+  license?: string | null;
+  license_version?: string | null;
+  license_label?: string | null;
+  license_url?: string | null;
+  attribution?: string | null;
+  bit_rate?: number | null;
+  downloaded_at?: string | null;
 };
+
+export type MusicSourceResult = {
+  source: string;
+  id: string;
+  title: string;
+  artist: string;
+  provider?: string | null;
+  source_url: string;
+  license: string;
+  license_version?: string | null;
+  license_label: string;
+  license_url: string;
+  attribution?: string | null;
+  duration_s: number;
+  genres: string[];
+  tags: string[];
+  instrumental: boolean;
+  vocals: boolean;
+  bit_rate?: number | null;
+  preview_url: string;
+  imported: boolean;
+};
+
+export type MusicSourceSearch = { results: MusicSourceResult[]; source: string; policy: string };
+
+export type MusicAutorefill = { enabled: boolean; target: number; queries: string[]; last_run_at?: string | null };
 
 export type MusicLibrary = {
   tracks: MusicTrack[];

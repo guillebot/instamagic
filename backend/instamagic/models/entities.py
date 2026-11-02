@@ -410,6 +410,12 @@ class PostingScheduleConfig(Base):
     reel_share_to_feed: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     # Music for Reels: "rotate" (least recently used enabled track) or "random".
     music_pick_mode: Mapped[str] = mapped_column(String(16), default="rotate", server_default="rotate")
+    # Royalty-free auto-refill (default off): weekly, import matches for the saved queries until
+    # ``music_autorefill_target`` tracks are enabled.
+    music_autorefill_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    music_autorefill_target: Mapped[int] = mapped_column(Integer, default=15, server_default="15")
+    music_saved_queries_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    music_autorefill_last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Operator-editable hashtag pools: {"niche": [...], "mono": [...], "allow": [...]} (null = defaults).
     hashtag_pools_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -797,3 +803,15 @@ class MusicTrack(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    # Provenance (null for manual uploads): where the file came from and under which licence,
+    # copied from the source API response at import time (never guessed).
+    artist: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    license: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    license_version: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    license_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bit_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

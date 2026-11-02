@@ -1080,6 +1080,7 @@ export function ReelMusicField({ item, editable }: { item: QueueItem; editable: 
         </select>
       </label>
       {music?.track ? <span className="muted"> Rendered with ♪ {music.track.title}.</span> : null}
+      {music?.credit ? <p className="muted">Caption credit (added at publish): {music.credit}</p> : null}
       {music?.silent && music.warning ? <p className="error">{music.warning}</p> : null}
       {library.data && library.data.enabled_count === 0 && !music ? (
         <p className="muted">
