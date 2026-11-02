@@ -135,7 +135,8 @@ def test_search_filters_and_import_verifies_licence(app_env, music_env) -> None:
         assert {r["id"] for r in results} == {ID_BY, ID_CC0}  # NC/ND/SA dropped, 8 s track dropped
         search_call = next(c for c in calls if c.url.path == "/v1/audio/")
         assert search_call.url.params["license"] == "cc0,by"
-        assert search_call.url.params["license_type"] == "commercial"
+        assert "license_type" not in search_call.url.params and "mature" not in search_call.url.params
+        assert search_call.url.params["category"] == "music"
         track = import_track(session, settings, "openverse", ID_BY, client=client)
         assert track.license == "by" and track.license_version == "4.0"
         assert track.license_url == "https://creativecommons.org/licenses/by/4.0/"
@@ -254,3 +255,41 @@ def test_detail_falls_back_to_recent_search_record_only() -> None:
     with pytest.raises(httpx.HTTPStatusError):
         client.detail(ID_NC)  # NC records are never cached
     assert ID_NC not in ms._RECENT
+
+
+def test_search_retries_then_friendly_error_and_rechecks_response(monkeypatch) -> None:
+    import httpx
+    import pytest
+    from instamagic.errors import NotAllowed
+    from instamagic.services.posting import music_sources as ms
+
+    monkeypatch.setattr(ms, "_sleep", lambda s: None)
+    seen = []
+
+    def slow(request):
+        seen.append(request)
+        if len(seen) == 1:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(504, request=request)
+
+    client = ms.OpenverseClient(httpx.Client(transport=httpx.MockTransport(slow)))
+    with pytest.raises(NotAllowed) as err:
+        client.search("ambient", attempts=3)
+    assert len(seen) == 3 and "Openverse is slow" in str(err.value)
+
+    rows = [
+        {**RECORDS[ID_BY]},
+        {**RECORDS[ID_BY], "id": "aaaaaaaa-0000-0000-0000-000000000001", "mature": True},
+        {**RECORDS[ID_BY], "id": "aaaaaaaa-0000-0000-0000-000000000002", "license": "by-nc"},
+    ]
+    calls = []
+
+    def flaky(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(504, request=request)
+        return httpx.Response(200, json={"results": rows}, request=request)
+
+    client = ms.OpenverseClient(httpx.Client(transport=httpx.MockTransport(flaky)))
+    assert [c.source_id for c in client.search("ambient")] == [ID_BY]
+    assert len(calls) == 2

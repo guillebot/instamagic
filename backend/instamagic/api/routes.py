@@ -1886,7 +1886,9 @@ def search_music_sources(
     try:
         results = search(session, q, min_s=min_s, max_s=max_s, page=page)
     except httpx.HTTPError as exc:
-        raise NotAllowed("Openverse did not answer; try again in a minute.") from exc
+        from instamagic.services.posting.music_sources import OPENVERSE_SLOW_MESSAGE
+
+        raise NotAllowed(OPENVERSE_SLOW_MESSAGE) from exc
     return {
         "results": results,
         "source": "openverse",
@@ -1915,7 +1917,9 @@ def preview_music_source(
     try:
         cand = client.detail(source_id)
     except httpx.HTTPError as exc:
-        raise NotAllowed("Openverse did not answer; try again in a minute.") from exc
+        from instamagic.services.posting.music_sources import OPENVERSE_SLOW_MESSAGE
+
+        raise NotAllowed(OPENVERSE_SLOW_MESSAGE) from exc
     ctx = client.stream(cand.audio_url)
     resp = ctx.__enter__()
     if resp.status_code >= 400:
