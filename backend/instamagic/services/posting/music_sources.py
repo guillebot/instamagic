@@ -41,6 +41,13 @@ SEARCH_MIN_S = 20
 SEARCH_MAX_S = 300
 IMPORT_MIN_S = 30.0
 MIN_BIT_RATE = 128_000
+SEARCH_ATTEMPTS = 2  # interactive search; the weekly auto-refill uses more
+AUTOREFILL_SEARCH_ATTEMPTS = 4
+SEARCH_RETRY_SLEEP_S = 5.0
+OPENVERSE_SLOW_MESSAGE = (
+    "Openverse is slow right now (new searches can take a minute to warm up). "
+    "Try again in a minute, or try a simpler word like \"ambient\" or \"piano\"."
+)
 MAX_DOWNLOAD_BYTES = 40 * 1024 * 1024
 CAPTION_LIMIT = 2200
 CREDIT_MAX = 150
@@ -284,29 +291,48 @@ def _recent(source_id: str) -> Candidate | None:
     return None
 
 
+def _sleep(seconds: float) -> None:
+    import time
+
+    time.sleep(seconds)
+
+
 class OpenverseClient:
     def __init__(self, http: httpx.Client | None = None) -> None:
         self._http = http or httpx.Client(
-            timeout=httpx.Timeout(75.0, connect=10.0),
+            timeout=httpx.Timeout(60.0, connect=10.0),
             headers={"User-Agent": USER_AGENT},
             follow_redirects=True,
         )
 
-    def search(self, query: str, *, page: int = 1, page_size: int = 20) -> list[Candidate]:
+    def search(
+        self, query: str, *, page: int = 1, page_size: int = 20, attempts: int = SEARCH_ATTEMPTS
+    ) -> list[Candidate]:
+        # Only the licence + category filters go to Openverse: ``license_type=commercial`` (redundant with
+        # cc0,by) and ``mature=false`` made uncached queries time out. Licence and mature are re-checked
+        # per record in ``_parse`` instead.
         params = {
             "q": query,
             "license": ",".join(ALLOWED_LICENSES),
-            "license_type": "commercial",
             "category": "music",
-            "mature": "false",
             "page": max(1, page),
             "page_size": max(1, min(page_size, 20)),
         }
-        resp = self._http.get(f"{OPENVERSE_API}/audio/", params=params)
-        if resp.status_code >= 500:  # Openverse cold cache: 502/504 on the first try is common
-            resp = self._http.get(f"{OPENVERSE_API}/audio/", params=params)
-        if resp.status_code == 429:
-            raise NotAllowed("Openverse rate limit reached; try again in a few minutes.")
+        resp = None
+        for attempt in range(max(1, attempts)):
+            if attempt:
+                _sleep(SEARCH_RETRY_SLEEP_S)
+            try:
+                resp = self._http.get(f"{OPENVERSE_API}/audio/", params=params)
+            except httpx.TimeoutException:
+                resp = None
+                continue
+            if resp.status_code == 429:
+                raise NotAllowed("Openverse rate limit reached; try again in a few minutes.")
+            if resp.status_code < 500:  # 502/504 on a cold Openverse cache is common: retry
+                break
+        if resp is None or resp.status_code >= 500:
+            raise NotAllowed(OPENVERSE_SLOW_MESSAGE)
         resp.raise_for_status()
         rows = (resp.json() or {}).get("results") or []
         cands = [c for c in (_parse(r) for r in rows) if c is not None and c.source_id]
@@ -552,7 +578,7 @@ def run_autorefill(
         if len(made) >= need:
             break
         try:
-            cands = client.search(query)
+            cands = client.search(query, attempts=AUTOREFILL_SEARCH_ATTEMPTS)
         except (httpx.HTTPError, NotAllowed) as exc:
             log.info("music_autorefill_search_failed", error_type=type(exc).__name__)
             continue
