@@ -63,6 +63,8 @@ def lane_for_media_type(media_type: str | None) -> str:
 
 
 REEL_MIN_GAP = timedelta(hours=1)
+# How far past the earliest free feed slot a skin/body post may be pushed to keep the 1-in-5 mix.
+SENSITIVE_MAX_DEFER = timedelta(hours=24)
 
 
 def lane_cap(config: ScheduleConfigView, lane: str) -> int:
@@ -142,8 +144,9 @@ def next_available_slot(
     The gap is checked against neighbouring posts of the same lane on both sides (scheduled or
     already published), so empty slots before a later scheduled item get filled instead of always
     appending after the last scheduled post. Existing items are never moved. Reels only go to the
-    Reel slots; photos/carousels only to the feed slots. Feed skin/body posts (``item`` given) also
-    respect the 1-in-5 cap.
+    Reel slots; photos/carousels only to the feed slots. Feed skin/body posts (``item`` given)
+    prefer a slot that keeps the 1-in-5 mix, but only within SENSITIVE_MAX_DEFER of the earliest
+    free slot; otherwise they take the earliest free slot (the mix never blocks scheduling).
     """
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
@@ -155,18 +158,26 @@ def next_available_slot(
     min_gap = lane_gap(config, lane)
     busy = _busy_times(session, candidates[0] - min_gap, candidates[-1] + min_gap, lane=lane)
     cap = lane_cap(config, lane)
+    first_free: datetime | None = None
     for slot in candidates:
         if any(abs(slot - b) < min_gap for b in busy):
             continue
         if _scheduled_today_count(session, config, slot, lane=lane) >= cap:
             continue
-        if item is not None and lane == "feed":
-            from instamagic.services.posting.content_mix import sensitive_slot_allowed
+        if item is None or lane != "feed":
+            return slot
+        if first_free is None:
+            first_free = slot
+        elif slot - first_free > SENSITIVE_MAX_DEFER:
+            # The 1-in-5 skin/body mix is a preference, never a blocker: when no slot within the
+            # deferral window keeps the mix (e.g. every approved photo is skin/body), take the
+            # earliest free slot instead of leaving the feed empty.
+            return first_free
+        from instamagic.services.posting.content_mix import sensitive_slot_allowed
 
-            if not sensitive_slot_allowed(session, item, slot):
-                continue
-        return slot
-    return None
+        if sensitive_slot_allowed(session, item, slot):
+            return slot
+    return first_free
 
 
 def assign_auto_slots(session: Session, items: list[PublishingQueueItem], config: ScheduleConfigView) -> int:
