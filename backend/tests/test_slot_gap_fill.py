@@ -62,3 +62,38 @@ def test_respects_daily_max(monkeypatch) -> None:
     now = _local(2026, 10, 24, 10, 15)
     _patch(monkeypatch, [], per_day={datetime(2026, 10, 24).date(): 8})
     assert slots_mod.next_available_slot(None, _config(), now=now) == _local(2026, 10, 25, 4)
+
+
+def _patch_sensitive(monkeypatch, allowed) -> None:
+    from instamagic.services.posting import content_mix
+
+    monkeypatch.setattr(content_mix, "sensitive_slot_allowed", lambda session, item, slot: allowed(slot))
+
+
+def test_sensitive_post_never_blocked_when_mix_cannot_be_kept(monkeypatch) -> None:
+    """Every approved photo is skin/body: the 1-in-5 mix must not leave the feed unschedulable."""
+    now = _local(2026, 11, 25, 16, 40)
+    _patch(monkeypatch, [])
+    _patch_sensitive(monkeypatch, lambda slot: False)
+    cfg = _config(max_per_day=2, gap=6)
+    cfg = ScheduleConfigView(**{**cfg.__dict__, "weekday_slots": {d: ["11:00", "19:00"] for d in DAYS}})
+    slot = slots_mod.next_available_slot(None, cfg, now=now, media_type="IMAGE", item=object())
+    assert slot == _local(2026, 11, 25, 19)
+
+
+def test_sensitive_post_deferred_within_window_to_keep_mix(monkeypatch) -> None:
+    now = _local(2026, 11, 25, 16, 40)
+    _patch(monkeypatch, [])
+    ok_from = _local(2026, 11, 26, 19)
+    _patch_sensitive(monkeypatch, lambda slot: slot >= ok_from)
+    cfg = ScheduleConfigView(**{**_config(max_per_day=2, gap=6).__dict__, "weekday_slots": {d: ["11:00", "19:00"] for d in DAYS}})
+    assert slots_mod.next_available_slot(None, cfg, now=now, media_type="IMAGE", item=object()) == ok_from
+
+
+def test_sensitive_post_not_deferred_past_window(monkeypatch) -> None:
+    now = _local(2026, 11, 25, 16, 40)
+    _patch(monkeypatch, [])
+    ok_from = _local(2026, 11, 28, 11)
+    _patch_sensitive(monkeypatch, lambda slot: slot >= ok_from)
+    cfg = ScheduleConfigView(**{**_config(max_per_day=2, gap=6).__dict__, "weekday_slots": {d: ["11:00", "19:00"] for d in DAYS}})
+    assert slots_mod.next_available_slot(None, cfg, now=now, media_type="IMAGE", item=object()) == _local(2026, 11, 25, 19)
